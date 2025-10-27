@@ -22,6 +22,24 @@ all: $(v_files) $(c_files)
 			echo "warning: csrc for $$base not found ($$c)"; \
 		fi; \
 	done
+
+check:
+	@mkdir -p $(obj_dir)
+	@mkdir -p ./out
+	@for v in $(v_files); do \
+		base=$$(basename $$v .v); \
+		c=./csrc/$$base.cpp; \
+		if [ -f $$c ]; then \
+			echo "=== check: $$base ==="; \
+			mkdir -p $(obj_dir)/$$base; \
+			verilator -Wall --cc $$v --exe $$c -Mdir $(obj_dir)/$$base -lint-only --trace ; \
+			$(MAKE) -C $(obj_dir)/$$base -f V$$base.mk -j$$(nproc) || exit 1; \
+			mkdir -p ./out/$$base; \
+			mv $(obj_dir)/$$base/V$$base ./out/$$base/exec; \
+		else \
+			echo "warning: csrc for $$base not found ($$c)"; \
+		fi; \
+	done
 sim:
 	$(call git_commit, "sim RTL") # DO NOT REMOVE THIS LINE!!!
 	@if [ -x ./out/$(SIM)/exec ]; then \
@@ -49,7 +67,7 @@ clean:
 	rm -rf ./out/*
 	rm -rf ./intermediate/*
 
-.PHONY: all sim clean gtk
+.PHONY: all sim clean gtk check
 
 
 # Create a new pair of files: vsrc/<NAME>.v and csrc/<NAME>.cpp with boilerplate
