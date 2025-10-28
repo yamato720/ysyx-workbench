@@ -123,7 +123,7 @@ void Vexample___024root___eval(Vexample___024root* vlSelf) {
 #ifdef VL_DEBUG
             Vexample___024root___dump_triggers__nba(vlSelf);
 #endif
-            VL_FATAL_MT("vsrc/example.v", 1, "", "NBA region did not converge.");
+            VL_FATAL_MT("vsrc/example.v", 1, "", "NBA region did not converge after 100 tries");
         }
         __VnbaIterCount = ((IData)(1U) + __VnbaIterCount);
         __VnbaContinue = 0U;
@@ -134,7 +134,7 @@ void Vexample___024root___eval(Vexample___024root* vlSelf) {
 #ifdef VL_DEBUG
                 Vexample___024root___dump_triggers__act(vlSelf);
 #endif
-                VL_FATAL_MT("vsrc/example.v", 1, "", "Active region did not converge.");
+                VL_FATAL_MT("vsrc/example.v", 1, "", "Active region did not converge after 100 tries");
             }
             vlSelfRef.__VactIterCount = ((IData)(1U) 
                                          + vlSelfRef.__VactIterCount);

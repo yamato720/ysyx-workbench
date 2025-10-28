@@ -43,7 +43,7 @@ VL_ATTR_COLD void Vxor_switch___024root___eval_settle(Vxor_switch___024root* vlS
 #ifdef VL_DEBUG
             Vxor_switch___024root___dump_triggers__stl(vlSelf);
 #endif
-            VL_FATAL_MT("vsrc/xor_switch.v", 1, "", "Settle region did not converge.");
+            VL_FATAL_MT("vsrc/xor_switch.v", 1, "", "Settle region did not converge after 100 tries");
         }
         __VstlIterCount = ((IData)(1U) + __VstlIterCount);
         __VstlContinue = 0U;
