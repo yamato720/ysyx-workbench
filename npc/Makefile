@@ -81,7 +81,7 @@ sim:
 		exit 1; \
 	else \
 		echo "error: ./out/$(NAME)/exec not found. Start build it."; \
-		@make build; \
+		make build; \
 		echo "=== running: ./out/$(NAME)/exec ==="; \
 		./out/$(NAME)/exec; \
 	fi
