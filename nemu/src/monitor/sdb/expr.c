@@ -19,9 +19,10 @@
  * Type 'man regex' for more information about POSIX regex functions.
  */
 #include <regex.h>
+#include "../../isa/riscv64/local-include/reg.h"
 
 enum {
-  TK_NOTYPE = 256, TK_EQ,
+  TK_NOTYPE = 256, TK_EQ, TK_NEQ, AND, NUM, HEX_NUM, REG_NAME,
 
   /* TODO: Add more token types */
 
@@ -39,6 +40,16 @@ static struct rule {
   {" +", TK_NOTYPE},    // spaces
   {"\\+", '+'},         // plus
   {"==", TK_EQ},        // equal
+  {"-", '-'},           // minus
+  {"\\*", '*'},         // multiply
+  {"/", '/'},           // divide
+  {"\\(", '('},         // left parenthesis
+  {"\\)", ')'},         // right parenthesis
+  {"[0-9]+", NUM},      // number
+  {"[xX][0-9a-fA-F]+", HEX_NUM},      // hex number
+  {"\\$(\\$0)|(ra)|(sp)|(gp)|(tp)|(t0-6)|(s0-11)|(a0-7)", REG_NAME},     // register name
+  {"!=", TK_NEQ},    // not equal
+  {"&&", AND},      // and
 };
 
 #define NR_REGEX ARRLEN(rules)
@@ -64,11 +75,39 @@ void init_regex() {
 
 typedef struct token {
   int type;
-  char str[32];
+  word_t member;
+  bool otherwise;
 } Token;
 
 static Token tokens[32] __attribute__((used)) = {};
 static int nr_token __attribute__((used))  = 0;
+
+  
+word_t str2num(char *str, int len) {
+  word_t val = 0;
+  for(int i = 0; i < len; i ++) {
+    val = val * 10 + (str[i] - '0');
+  }
+  return val;
+}
+
+word_t str2hexnum(char *str, int len) {
+  word_t val = 0;
+  for(int i = 0; i < len; i ++) {
+    val = val * 16 + (str[i] - '0');
+  }
+  return val;
+}
+
+int get_last_op(int token_idx) {
+  for(int i = token_idx - 1; i >= 0; i --) {
+    if(tokens[i].type == '-' || tokens[i].type == '*' ){
+      return i;
+    }
+  }
+  return -1;
+}
+
 
 static bool make_token(char *e) {
   int position = 0;
@@ -76,6 +115,11 @@ static bool make_token(char *e) {
   regmatch_t pmatch;
 
   nr_token = 0;
+  for(int j = 0; j < 32; j ++) {
+    tokens[j].type = 0;
+    tokens[j].member = 0;
+    tokens[j].otherwise = false;
+  }
 
   while (e[position] != '\0') {
     /* Try all rules one by one. */
@@ -95,9 +139,113 @@ static bool make_token(char *e) {
          */
 
         switch (rules[i].token_type) {
-          default: TODO();
+          case TK_NOTYPE:
+            break;
+            case TK_EQ: {
+              tokens[nr_token].type = TK_EQ;
+              tokens[nr_token].member = TK_EQ;
+              nr_token++;
+              break;
+            }
+            case '+': {
+              tokens[nr_token].type = '+';
+              tokens[nr_token].member = '+';
+              nr_token++;
+              break;
+            }
+            case '-': {
+              tokens[nr_token].type = '-';
+              tokens[nr_token].member = '-';
+              if(tokens[nr_token-1].type != NUM ) {
+                tokens[nr_token].otherwise = true;
+              }
+              nr_token++;
+            break;
+            }
+            case '*': {
+              tokens[nr_token].type = '*';
+              tokens[nr_token].member = '*';
+              if(tokens[nr_token-1].type != NUM ) {
+                tokens[nr_token].otherwise = true;
+              }
+              nr_token++;
+              break;
+            }
+            case '/': {
+              tokens[nr_token].type = '/';
+              tokens[nr_token].member = '/';
+              nr_token++;
+            break;
+            }
+            case '(': {
+              tokens[nr_token].type = '(';
+              tokens[nr_token].member = '(';
+              nr_token++;
+            break;
+            }
+            case ')': {
+              tokens[nr_token].type = ')';
+              tokens[nr_token].member = ')';
+              nr_token++;
+            break;
+            }
+          case NUM:{
+              if(tokens[nr_token-1].otherwise == true) {
+                if(tokens[nr_token-1].type == '-') {
+                  // this is a negative number
+                  tokens[nr_token-1].member = -str2num(substr_start, substr_len);
+                  printf("get negative num:%ld\n", tokens[nr_token-1].member);
+                }
+                tokens[nr_token-1].type = NUM;
+                tokens[nr_token-1].otherwise = false;
+                break;
+              }
+              tokens[nr_token].type = NUM;
+              tokens[nr_token].member = str2num(substr_start, substr_len);
+              printf("get num:%ld\n", tokens[nr_token].member);
+              nr_token ++;
+            break;
+          }
+          case HEX_NUM:{
+            if(tokens[nr_token-1].type == NUM && tokens[nr_token-1].member == 0) {
+              // combine '0' and 'x1234' to '0x1234'
+              tokens[nr_token-1].member = str2hexnum(substr_start + 1, substr_len - 1);
+              printf("get hex num:%ld\n", tokens[nr_token-1].member);
+              break;
+            } else
+            {
+              printf("get wrong hex num format: %ld%s\n",tokens[nr_token-1].member, substr_start);
+              return false;
+              break;
+            }
+            
+          }
+          case REG_NAME: {
+            bool success = true;
+            tokens[nr_token].member = isa_reg_str2val(substr_start + 1, &success);
+            if(!success) {
+              printf("Invalid register name: %.*s\n", substr_len, substr_start);
+              return false;
+            }
+            tokens[nr_token].type = NUM;
+            printf("get reg val:%ld\n", tokens[nr_token].member);
+            nr_token ++;
+            break;
+          }
+          case TK_NEQ:{
+            tokens[nr_token].type = TK_NEQ;
+            tokens[nr_token].member = TK_NEQ;
+            nr_token ++;
+            break;
+          }
+          case (AND):{
+            tokens[nr_token].type = AND;
+            tokens[nr_token].member = TK_NEQ;
+            nr_token ++;
+            break;
+          }
+          default:break;
         }
-
         break;
       }
     }
@@ -111,6 +259,107 @@ static bool make_token(char *e) {
   return true;
 }
 
+bool check_parentheses(int p, int q, bool *success, int deepth) {
+  if (tokens[p].type != '(' || tokens[q].type != ')') {
+    return false;
+  }
+  int cnt = 0;
+  int i;
+  int zero_cnt = 0;
+  for (i = p ; i <= q; i ++) {
+    if (tokens[i].type == '(') {
+      cnt ++;
+    } else if (tokens[i].type == ')') {
+      if (cnt == 0) {
+        *success = false;
+        printf("Unmatched parentheses, not enough left parentheses\n");
+        return false;
+      }
+      cnt --;
+      if (cnt == 0) {
+        zero_cnt ++;
+      }
+    }
+  }
+  if (cnt != 0) {
+    *success = false;
+    printf("Unmatched parentheses, not enough right parentheses\n");
+    return false;
+  }
+  return zero_cnt == 1;
+}
+
+word_t eval(int p, int q, bool *success, int deepth) {
+  if (*success == false) {
+    return 0;
+  }
+  if (p > q) {
+    *success = false;
+    printf("Bad expression\n");
+    // exit(0);
+    return 0;
+  }
+  else if (p == q) {
+    return tokens[p].member;
+  } 
+  else if(check_parentheses(p, q, success, deepth)) {
+    if(!(*success)) {
+      return 0;
+    }
+    return eval(p + 1, q - 1, success, deepth + 1);
+  } 
+  else {
+    
+    if(!(*success)) {
+      return 0;
+    }
+    int op_idx = -1;
+    word_t op = 0;
+    bool parentheses_flag = 0;
+    for(int i = p; i <= q; i ++) {
+      if(tokens[i].type == '(') {
+        parentheses_flag = 1;
+      } else if(tokens[i].type == ')') {
+        parentheses_flag = 0;
+      }
+      if((tokens[i].type == '+' || tokens[i].type == '-' || tokens[i].type == '*' || tokens[i].type == '/' 
+          || tokens[i].type == TK_EQ || tokens[i].type == TK_NEQ || tokens[i].type == AND)
+        && parentheses_flag == 0) {
+        if(op == TK_EQ || op == TK_NEQ || op == AND) {
+          continue;
+        }
+        else if((op == '+' || op == '-') && (tokens[i].type == '*' || tokens[i].type == '/')) {
+          continue;
+        }
+        op_idx = i;
+        op = tokens[i].type;
+      }
+    }
+    // printf("op is %c, num is %ld\n", (char)op, op);
+    word_t val1, val2, res = 0;
+    val1 = eval(p, op_idx - 1, success, deepth + 1);
+    val2 = eval(op_idx + 1, q, success, deepth + 1);
+    switch (op) {
+      case '+': res = val1 + val2; break;
+      case '-': res = val1 - val2; break;
+      case '*': res = val1 * val2; break;
+      case '/': res = val1 / val2; break;
+      case TK_EQ: res = (val1 == val2); break;
+      case TK_NEQ: res = (val1 != val2); break;
+      case AND: res = (val1 && val2); break;
+      default: 
+        *success = false;
+        printf("Invalid operator, for char is %c, num is %ld\n", (char)op, op);
+        printf("deepth is %d\n", deepth);
+        return 0;
+    }
+    // printf("get res: %ld\n", res);
+    // printf("deepth is %d\n", deepth);
+    return res;
+      
+  }
+}
+
 
 word_t expr(char *e, bool *success) {
   if (!make_token(e)) {
@@ -118,8 +367,10 @@ word_t expr(char *e, bool *success) {
     return 0;
   }
 
-  /* TODO: Insert codes to evaluate the expression. */
-  TODO();
-
-  return 0;
+  int deepth = 0;
+  word_t result = eval(0, nr_token - 1, success, deepth);
+  if(success == false) {
+    return 0;
+  }
+  return result;
 }

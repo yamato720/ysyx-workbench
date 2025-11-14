@@ -30,4 +30,9 @@ static inline const char* reg_name(int idx) {
   return regs[check_reg_idx(idx)];
 }
 
+
+void stored_gpr();
+
+word_t check_reg(int idx, bool *success);
+
 #endif

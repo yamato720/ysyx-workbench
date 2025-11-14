@@ -49,7 +49,233 @@ static int cmd_c(char *args) {
 
 
 static int cmd_q(char *args) {
+  quit();
   return -1;
+}
+
+static int cmd_si(char *args) {
+  int n = 1;
+  if (args != NULL) {
+    n = atoi(args);
+  }
+  cpu_exec(n);
+  return 0;
+}
+
+vaddr_t hex2hex(char* hex, bool *success) {
+  if(hex == NULL || strlen(hex) <= 2 || hex[0] != '0' || hex[1] != 'x') {
+    *success = false;
+    printf("Invalid hex number\n");
+    return 0;
+  }
+  vaddr_t val = 0;
+  for(int i = 2; i < strlen(hex); i ++) {
+    char c = hex[i];
+    val = val << 4;
+    if(c >= '0' && c <= '9') {
+      val += c - '0';
+    } else if(c >= 'a' && c <= 'f') {
+      val += c - 'a' + 10;
+    } else if(c >= 'A' && c <= 'F') {
+      val += c - 'A' + 10;
+    } else {
+      *success = false;
+      printf("Invalid hex number\n");
+      return 0;
+    }
+  }
+  return val;
+}
+
+
+static int cmd_x(char *args) {
+  if (args == NULL) {
+    printf("Usage: x N EXPR\n");
+    return 0;
+  }
+  char *arg1 = strtok(args, " ");
+  char *arg2 = strtok(NULL, " ");
+  if (arg2 == NULL) {
+    printf("Usage: x N EXPR\n");
+    return 0;
+  }
+  // int len = strtol(arg1, NULL, 0);
+  int len = atoi(arg1);
+  bool success = true;
+  vaddr_t addr = expr(arg2, &success);
+  if(!success) {
+    return 0;
+  }
+  // printf("arg1: %d, arg2: %lx\n", len, addr);
+  if(addr < expr("0x80000000", &success) || addr > expr("0x87FFFFFF", &success)) {
+    printf("Invalid address\n");
+    printf("Address should be in range 0x80000000 - 0x87FFFFFF\n");
+    return 0;
+  }
+  // printf("0x%08lx: ", addr);
+  printf("Examine memory from address 0x%08lx:\n", addr);
+  for(int i = 0; i < len; i ++) {
+    if(i % 16 == 0) {
+      printf("0x%08lx: ", addr + i);
+    }
+    word_t data = vaddr_read(addr + i, BYTE);
+    printf("0x%02lx ", data);
+    if(i % 16 == 15) {
+      printf("\n");
+    }
+    else if(i == len - 1) {
+      printf("\n");
+    }
+  }
+  return 0;
+}
+
+static int cmd_info(char *args) {
+  if (args == NULL) {
+    printf("Usage: info r/w\n");
+    return 0;
+  }
+  if (strcmp(args, "r") == 0) {
+    isa_reg_display();
+    return 0;
+  }
+  else if (strcmp(args, "w") == 0) {
+    wp_display();
+    return 0;
+  }
+  else {
+    printf("Unknown info command '%s'\n", args);
+  }
+  return 0;
+}
+
+static int cmd_p(char *args) {
+  if (args == NULL) {
+    printf("Usage: p EXPR TYPE(BYTE HALF WORD DWORD)\n");
+    return 0;
+  }
+  bool success = true;
+  word_t result = 0;
+  result = expr(args, &success);
+  if (success) {
+    printf("%s = %ld (0x%lx)\n", args, result, result);
+  } else {
+    printf("Failed to evaluate expression: %s\n", args);
+  }
+  return 0;
+}
+static int cmd_w(char *args) {
+  if (args == NULL) {
+    printf("Usage: w EXPR FLAG(-x)\n");
+    printf("\t-B: Use byte(default)\n");
+    printf("\t-H: Use half word\n");
+    printf("\t-W: Use word\n");
+    printf("\t-D: Use double word\n");
+    printf("\t-S: USE set value flag. \n");
+    printf("\t-FS: Update watchpoint: flip set value flag\n");
+    printf("\t-V=EXPR: Set watch value. Set the watch value flag\n");
+    printf("\t-FV=EXPR: Update watch value and set the watch value flag\n");
+    printf("\t-FTYPE: Update watchpoint type to TYPE\n");
+    return 0;
+  }
+  bool success = true;
+  char *arg0 = strtok(args, " ");
+  char *arg1 = strtok(NULL, " ");
+  int type = BYTE;
+  int flag = 0;
+  word_t setval = 0;
+  while(arg1 != NULL && arg1[0] == '-') {
+      bool isValidFlag = false;
+      if(arg1[1] == 'B') {
+        type = BYTE;
+        isValidFlag = true;
+      } else if(arg1[1] == 'H') {
+        type = HALF;
+        isValidFlag = true;
+      } else if(arg1[1] == 'W') {
+        type = WORD;
+        isValidFlag = true;
+      } else if(arg1[1] == 'D') {
+        type = DWORD;
+        isValidFlag = true;
+      } else if(arg1[1] == 'S') {
+        flag = 2;
+        isValidFlag = true;
+      } else if(arg1[1] == 'V'&& arg1[2] == '=') {
+        isValidFlag = true;
+        char* valstr = &arg1[3];
+        setval = expr(valstr, &success);
+        if(!success) {
+          printf("Failed in setval calculation\n");
+          isValidFlag = false;
+        }
+        flag = 3;
+      } 
+      else if(arg1[1] == 'F' && arg1[2] == 'S') {
+        flag = 4;
+        isValidFlag = true;
+      }
+      else if(arg1[1] == 'F' && arg1[2] == 'V' && arg1[3] == '=') {
+        isValidFlag = true;
+        char* valstr = &arg1[4];
+        setval = expr(valstr, &success);
+        if(!success) {
+          printf("Failed in setval calculation\n");
+          isValidFlag = false;
+        }
+        flag = 5;
+      }
+      else if(arg1[1] == 'F' ) {
+        isValidFlag = true;
+        char typestr = arg1[2];
+        if(typestr == 'B') {
+          type = BYTE;
+        } else if(typestr == 'H') {
+          type = HALF;
+        } else if(typestr == 'W') {
+          type = WORD;
+        } else if(typestr == 'D') {
+          type = DWORD;
+        } else {
+          printf("Invalid type in -FTYPE: %c\n", typestr);
+          isValidFlag = false;
+        }
+        flag = 6;
+      }
+      if(!isValidFlag) {
+        printf("Invalid flag: %s\n", arg1);
+        return 0;
+      }
+    arg1 = strtok(NULL, " ");
+  }
+  vaddr_t addr = expr(arg0, &success);
+  if(!success) {
+    printf("Failed in addr calculation\n");
+    return 0;
+  }
+  if(addr < expr("0x80000000", &success) || addr > expr("0x87FFFFFF", &success)) {
+    printf("Invalid address\n");
+    printf("Address should be in range 0x80000000 - 0x87FFFFFF\n");
+    return 0;
+  }
+
+  printf("Set watchpoint at address 0x%08lx with type %d, flag %d, setval %ld\n", addr, type, flag, setval);
+  
+  WP* wp = new_wp(addr, type, flag, setval);
+  if(wp == NULL) {
+    return 0;
+  }
+  return 0;
+}
+
+static int cmd_d(char *args) {
+  if (args == NULL) {
+    printf("Usage: d N\n");
+    return 0;
+  }
+  int no = atoi(args);
+  free_wp_byNO(no);
+  return 0;
 }
 
 static int cmd_help(char *args);
@@ -62,6 +288,12 @@ static struct {
   { "help", "Display information about all supported commands", cmd_help },
   { "c", "Continue the execution of the program", cmd_c },
   { "q", "Exit NEMU", cmd_q },
+  { "si", "Step N instructions exactly", cmd_si },
+  { "info", "Display register state or watchpoint information", cmd_info },
+  { "x", "Examine memory: x N EXPR", cmd_x },
+  { "p", "Evaluate expression EXPR", cmd_p },
+  { "w", "Set a watchpoint at expression EXPR, TYPE, FLAG, SETVAL", cmd_w },
+  { "d", "Delete watchpoint number N", cmd_d },
 
   /* TODO: Add more commands */
 

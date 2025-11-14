@@ -17,6 +17,9 @@
 #include <cpu/decode.h>
 #include <cpu/difftest.h>
 #include <locale.h>
+#include "../isa/riscv64/local-include/reg.h"
+
+#include "../../src/monitor/sdb/sdb.h"
 
 /* The assembly code of instructions executed is only output to the screen
  * when the number of instructions executed is less than this value.
@@ -38,6 +41,7 @@ static void trace_and_difftest(Decode *_this, vaddr_t dnpc) {
 #endif
   if (g_print_step) { IFDEF(CONFIG_ITRACE, puts(_this->logbuf)); }
   IFDEF(CONFIG_DIFFTEST, difftest_step(_this->pc, dnpc));
+
 }
 
 static void exec_once(Decode *s, vaddr_t pc) {
@@ -71,12 +75,20 @@ static void exec_once(Decode *s, vaddr_t pc) {
 #endif
 }
 
+
+
+
 static void execute(uint64_t n) {
   Decode s;
   for (;n > 0; n --) {
     exec_once(&s, cpu.pc);
     g_nr_guest_inst ++;
     trace_and_difftest(&s, cpu.pc);
+    if (n != 1) stored_gpr();
+    if (check_watchpoints()) {
+      nemu_state.state = NEMU_STOP;
+      break;
+    }
     if (nemu_state.state != NEMU_RUNNING) break;
     IFDEF(CONFIG_DEVICE, device_update());
   }
@@ -96,6 +108,10 @@ void assert_fail_msg() {
   statistic();
 }
 
+void quit() {
+  nemu_state.state = NEMU_END;
+}
+
 /* Simulate how the CPU works. */
 void cpu_exec(uint64_t n) {
   g_print_step = (n < MAX_INST_TO_PRINT);
@@ -107,7 +123,7 @@ void cpu_exec(uint64_t n) {
   }
 
   uint64_t timer_start = get_time();
-
+  
   execute(n);
 
   uint64_t timer_end = get_time();
