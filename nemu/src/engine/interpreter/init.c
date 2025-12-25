@@ -17,7 +17,7 @@
 
 void sdb_mainloop();
 
-void engine_start() {
+void engine_start() {  // use in nemu/src/nemu-main.c
 #ifdef CONFIG_TARGET_AM
   cpu_exec(-1);
 #else

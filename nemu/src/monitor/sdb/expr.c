@@ -46,7 +46,7 @@ static struct rule {
   {"\\(", '('},         // left parenthesis
   {"\\)", ')'},         // right parenthesis
   {"[0-9]+", NUM},      // number
-  {"[xX][0-9a-fA-F]+", HEX_NUM},      // hex number
+  {"[xX][0-9a-fA-F]+", HEX_NUM},      // hex number，read number 0 then check x 
   {"\\$(\\$0)|(ra)|(sp)|(gp)|(tp)|(t0-6)|(s0-11)|(a0-7)", REG_NAME},     // register name
   {"!=", TK_NEQ},    // not equal
   {"&&", AND},      // and
@@ -204,7 +204,7 @@ static bool make_token(char *e) {
               tokens[nr_token].member = str2num(substr_start, substr_len);
               printf("get num:%ld\n", tokens[nr_token].member);
               nr_token ++;
-            break;
+              break;
           }
           case HEX_NUM:{
             if(tokens[nr_token-1].type == NUM && tokens[nr_token-1].member == 0) {
@@ -222,7 +222,8 @@ static bool make_token(char *e) {
           }
           case REG_NAME: {
             bool success = true;
-            tokens[nr_token].member = isa_reg_str2val(substr_start + 1, &success);
+            int idx = 0;
+            tokens[nr_token].member = isa_reg_str2val(substr_start + 1, &success, &idx);
             if(!success) {
               printf("Invalid register name: %.*s\n", substr_len, substr_start);
               return false;

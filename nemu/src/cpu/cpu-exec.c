@@ -81,10 +81,10 @@ static void exec_once(Decode *s, vaddr_t pc) {
 static void execute(uint64_t n) {
   Decode s;
   for (;n > 0; n --) {
+    stored_gpr();
     exec_once(&s, cpu.pc);
     g_nr_guest_inst ++;
     trace_and_difftest(&s, cpu.pc);
-    if (n != 1) stored_gpr();
     if (check_watchpoints()) {
       nemu_state.state = NEMU_STOP;
       break;
@@ -109,7 +109,7 @@ void assert_fail_msg() {
 }
 
 void quit() {
-  nemu_state.state = NEMU_END;
+  nemu_state.state = NEMU_QUIT;
 }
 
 /* Simulate how the CPU works. */

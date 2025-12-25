@@ -31,7 +31,9 @@ void init_isa();
 // reg
 extern CPU_state cpu;
 void isa_reg_display();
-word_t isa_reg_str2val(const char *name, bool *success);
+word_t isa_reg_str2val(const char *name, bool *success, int *idx);
+word_t isa_reg_idx2val(int idx);
+const char* isa_reg_idx2str(int idx);
 
 // exec
 struct Decode;

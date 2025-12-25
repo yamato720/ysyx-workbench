@@ -60,13 +60,24 @@ void isa_reg_display() {
   }
 }
 
-word_t isa_reg_str2val(const char *s, bool *success) {
+word_t isa_reg_str2val(const char *s, bool *success, int *idx) {
   for(int i = 0; i < 32; i ++) {
-    if(strcmp(s + 1, regs[i] + 1) == 0) {
+    if(strcmp(s, regs[i]) == 0) {
       *success = true;
+      *idx = i;
+      // printf("%s\n%s\n", s, regs[i]);
+      // printf("Find register %s\n", regs[i]);
       return gpr(i);
     }
   }
   *success = false;
   return 0;
+}
+
+word_t isa_reg_idx2val(int idx) {
+  return gpr(idx);
+}
+
+const char* isa_reg_idx2str(int idx) {
+  return regs[idx];
 }

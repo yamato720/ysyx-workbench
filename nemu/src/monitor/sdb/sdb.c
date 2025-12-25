@@ -167,6 +167,7 @@ static int cmd_p(char *args) {
 static int cmd_w(char *args) {
   if (args == NULL) {
     printf("Usage: w EXPR FLAG(-x)\n");
+    printf("\tEXPR: Address or register name, only use $ to specify register\n");
     printf("\t-B: Use byte(default)\n");
     printf("\t-H: Use half word\n");
     printf("\t-W: Use word\n");
@@ -175,7 +176,10 @@ static int cmd_w(char *args) {
     printf("\t-FS: Update watchpoint: flip set value flag\n");
     printf("\t-V=EXPR: Set watch value. Set the watch value flag\n");
     printf("\t-FV=EXPR: Update watch value and set the watch value flag\n");
-    printf("\t-FTYPE: Update watchpoint type to TYPE\n");
+    printf("\t-FTYPE: Update watchpoint type to TYPE\n"); // finished
+    // printf("\t-R: Specify that the watchpoint is set on a register, stop when change\n");
+    // printf("\t-R=EXPR: Set watchpoint at register, EXPR is value that register should save, stop when equal\n ");
+    // printf("\t-RS=Number: Flip the register watchpoint stop condition\n");
     return 0;
   }
   bool success = true;
@@ -247,6 +251,23 @@ static int cmd_w(char *args) {
         return 0;
       }
     arg1 = strtok(NULL, " ");
+  }
+  if(arg0[0] == '$'){
+    bool reg_success = true;
+    // printf("$\n");
+    int idx = 0;
+    // flag = 1; // register watchpoint
+    isa_reg_str2val(arg0 + 1, &reg_success, &idx);
+    if(!reg_success) {
+      printf("Invalid register name: %s\n", arg0);
+      return 0;
+    }
+    // printf("%d\n", idx);
+    WP* wp = new_wp(idx, type, flag, setval);
+    if(wp == NULL) {
+      return 0;
+    }
+    return 0;
   }
   vaddr_t addr = expr(arg0, &success);
   if(!success) {
@@ -328,7 +349,7 @@ void sdb_set_batch_mode() {
   is_batch_mode = true;
 }
 
-void sdb_mainloop() {
+void sdb_mainloop() {  // use in nemu/src/engine/interpreter/init.c
   if (is_batch_mode) {
     cmd_c(NULL);
     return;
@@ -357,7 +378,7 @@ void sdb_mainloop() {
     int i;
     for (i = 0; i < NR_CMD; i ++) {
       if (strcmp(cmd, cmd_table[i].name) == 0) {
-        if (cmd_table[i].handler(args) < 0) { return; }
+        if (cmd_table[i].handler(args) < 0) { return; }  // do function
         break;
       }
     }

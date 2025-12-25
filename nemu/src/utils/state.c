@@ -20,5 +20,10 @@ NEMUState nemu_state = { .state = NEMU_STOP };
 int is_exit_status_bad() {
   int good = (nemu_state.state == NEMU_END && nemu_state.halt_ret == 0) ||
     (nemu_state.state == NEMU_QUIT);
+  if(!good) {
+    printf("Exit status is bad.\n");
+    printf("nemu_state.state = %d, nemu_state.halt_ret = %d\n", nemu_state.state, nemu_state.halt_ret);
+    printf("if you need i will set state to NEMU_QUIT in function quit\n");
+  }
   return !good;
 }
