@@ -18,6 +18,8 @@
 #include <readline/readline.h>
 #include <readline/history.h>
 #include "sdb.h"
+#include <pthread.h>
+// #include "reg.h"
 
 static int is_batch_mode = false;
 
@@ -114,6 +116,9 @@ static int cmd_x(char *args) {
   }
   // printf("0x%08lx: ", addr);
   printf("Examine memory from address 0x%08lx:\n", addr);
+  printf("-------------------------------------------------------------------------------------------\n");
+  printf("Address\t      0    1    2    3    4    5    6    7    8    9    a    b    c    d    e    f\n");
+  printf("-------------------------------------------------------------------------------------------\n");
   for(int i = 0; i < len; i ++) {
     if(i % 16 == 0) {
       printf("0x%08lx: ", addr + i);
@@ -148,6 +153,326 @@ static int cmd_info(char *args) {
   }
   return 0;
 }
+#define MAX_EXPR_LEN 10
+#define MAX_RESULT_LEN 128
+
+typedef struct {
+    char expr[MAX_EXPR_LEN * 3];
+    sword_t result;
+    char info[MAX_RESULT_LEN];
+    int success;
+} ExprTask;
+
+char python_path[] = "/home/pyx/Workspace/ysyx-workbench/exper-test/varify.py";
+
+
+
+void calculate_expr(const char *expr, sword_t *result, char *info, int *success) {
+    char cmd[MAX_EXPR_LEN *3 + 128];
+    FILE *fp;
+    char output[MAX_RESULT_LEN];
+    
+    // 构造命令：调用 Python 脚本
+    snprintf(cmd, sizeof(cmd), "python3 %s \"%s\"", python_path, expr);
+    
+    // 执行命令并读取输出
+    fp = popen(cmd, "r");
+    if (fp == NULL) {
+        fprintf(stderr, "Failed to run python script\n");
+        return;
+    }
+    
+    // 读取结果
+    if (fgets(output, sizeof(output), fp) != NULL) {
+        // 尝试解析为数字
+        if (sscanf(output, "%ld", result) == 1) {
+            // 成功：output 包含数字字符串，result 被赋值
+            pclose(fp);
+            return;
+        } else {
+            // 失败：output 包含错误信息（非数字字符串）
+            // 去除换行符
+            output[strcspn(output, "\n")] = 0;
+            strcpy(info, output);
+            *success = 0;
+            pclose(fp);
+            return;
+        }
+    }
+}
+
+// 线程函数：处理表达式计算
+void *expr_worker(void *arg) {
+    ExprTask *task = (ExprTask *)arg;
+    calculate_expr(task->expr, &task->result, task->info, &task->success);
+    return NULL;
+}
+
+// void gen_rand_expr(char* expr_buf, int top); {
+//   switch (choose(3)) {
+//     case 0: gen_num(); break;
+//     case 1: gen('('); gen_rand_expr(); gen(')'); break;
+//     default: gen_rand_expr(); gen_rand_op(); gen_rand_expr(); break;
+//   }
+// }
+typedef struct ExprNode{
+    char member[4];  // 增大以容纳数字、操作符、空格和 '\0'
+    struct ExprNode *next;
+    struct ExprNode *prev;
+}ExprNode;
+
+
+int choose(int n) {
+    return rand() % n;
+}
+
+void gen_rand_op(ExprNode* node) {
+    int op_idx = choose(4);
+    char op;
+    switch (op_idx) {
+        case 0: op = '+'; break;
+        case 1: op = '-'; break;
+        case 2: op = '*'; break;
+        case 3: op = '/'; break;
+        default: op = '+'; break;
+    }
+    node->member[0] = op;
+    node->member[1] = ' ';
+    node->member[2] = '\0';
+    return;
+}
+
+
+void gen_rand_expr(int* length, ExprNode* node);
+
+void gen_num(ExprNode* node) {
+    int num = choose(100);
+    if(num == 0 && node->prev != NULL && node->prev->member[0] == '/') {
+        num = choose(99) + 1; // avoid divide zero
+    }
+    sprintf(node->member,  "%2d", num);
+    // node->member[2] = ' ';
+}
+
+void case_0(ExprNode* node, int *length) {
+    (*length)++;
+    gen_num(node);
+    return;
+}
+
+void case_1(ExprNode* node, int *length) {
+    if(*length + 3 > MAX_EXPR_LEN) {
+        (*length)++;
+        gen_num(node);
+        return;
+    }
+    ExprNode* left_node = (ExprNode*)malloc(sizeof(ExprNode));
+    ExprNode* right_node = (ExprNode*)malloc(sizeof(ExprNode));
+    memset(left_node, 0, sizeof(ExprNode));
+    memset(right_node, 0, sizeof(ExprNode));
+    *length += 2; // for '(' and ')'
+    left_node->member[0] = '(';
+    left_node->member[1] = ' ';
+    right_node->member[0] = ')';
+    right_node->member[1] = ' ';
+    if(node->prev != NULL) {
+        left_node->prev = node->prev;
+        node->prev->next = left_node;
+    }else {
+        left_node->prev = NULL;
+    }
+    node->prev = left_node;
+    if(node->next != NULL) {
+        right_node->next = node->next;
+        node->next->prev = right_node;
+    }else {
+        right_node->next = NULL;
+    }
+    node->next = right_node;
+    left_node->next = node;
+    right_node->prev = node;
+    
+    
+    gen_rand_expr(length, node);
+    return;
+}
+
+void case_2(ExprNode* node, int *length) {
+    if(*length + 3 > MAX_EXPR_LEN) {
+        (*length)++;
+        gen_num(node);
+        return;
+    }
+    ExprNode* left_node = (ExprNode*)malloc(sizeof(ExprNode));
+    ExprNode* right_node = (ExprNode*)malloc(sizeof(ExprNode));
+    memset(left_node, 0, sizeof(ExprNode));
+    memset(right_node, 0, sizeof(ExprNode));
+    *length += 1; // for operator
+    if(node->prev != NULL) {
+        left_node->prev = node->prev;
+        node->prev->next = left_node;
+    }else {
+        left_node->prev = NULL;
+    }
+    node->prev = left_node;
+    if(node->next != NULL) {
+        right_node->next = node->next;
+        node->next->prev = right_node;
+    }else {
+        right_node->next = NULL;
+    }
+    node->next = right_node;
+    left_node->next = node;
+    right_node->prev = node;
+    
+    gen_rand_expr(length, left_node);
+    gen_rand_op(node);  
+    gen_rand_expr(length, right_node);
+    return;
+}
+
+
+
+void gen_rand_expr(int* length, ExprNode* node) {
+    switch (choose(3)) {
+    case 0: case_0(node, length); break;
+    case 1: case_1(node, length); break;
+    default: case_2(node, length); break;
+    }
+}
+
+void build_expr_from_list(ExprNode* center, char* expr_buf) {
+    memset(expr_buf, 0, MAX_EXPR_LEN * 3);
+    ExprNode* p = center;
+    while(p->prev != NULL) {
+        p = p->prev;
+    }
+    int idx = 0;
+    // printf("Expression: ");
+    while(p->next != NULL) {
+        expr_buf[idx++] = p->member[0];
+        expr_buf[idx++] = p->member[1];
+        // printf("%s ", p->member);
+        p = p->next;
+        free(p->prev);
+    }
+    expr_buf[idx++] = p->member[0];
+    expr_buf[idx++] = p->member[1];
+    // printf("%s\n", p->member);
+    free(p);
+    expr_buf[idx] = '\0';
+    // printf("%s\n", expr_buf);
+    
+}
+
+static int cmd_test(char *args) {
+  pthread_t thread;
+  int max = 100;
+  if(args != NULL)
+  {
+    max = atoi(args);
+  }
+  ExprNode* center = NULL;
+  srand(time(NULL));  // 初始化随机数种子
+  char EXPR_BUF[max][MAX_EXPR_LEN * 3];
+  char Error_INFO[max][MAX_RESULT_LEN];
+  int  Error_FLAG[max];
+  memset(Error_INFO, 0, sizeof(Error_INFO));
+  memset(Error_FLAG, 0, sizeof(Error_FLAG));
+  sword_t  results[max][2];
+  for (int i = 0; i < max; i++) {
+        // printf("----- Generating Expression %d -----\n", i + 1);
+        int lenth = 0;
+        center = (ExprNode*)malloc(sizeof(ExprNode));
+        memset(center, 0, sizeof(ExprNode));
+        
+        // 动态分配 ExprTask，避免栈上变量被覆盖
+        ExprTask *t = (ExprTask*)malloc(sizeof(ExprTask));
+        memset(t, 0, sizeof(ExprTask));
+        
+        gen_rand_expr(&lenth, center);
+        printf("center member: %s\n", center->member);
+        build_expr_from_list(center, EXPR_BUF[i]);
+        strcpy(t->expr, EXPR_BUF[i]);
+        t->result = 0;
+        t->success = 1;
+        
+        printf("Generated expr (len=%d): %s\n", lenth, t->expr);
+        
+        if (pthread_create(&thread, NULL, expr_worker, t) == 0) {
+            pthread_join(thread, NULL);
+        } else {
+          free(t);
+          continue;
+        }
+        printf("%s = %ld\n", t->expr, t->result);
+        if(t->success == 0) {
+          Error_FLAG[i] = 1;
+          strcpy(Error_INFO[i], t->info);
+          // printf("Python evaluation failed: %s\n", Error_INFO[i]);
+          free(t);
+          continue;
+        }
+        bool success = true;
+        sword_t nemu_result = expr(t->expr, &success);
+        results[i][0] = nemu_result;
+        results[i][1] = t->result;
+        if(!success) {
+          printf("NEMU evaluation failed!\n");
+          free(t);
+          continue;
+        }
+        printf("NEMU result: %ld\n", nemu_result);
+        if(nemu_result != t->result) {
+          printf("Mismatch result! NEMU: %ld, Python: %ld\n", nemu_result, t->result);
+        } else {
+          printf("Match result!\n");
+        }
+        free(t);
+    }
+  int missmatch_cnt = 0;
+  int missmatch_flag[max];
+  memset(missmatch_flag, 0, sizeof(missmatch_flag));
+  for(int i = 0; i < max; i ++) {
+    printf("----- Expression %d -----\n", i + 1);
+    printf("Expression: %s\n", EXPR_BUF[i]);
+    printf("NEMU result: %ld, Python result: %ld\n", results[i][0], results[i][1]);
+
+    if(results[i][0] != results[i][1]) {
+      printf("Mismatch result!\n");
+      missmatch_flag[i] = 1;
+      missmatch_cnt ++;
+    } else {
+      printf("Match result!\n");
+    }
+    printf("\n");
+  }
+  if(missmatch_cnt != 0) {
+    printf("these expressions mismatched!\n");
+    for(int i = 0; i < max; i ++) {
+      if(missmatch_flag[i] == 1) {
+        printf("----- Expression %d -----\n", i + 1);
+        printf("Expression: %s\n", EXPR_BUF[i]);
+        printf("NEMU result: %ld, Python result: %ld\n", results[i][0], results[i][1]);
+      }
+    }
+  }
+  int error_cnt = 0;
+  printf("\n");
+  printf("Expressions with Python evaluation errors:\n");
+  for(int i = 0; i < max; i ++) {
+    if(Error_FLAG[i] == 1) {
+      printf("----- Expression %d -----\n", i + 1);
+      printf("Expression: %s\n", EXPR_BUF[i]);
+      printf("Python evaluation failed: %s\n", Error_INFO[i]);
+      error_cnt ++;
+    }
+  }
+  printf("\n");
+  printf("Total success: %d, match count: %d, mismatch count: %d\n", max - error_cnt, max - error_cnt - missmatch_cnt, missmatch_cnt);
+  return 0;
+}
+
 
 static int cmd_p(char *args) {
   if (args == NULL) {
@@ -155,7 +480,7 @@ static int cmd_p(char *args) {
     return 0;
   }
   bool success = true;
-  word_t result = 0;
+  sword_t result = 0;
   result = expr(args, &success);
   if (success) {
     printf("%s = %ld (0x%lx)\n", args, result, result);
@@ -315,6 +640,7 @@ static struct {
   { "p", "Evaluate expression EXPR", cmd_p },
   { "w", "Set a watchpoint at expression EXPR, TYPE, FLAG, SETVAL", cmd_w },
   { "d", "Delete watchpoint number N", cmd_d },
+  { "test", "A test use python script varify EXPR", cmd_test },
 
   /* TODO: Add more commands */
 
@@ -354,7 +680,7 @@ void sdb_mainloop() {  // use in nemu/src/engine/interpreter/init.c
     cmd_c(NULL);
     return;
   }
-
+  update_other_regs();
   for (char *str; (str = rl_gets()) != NULL; ) {
     char *str_end = str + strlen(str);
 
@@ -393,4 +719,6 @@ void init_sdb() {
 
   /* Initialize the watchpoint pool. */
   init_wp_pool();
+
+  // update_other_regs();
 }

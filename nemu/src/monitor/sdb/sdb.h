@@ -18,6 +18,7 @@
 
 #include <common.h>
 #include <memory/vaddr.h>
+// #include "reg.h"
 
 enum { 
   BYTE = 1,
@@ -50,5 +51,6 @@ void free_wp_byNO(int no);
 void wp_display();
 
 bool check_watchpoints();
+void update_other_regs();
 
 #endif

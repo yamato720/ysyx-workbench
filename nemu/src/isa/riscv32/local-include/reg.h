@@ -33,6 +33,8 @@ static inline const char* reg_name(int idx) {
 
 void stored_gpr();
 
-word_t check_reg(int idx, bool *success);
+void update_other_regs();
+
+void check_reg(int idx, bool *success);
 
 #endif

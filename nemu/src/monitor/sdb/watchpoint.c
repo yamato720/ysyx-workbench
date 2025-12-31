@@ -45,7 +45,7 @@ static void show_wp_info(WP* wp) {
   }
   printf("Num\tAddress\t\tMatch Type\tOld Value\t\tNew Value\t\tSet Value\t\tUse Flag\n");
     char type[8] = "";
-    if(wp->addr < 32)
+    if(wp->addr < 32 + 15)
     {
       sprintf(type, "REG: %s", isa_reg_idx2str(wp->addr));
     } else if(wp->type == BYTE) {
@@ -85,7 +85,7 @@ WP* new_wp(vaddr_t addr, int type, int flag, word_t setval) {
     } else if(flag == 6) { // -FTYPE
       printf("Set type = %d -> %d\n", wp->type, type);
       wp->type = type;
-      if(addr < 32)
+      if(addr < 32 + 15)
       {
         printf("But Register watchpoint don't care data type\n");
         return wp;
@@ -117,7 +117,7 @@ WP* new_wp(vaddr_t addr, int type, int flag, word_t setval) {
   wp->busy = true;
   wp->addr = addr;
   wp->type = type;
-  if(addr < 32)
+  if(addr < 32 + 15)
   {
     wp->old_value = isa_reg_idx2val(addr);
   }else {
@@ -203,7 +203,7 @@ void wp_display() {
   printf("Num\tAddress\t\tMatch Type\tOld Value\t\tNew Value\t\tSet Value\t\tUse Flag\n");
   while(wp != NULL && wp->busy) {
     char type[8] = "";
-    if(wp->addr < 32)
+    if(wp->addr < 32 + 15)
     {
       sprintf(type, "REG: %s", isa_reg_idx2str(wp->addr));
     }
@@ -227,7 +227,7 @@ bool check_watchpoints() {
   WP* wp = head;
   bool triggered = false;
   while(wp != NULL) {
-    if(wp->addr < 32)
+    if(wp->addr < 32 + 15)
     {
       wp->new_value = isa_reg_idx2val(wp->addr);
     } else {
@@ -235,13 +235,13 @@ bool check_watchpoints() {
     }
     if(wp->set_flag) {
       if(wp->new_value == wp->set_value) {
-        if(wp->addr < 32){
+        if(wp->addr < 32 + 15){
           printf("Watchpoint %d triggered at register %s: value match set value 0x%016lx\n", wp->NO, isa_reg_idx2str(wp->addr), wp->set_value);
         }else {
           printf("Watchpoint %d triggered at address 0x%08lx: value match set value 0x%016lx\n", wp->NO, wp->addr, wp->set_value);
         }
         char type[8] = "";
-        if(wp->addr < 32)
+        if(wp->addr < 32 + 15)
         {
           sprintf(type, "REG: %s", isa_reg_idx2str(wp->addr));
         } else if(wp->type == BYTE) {
@@ -255,7 +255,7 @@ bool check_watchpoints() {
         } else {
           sprintf(type, "UNK");
         }
-        if(wp->addr < 32)
+        if(wp->addr < 32 + 15)
         {
           printf("Match type is REG %s\n", isa_reg_idx2str(wp->addr));
         } else {
@@ -265,13 +265,13 @@ bool check_watchpoints() {
       }
     } else {
       if(wp->new_value != wp->old_value) {
-        if(wp->addr < 32){
+        if(wp->addr < 32 + 15){
           printf("Watchpoint %d triggered at register %s: value changed from 0x%016lx to 0x%016lx\n", wp->NO, isa_reg_idx2str(wp->addr), wp->old_value, wp->new_value);
         } else {
           printf("Watchpoint %d triggered at address 0x%08lx: value changed from 0x%016lx to 0x%016lx\n", wp->NO, wp->addr, wp->old_value, wp->new_value);
         }
         char type[8] = "";
-        if(wp->addr < 32)
+        if(wp->addr < 32 + 15)
         {
           sprintf(type, "REG: %s", isa_reg_idx2str(wp->addr));
         } else if(wp->type == BYTE) {
@@ -285,7 +285,7 @@ bool check_watchpoints() {
         } else {
           sprintf(type, "UNK");
         }
-        if(wp->addr < 32)
+        if(wp->addr < 32 + 15)
         {
           printf("Match type is REG %s\n", isa_reg_idx2str(wp->addr));
         } else {

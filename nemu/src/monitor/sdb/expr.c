@@ -20,6 +20,7 @@
  */
 #include <regex.h>
 #include "../../isa/riscv64/local-include/reg.h"
+#include "sdb.h"
 
 enum {
   TK_NOTYPE = 256, TK_EQ, TK_NEQ, AND, NUM, HEX_NUM, REG_NAME,
@@ -94,8 +95,17 @@ word_t str2num(char *str, int len) {
 word_t str2hexnum(char *str, int len) {
   word_t val = 0;
   for(int i = 0; i < len; i ++) {
+    if(str[i] >= 'a' && str[i] <= 'f') {
+      val = val * 16 + (str[i] - 'a' + 10);
+      continue;
+    }
+    if(str[i] >= 'A' && str[i] <= 'F') {
+      val = val * 16 + (str[i] - 'A' + 10);
+      continue;
+    }
     val = val * 16 + (str[i] - '0');
   }
+  // printf("get hex num:%ld(0x%s)\n", val, str);
   return val;
 }
 
@@ -156,8 +166,10 @@ static bool make_token(char *e) {
             case '-': {
               tokens[nr_token].type = '-';
               tokens[nr_token].member = '-';
-              if(tokens[nr_token-1].type != NUM ) {
+              if(tokens[nr_token-1].type != NUM && tokens[nr_token-1].type != ')' ) {
                 tokens[nr_token].otherwise = true;
+              }else {
+                tokens[nr_token].otherwise = false;
               }
               nr_token++;
             break;
@@ -165,8 +177,10 @@ static bool make_token(char *e) {
             case '*': {
               tokens[nr_token].type = '*';
               tokens[nr_token].member = '*';
-              if(tokens[nr_token-1].type != NUM ) {
+              if(tokens[nr_token-1].type != NUM && tokens[nr_token-1].type != ')' ) {
                 tokens[nr_token].otherwise = true;
+              }else {
+                tokens[nr_token].otherwise = false;
               }
               nr_token++;
               break;
@@ -195,10 +209,10 @@ static bool make_token(char *e) {
                   // this is a negative number
                   tokens[nr_token-1].member = -str2num(substr_start, substr_len);
                   printf("get negative num:%ld\n", tokens[nr_token-1].member);
+                  tokens[nr_token-1].type = NUM;
+                  tokens[nr_token-1].otherwise = false;
+                  break;
                 }
-                tokens[nr_token-1].type = NUM;
-                tokens[nr_token-1].otherwise = false;
-                break;
               }
               tokens[nr_token].type = NUM;
               tokens[nr_token].member = str2num(substr_start, substr_len);
@@ -210,7 +224,25 @@ static bool make_token(char *e) {
             if(tokens[nr_token-1].type == NUM && tokens[nr_token-1].member == 0) {
               // combine '0' and 'x1234' to '0x1234'
               tokens[nr_token-1].member = str2hexnum(substr_start + 1, substr_len - 1);
-              printf("get hex num:%ld\n", tokens[nr_token-1].member);
+              if(tokens[nr_token-2].otherwise == true) {
+                nr_token --;
+                if(tokens[nr_token-1].type == '-') {
+                  // this is a negative hex number
+                  tokens[nr_token-1].member = -tokens[nr_token-1].member;
+                  printf("get negative hex num:%ld\n", tokens[nr_token-1].member);
+                }
+                else if(tokens[nr_token-1].type == '*') {
+                  // get memory address value
+                  if(tokens[nr_token].member < str2hexnum("80000000", 8) || tokens[nr_token].member > str2hexnum("87FFFFFF", 8)) {
+                    printf("Invalid memory address: 0x%lx\n", tokens[nr_token].member);
+                    return false;
+                  }
+                  tokens[nr_token-1].member = vaddr_read(tokens[nr_token].member, BYTE);
+                  printf("get memory address value:%ld\n", tokens[nr_token-1].member);
+                }
+                tokens[nr_token-1].type = NUM;
+                tokens[nr_token-1].otherwise = false;
+              }
               break;
             } else
             {
@@ -282,6 +314,7 @@ bool check_parentheses(int p, int q, bool *success, int deepth) {
       }
     }
   }
+  // printf("from p=%d to q=%d\n", p, q);
   if (cnt != 0) {
     *success = false;
     printf("Unmatched parentheses, not enough right parentheses\n");
@@ -294,6 +327,7 @@ word_t eval(int p, int q, bool *success, int deepth) {
   if (*success == false) {
     return 0;
   }
+  // printf("eval from p=%d to q=%d\n", p, q);
   if (p > q) {
     *success = false;
     printf("Bad expression\n");
@@ -316,12 +350,14 @@ word_t eval(int p, int q, bool *success, int deepth) {
     }
     int op_idx = -1;
     word_t op = 0;
-    bool parentheses_flag = 0;
+    int parentheses_flag = 0;
     for(int i = p; i <= q; i ++) {
       if(tokens[i].type == '(') {
-        parentheses_flag = 1;
+        parentheses_flag++;
+        continue;
       } else if(tokens[i].type == ')') {
-        parentheses_flag = 0;
+        parentheses_flag--;
+        continue;
       }
       if((tokens[i].type == '+' || tokens[i].type == '-' || tokens[i].type == '*' || tokens[i].type == '/' 
           || tokens[i].type == TK_EQ || tokens[i].type == TK_NEQ || tokens[i].type == AND)
@@ -351,6 +387,7 @@ word_t eval(int p, int q, bool *success, int deepth) {
       default: 
         *success = false;
         printf("Invalid operator, for char is %c, num is %ld\n", (char)op, op);
+        printf("from p=%d to q=%d\n", p, q);
         printf("deepth is %d\n", deepth);
         return 0;
     }
@@ -369,6 +406,15 @@ word_t expr(char *e, bool *success) {
   }
 
   int deepth = 0;
+  // printf("expression tokens:\n");
+  // for(int i = 0; i < nr_token; i ++) {
+  //   if(tokens[i].type == NUM) {
+  //     printf("%ld ", tokens[i].member);
+  //   } else {
+  //     printf("%c ", (char)tokens[i].member);
+  //   }
+  // }
+  // printf("\n");
   word_t result = eval(0, nr_token - 1, success, deepth);
   if(success == false) {
     return 0;
