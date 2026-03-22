@@ -39,14 +39,26 @@ word_t other_regs_val_stored[] = {
 
 word_t reg_val[32] = {0};
 
+
+
 void stored_gpr() {
+#ifndef NPC
   for(int i = 0; i < 32; i ++) {
     reg_val[i] = gpr(i);
   }
   other_regs_val_stored[0] = cpu.pc;
-}
+#else
+  // In NPC integration mode, get registers from NPC
 
+  for(int i = 0; i < 32; i ++) {
+    reg_val[i] = npc_get_reg(i);
+  }
+  other_regs_val_stored[0] = npc_get_pc();
+  // printf("Stored pc: 0x%08lx\n", other_regs_val_stored[0]);
+#endif
+}
 void update_other_regs() {
+#ifndef NPC
   other_regs_val[0] = cpu.pc;
   // other_regs_val[1] = cpu.mstatus.val;
   // other_regs_val[2] = cpu.sstatus.val;
@@ -62,14 +74,27 @@ void update_other_regs() {
   // other_regs_val[12] = cpu.sip.val;
   // other_regs_val[13] = cpu.mie.val;
   // other_regs_val[14] = cpu.sie.val;
+#else
+  // In NPC integration mode, get PC from NPC
+  extern uint64_t npc_get_pc();
+  other_regs_val[0] = npc_get_pc();
+#endif
 }
 
 void check_reg(int idx, bool *success) {
   if(idx < 32) {
+    #ifndef NPC
     if(gpr(idx) != reg_val[idx]) {
       *success = true;
       return ;
     }
+    #else
+    extern uint64_t npc_get_reg(int idx);
+    if(npc_get_reg(idx) != reg_val[idx]) {
+      *success = true;
+      return ;
+    }
+    #endif
     *success = false;
     return ;
   }
@@ -96,10 +121,15 @@ void isa_reg_display() {
     //   return;
     // }
     check_reg(i, &success);
+#ifndef NPC
+    word_t current_val = gpr(i);
+#else
+    word_t current_val = npc_get_reg(i);
+#endif
     if(success) {
-      printf("%s:0x%08lx <-- 0x%08lx\t", regs[i], reg_val[i], gpr(i));
+      printf("%s:0x%08lx <-- 0x%08lx\t", regs[i], reg_val[i], current_val);
     } else {
-    printf("%s:0x%08lx\t\t\t", regs[i], gpr(i));}
+    printf("%s:0x%08lx\t\t\t", regs[i], current_val);}
     if(i % 4 == 3) {
       printf("\n");
     }
@@ -121,13 +151,18 @@ void isa_reg_display() {
 }
 
 word_t isa_reg_str2val(const char *s, bool *success, int *idx) {
+  
   for(int i = 0; i < 32; i ++) {
     if(strcmp(s, regs[i]) == 0) {
       *success = true;
       *idx = i;
       // printf("%s\n%s\n", s, regs[i]);
       // printf("Find register %s\n", regs[i]);
+      #ifndef NPC
       return gpr(i);
+      #else
+      return npc_get_reg(i);
+      #endif
     }
   }
   // printf("Other regs that not in registers file\n");
@@ -146,7 +181,11 @@ word_t isa_reg_str2val(const char *s, bool *success, int *idx) {
 
 word_t isa_reg_idx2val(int idx) {
   if(idx < 32)
+    #ifndef NPC
     return gpr(idx);
+    #else
+    return npc_get_reg(idx);
+    #endif
   else if(idx - 32 < 15)
     return other_regs_val[idx - 32];
   else

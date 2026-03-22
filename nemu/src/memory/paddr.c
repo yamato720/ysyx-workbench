@@ -17,6 +17,7 @@
 #include <memory/paddr.h>
 #include <device/mmio.h>
 #include <isa.h>
+#include "../monitor/sdb/sdb.h"
 
 #if   defined(CONFIG_PMEM_MALLOC)
 static uint8_t *pmem = NULL;
@@ -24,16 +25,129 @@ static uint8_t *pmem = NULL;
 static uint8_t pmem[CONFIG_MSIZE] PG_ALIGN = {};
 #endif
 
-uint8_t* guest_to_host(paddr_t paddr) { return pmem + paddr - CONFIG_MBASE; }
-paddr_t host_to_guest(uint8_t *haddr) { return haddr - pmem + CONFIG_MBASE; }
+#define MAX_MEM_ACCESS_STR_LEN 128
+static char mem_access_str[MAX_MEM_ACCESS_STR_LEN][128];
+static int mem_access_str_idx = 0;
+static bool mem_traggered = false;
+
+
+#define MAX_DEVICE_ACCESS_STR_LEN 128
+static char device_access_str[MAX_DEVICE_ACCESS_STR_LEN][256];
+static int device_access_str_idx = 0;
+static bool device_traggered = false;
+static bool device_access_wrapped = false;
+
+void record_read_access(word_t addr, int len, word_t data) {
+  word_t final_data;
+  switch (len) {
+    case 1: final_data = data & 0xFF; break;
+    case 2: final_data = data & 0xFFFF; break;
+    case 4: final_data = data & 0xFFFFFFFF; break;
+    IFDEF(CONFIG_ISA64, case 8: final_data = data; break);
+    default: final_data = data; break;
+  }
+  sprintf(mem_access_str[mem_access_str_idx], "[R] 0x%08lx len=%d data=0x%08lx(%ld)", addr, len, final_data, final_data);
+  mem_traggered = true;
+}
+
+void record_device_access(paddr_t addr, int len, word_t data, bool is_write, const char *dev_name) {
+  char* type = is_write ? "Write" : "Read";
+  word_t final_data;
+  switch (len) {
+    case 1: final_data = data & 0xFF; break;
+    case 2: final_data = data & 0xFFFF; break;
+    case 4: final_data = data & 0xFFFFFFFF; break;
+    IFDEF(CONFIG_ISA64, case 8: final_data = data; break);
+    default: final_data = data; break;
+  }
+
+  sprintf(device_access_str[device_access_str_idx], "[MMIO %s] dev=%-10s addr=0x%08x len=%d data=0x%08lx(%ld)", type, dev_name, addr, len, final_data, final_data);
+  device_traggered = true;
+}
+
+void record_write_access(word_t addr, int len, word_t data) {
+  word_t final_data;
+  switch (len) {
+    case 1: final_data = data & 0xFF; break;
+    case 2: final_data = data & 0xFFFF; break;
+    case 4: final_data = data & 0xFFFFFFFF; break;
+    IFDEF(CONFIG_ISA64, case 8: final_data = data; break);
+    default: final_data = data; break;
+  }
+  sprintf(mem_access_str[mem_access_str_idx], "[W] 0x%08lx len=%d data=0x%08lx(%ld)", addr, len, final_data, final_data);
+  mem_traggered = true;
+}
+
+
+void record_ins_info(){
+  if(mem_traggered){
+    mem_traggered = false;
+    get_current_iringbuf(mem_access_str[mem_access_str_idx]);
+    if(mem_access_str_idx < MAX_MEM_ACCESS_STR_LEN - 1){
+      mem_access_str_idx++;
+    } else {
+      mem_access_str_idx = 0;
+    }
+  }
+#ifdef CONFIG_DTRACE
+  if(device_traggered){
+    device_traggered = false;
+    get_current_iringbuf(device_access_str[device_access_str_idx]);
+    if(device_access_str_idx < MAX_DEVICE_ACCESS_STR_LEN - 1){
+      device_access_str_idx++;
+    } else {
+      device_access_str_idx = 0;
+      device_access_wrapped = true;
+    }
+  }
+#endif
+  return;
+}
+
+void show_mem_access() {
+  printf("==== Memory Access Log ====\n");
+  int count = mem_access_str_idx < MAX_MEM_ACCESS_STR_LEN ? mem_access_str_idx : MAX_MEM_ACCESS_STR_LEN;
+  for (int i = 0; i < count; i++) {
+    if (mem_access_str[i][0] != '\0') {
+      printf("%s\n", mem_access_str[i]);
+    }
+  }
+}
+
+void show_device_access() {
+  printf("==== Device Access Log ====\n");
+  if (device_access_wrapped) {
+    // Buffer has wrapped: print from oldest (current idx) to newest
+    for (int i = device_access_str_idx; i < MAX_DEVICE_ACCESS_STR_LEN; i++) {
+      if (device_access_str[i][0] != '\0') printf("%s\n", device_access_str[i]);
+    }
+    for (int i = 0; i < device_access_str_idx; i++) {
+      if (device_access_str[i][0] != '\0') printf("%s\n", device_access_str[i]);
+    }
+  } else {
+    for (int i = 0; i < device_access_str_idx; i++) {
+      if (device_access_str[i][0] != '\0') printf("%s\n", device_access_str[i]);
+    }
+  }
+}
+
+uint8_t* guest_to_host(paddr_t paddr) { 
+  return pmem + paddr - CONFIG_MBASE;
+}
+paddr_t host_to_guest(uint8_t *haddr) { 
+  return haddr - pmem + CONFIG_MBASE; 
+}
 
 static word_t pmem_read(paddr_t addr, int len) {
+  // printf("pmem_read addr: 0x%08x, len: %d\n", addr, len);
   word_t ret = host_read(guest_to_host(addr), len);
+  // record_read_access(addr, len, ret);
   return ret;
 }
 
 static void pmem_write(paddr_t addr, int len, word_t data) {
   host_write(guest_to_host(addr), len, data);
+  // record_write_access(addr, len, data);
 }
 
 static void out_of_bound(paddr_t addr) {
@@ -52,6 +166,7 @@ void init_mem() {
 
 word_t paddr_read(paddr_t addr, int len) {
   // printf("paddr_read addr: 0x%08u, len: %d\n", addr, len);
+
   if (likely(in_pmem(addr))) return pmem_read(addr, len);
   IFDEF(CONFIG_DEVICE, return mmio_read(addr, len));
   out_of_bound(addr);

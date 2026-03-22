@@ -15,6 +15,7 @@
 
 #include <device/map.h>
 #include <memory/paddr.h>
+#include "../../../monitor/sdb/sdb.h"
 
 #define NR_MAP 16
 
@@ -55,9 +56,14 @@ void add_mmio_map(const char *name, paddr_t addr, void *space, uint32_t len, io_
 
 /* bus interface */
 word_t mmio_read(paddr_t addr, int len) {
-  return map_read(addr, len, fetch_mmio_map(addr));
+  IOMap *map = fetch_mmio_map(addr);
+  word_t data = map_read(addr, len, map);
+  IFDEF(CONFIG_DTRACE, record_device_access(addr, len, data, false, map ? map->name : "unknown"));
+  return data;
 }
 
 void mmio_write(paddr_t addr, int len, word_t data) {
-  map_write(addr, len, data, fetch_mmio_map(addr));
+  IOMap *map = fetch_mmio_map(addr);
+  map_write(addr, len, data, map);
+  IFDEF(CONFIG_DTRACE, record_device_access(addr, len, data, true, map ? map->name : "unknown"));
 }

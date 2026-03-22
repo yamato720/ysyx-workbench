@@ -17,6 +17,13 @@ NEMUFLAGS += -l $(shell dirname $(IMAGE).elf)/nemu-log.txt
 MAINARGS_MAX_LEN = 64
 MAINARGS_PLACEHOLDER = the_insert-arg_rule_in_Makefile_will_insert_mainargs_here
 CFLAGS += -DMAINARGS_MAX_LEN=$(MAINARGS_MAX_LEN) -DMAINARGS_PLACEHOLDER=$(MAINARGS_PLACEHOLDER)
+USENPC = 0
+TRACE_NEMU = 0
+
+NPC_HOME ?= $(AM_HOME)/../npc
+
+npc-lib:
+	$(MAKE) -C $(NPC_HOME) chisel-cpu-lib
 
 insert-arg: image
 	@python $(AM_HOME)/tools/insert-arg.py $(IMAGE).bin $(MAINARGS_MAX_LEN) $(MAINARGS_PLACEHOLDER) "$(mainargs)"
@@ -27,9 +34,40 @@ image: image-dep
 	@$(OBJCOPY) -S --set-section-flags .bss=alloc,contents -O binary $(IMAGE).elf $(IMAGE).bin
 
 run: insert-arg
-	$(MAKE) -C $(NEMU_HOME) ISA=$(ISA) run ARGS="$(NEMUFLAGS)" IMG=$(IMAGE).bin
+	$(MAKE) -C $(NEMU_HOME) clean
+	$(MAKE) -C $(NEMU_HOME) ISA=$(ISA) run ARGS="$(NEMUFLAGS) -e $(IMAGE).elf" IMG=$(IMAGE).bin
+
+run-npc: insert-arg 
+	$(MAKE) -C $(NEMU_HOME) clean
+	$(MAKE) -C $(NEMU_HOME) ISA=$(ISA) run USENPC=1 ARGS="$(NEMUFLAGS) -e $(IMAGE).elf" IMG=$(IMAGE).bin
+
+run-npc-bat: insert-arg
+	env -i HOME=$(HOME) PATH=$(PATH) NEMU_HOME=$(NEMU_HOME) NPC_HOME=$(NPC_HOME) AM_HOME=$(AM_HOME) \
+		$(MAKE) -j1 -C $(NEMU_HOME) ISA=$(ISA) run-npc-bat USENPC=1 ARGS="$(NEMUFLAGS) -b" IMG=$(IMAGE).bin
+
+run-bat: insert-arg
+	$(MAKE) -C $(NEMU_HOME) clean
+	$(MAKE) -C $(NEMU_HOME) ISA=$(ISA) run-bat ARGS="$(NEMUFLAGS) -b" IMG=$(IMAGE).bin
+
+
+run-npc-update: insert-arg
+	$(MAKE) -C $(NPC_HOME) chisel-cpu-lib TRACE_NEMU=1
+	rm -f $(NEMU_HOME)/build/$(ISA)-nemu-interpreter
+	$(MAKE) -C $(NEMU_HOME) ISA=$(ISA) USENPC=1
+
+run-npc-update-trace: insert-arg
+	$(MAKE) -C $(NPC_HOME) chisel-cpu-lib TRACE_NEMU=1
 
 gdb: insert-arg
+	$(MAKE) -C $(NEMU_HOME) clean
 	$(MAKE) -C $(NEMU_HOME) ISA=$(ISA) gdb ARGS="$(NEMUFLAGS)" IMG=$(IMAGE).bin
 
-.PHONY: insert-arg
+gdb-npc: insert-arg
+	$(MAKE) -C $(NEMU_HOME) clean
+	$(MAKE) -C $(NEMU_HOME) ISA=$(ISA) gdb USENPC=1 ARGS="$(NEMUFLAGS) -e $(IMAGE).elf" IMG=$(IMAGE).bin
+
+
+
+
+.PHONY: insert-arg npc-lib
+

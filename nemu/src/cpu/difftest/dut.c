@@ -60,6 +60,7 @@ void difftest_skip_dut(int nr_ref, int nr_dut) {
 }
 
 void init_difftest(char *ref_so_file, long img_size, int port) {
+  printf("Initializing differential testing...\n");
   assert(ref_so_file != NULL);
 
   void *handle;
@@ -121,12 +122,25 @@ void difftest_step(vaddr_t pc, vaddr_t npc) {
     is_skip_ref = false;
     return;
   }
-
+  // printf("123\n");
   ref_difftest_exec(1);
+  // printf("ref.pc: 0x%016lx, npc: 0x%016lx\n", ref_r.pc, npc);
   ref_difftest_regcpy(&ref_r, DIFFTEST_TO_DUT);
 
   checkregs(&ref_r, pc);
 }
+
 #else
-void init_difftest(char *ref_so_file, long img_size, int port) { }
+void init_difftest(char *ref_so_file, long img_size, int port) { printf("Differential testing is disabled.\n"); }
+#endif
+
+// NPC flag check - independent of CONFIG_DIFFTEST
+#ifdef NPC
+void check_npc_flag(){
+  printf("NPC flag triggered.\n");
+}
+#else
+void check_npc_flag() { 
+  printf("NPC flag not triggered.\n"); 
+}
 #endif

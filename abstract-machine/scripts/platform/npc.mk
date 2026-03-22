@@ -8,6 +8,8 @@ AM_SRCS := riscv/npc/start.S \
            platform/dummy/vme.c \
            platform/dummy/mpe.c
 
+NPC_HOME ?= $(AM_HOME)/../npc
+
 CFLAGS    += -fdata-sections -ffunction-sections
 LDSCRIPTS += $(AM_HOME)/scripts/linker.ld
 LDFLAGS   += --defsym=_pmem_start=0x80000000 --defsym=_entry_offset=0x0
@@ -25,7 +27,25 @@ image: image-dep
 	@echo + OBJCOPY "->" $(IMAGE_REL).bin
 	@$(OBJCOPY) -S --set-section-flags .bss=alloc,contents -O binary $(IMAGE).elf $(IMAGE).bin
 
+# Default: use Chisel CPU
 run: insert-arg
-	echo "TODO: add command here to run simulation"
+	$(MAKE) -C $(NPC_HOME) run-chisel IMG=$(IMAGE).bin
 
-.PHONY: insert-arg
+# Alternative: use original Verilog CPU
+run-verilog: insert-arg
+	$(MAKE) -C $(NPC_HOME) run-cpu IMG=$(IMAGE).bin
+
+# Run on NEMU (for comparison/debugging)
+NEMU_HOME ?= $(AM_HOME)/../nemu
+NEMUFLAGS += -l $(shell dirname $(IMAGE).elf)/nemu-log.txt
+
+run-nemu: insert-arg
+	$(MAKE) -C $(NEMU_HOME) ISA=riscv64 run ARGS="$(NEMUFLAGS)" IMG=$(IMAGE).bin
+
+run-nemu-bat: insert-arg
+	$(MAKE) -C $(NEMU_HOME) ISA=riscv64 run-bat ARGS="$(NEMUFLAGS)" IMG=$(IMAGE).bin
+
+gdb-nemu: insert-arg
+	$(MAKE) -C $(NEMU_HOME) ISA=riscv64 gdb ARGS="$(NEMUFLAGS)" IMG=$(IMAGE).bin
+
+.PHONY: insert-arg run-verilog run-nemu run-nemu-bat gdb-nemu

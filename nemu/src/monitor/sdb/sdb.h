@@ -49,8 +49,39 @@ WP* find_wp_byAddr(vaddr_t addr);
 WP* find_wp_byNO(int no);
 void free_wp_byNO(int no);
 void wp_display();
+bool is_pc_watchpoint_triggered();
 
 bool check_watchpoints();
 void update_other_regs();
 
+void show_iringbuf();
+void show_mem_access();
+void get_current_iringbuf(char* buf);
+
+void record_read_access(word_t addr, int len, word_t data);
+void record_write_access(word_t addr, int len, word_t data);
+void record_ins_info();
+
+void record_device_access(paddr_t addr, int len, word_t data, bool is_write, const char *dev_name);
+void show_device_access();
+
+#ifdef NPC
+extern void npc_display_mem_access();
 #endif
+
+// ELF reader functions
+void analyze_elf(const char *elf_file);
+const char* get_func_name(uint64_t addr);
+int is_func_entry(uint64_t addr);
+int is_func_exit(uint64_t addr);
+int get_func_count();
+
+void check_ftrace(uint64_t pc, uint32_t inst);
+void display_ftrace();
+
+#ifdef NPC
+extern void npc_start_trace();
+extern void npc_stop_trace();
+#endif /* NPC */
+
+#endif /* SDB_H */

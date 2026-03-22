@@ -19,6 +19,7 @@
 #include <readline/history.h>
 #include "sdb.h"
 #include <pthread.h>
+#include <utils.h>
 // #include "reg.h"
 
 static int is_batch_mode = false;
@@ -127,8 +128,20 @@ static int cmd_x(char *args) {
     printf("0x%02lx ", data);
     if(i % 16 == 15) {
       printf("\n");
+      printf("0x%08lx: ", addr + i - 15);
+      for(int j = i - 15; j <= i; j ++) {
+        word_t c = vaddr_read(addr + j, BYTE);
+        printf("%c    ", (char)c);
+      }
+      printf("\n");
     }
     else if(i == len - 1) {
+      printf("\n");
+      printf("0x%08lx: ", addr + i - (i % 16));
+      for(int j = i - (i % 16); j <= i; j ++) {
+        word_t c = vaddr_read(addr + j, BYTE);
+        printf("%c    ", (char)c);
+      }
       printf("\n");
     }
   }
@@ -148,6 +161,29 @@ static int cmd_info(char *args) {
     wp_display();
     return 0;
   }
+  #ifdef CONFIG_TRACE
+  else if (strcmp(args, "i") == 0) {
+    // Display instruction ring buffer
+    show_iringbuf();
+    return 0;
+  }else if(strcmp(args, "m") == 0) {
+    // Display memory access log
+    #ifdef NPC
+    npc_display_mem_access();
+    #else
+    show_mem_access();
+    #endif
+    return 0;
+  }else if(strcmp(args, "f") == 0) {
+    // Display function trace
+    display_ftrace();
+    return 0;
+  }else if(strcmp(args, "d") == 0) {
+    // Display device access log
+    show_device_access();
+    return 0;
+  }
+  #endif
   else {
     printf("Unknown info command '%s'\n", args);
   }
@@ -624,6 +660,59 @@ static int cmd_d(char *args) {
   return 0;
 }
 
+static int cmd_start(char *args) {
+#ifdef NPC
+  npc_start_trace();
+#endif
+  printf("Instruction trace started.\n");
+  return 0;
+}
+
+static int cmd_stop(char *args) {
+#ifdef NPC
+  npc_stop_trace();
+#endif
+  printf("Instruction trace stopped.\n");
+  return 0;
+}
+
+
+static int cmd_bat(char *args) {
+  // #ifdef CONFIG_DIFFTEST
+
+  for(unsigned int i = 0; i <= 0xffffffff; i ++) {
+    cmd_si("1");
+    if(nemu_state.state == NEMU_ABORT || nemu_state.state == NEMU_END) {
+      printf("next use si %d for skip\n", i);
+      break;
+    }
+  }
+  return 0;
+
+  // #else
+  // int num = args == NULL ? 1000 : atoi(args);
+
+  // if(!is_pc_watchpoint_triggered()) {
+  //   printf("PC watchpoint is not triggered, setting PC for skip to that value\n");
+  //   return 0;
+  // }
+  // for(int i = 0; i < num; i ++) {
+  //   cmd_c(NULL);
+  //   if(nemu_state.state != NEMU_RUNNING) {
+  //     printf("next use num %d for skip\n", i);
+  //     break;
+  //   }
+  // }
+  // return 0;
+  // printf("Skipping to wrong instruction need difftest!\n");
+  
+  
+  
+  // return 0;
+  // #endif
+
+}
+
 static int cmd_help(char *args);
 
 static struct {
@@ -641,6 +730,9 @@ static struct {
   { "w", "Set a watchpoint at expression EXPR, TYPE, FLAG, SETVAL", cmd_w },
   { "d", "Delete watchpoint number N", cmd_d },
   { "test", "A test use python script varify EXPR", cmd_test },
+  { "start", "Start instruction trace", cmd_start },
+  { "stop", "Stop instruction trace", cmd_stop },
+  { "bat", "Batch mode: execute next N instructions if PC watchpoint is triggered", cmd_bat },
 
   /* TODO: Add more commands */
 
