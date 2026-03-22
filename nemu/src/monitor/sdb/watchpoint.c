@@ -161,6 +161,18 @@ WP* find_wp_byNO(int no) {
   return NULL;
 }
 
+bool is_pc_watchpoint_triggered() {
+  WP* wp = head;
+  while(wp != NULL) {
+    if(wp->addr == 0x20) {
+      return true;
+    }
+    wp = wp->next;
+  }
+  return false;
+}
+
+
 void free_wp_byNO(int no) {
   WP* wp = head;
   WP* prev = NULL;

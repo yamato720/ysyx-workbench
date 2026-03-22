@@ -24,8 +24,10 @@ int main(int argc, char *argv[]) {
   /* Initialize the monitor. */
 #ifdef CONFIG_TARGET_AM
   am_init_monitor();
+  // printf("Welcome to NEMU AM mode!\n");
 #else
   init_monitor(argc, argv);
+  // printf("Welcome to NEMU!\n");
 #endif
 
   /* Start engine. */

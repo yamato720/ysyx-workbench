@@ -48,7 +48,7 @@ static struct rule {
   {"\\)", ')'},         // right parenthesis
   {"[0-9]+", NUM},      // number
   {"[xX][0-9a-fA-F]+", HEX_NUM},      // hex number，read number 0 then check x 
-  {"\\$(\\$0)|(ra)|(sp)|(gp)|(tp)|(t0-6)|(s0-11)|(a0-7)", REG_NAME},     // register name
+  {"\\$(\\$0)|(ra)|(sp)|(gp)|(tp)|t[0-6]|s[0-9]|s1[0-1]|a[0-7]|(pc)", REG_NAME},     // register name
   {"!=", TK_NEQ},    // not equal
   {"&&", AND},      // and
 };
@@ -164,6 +164,13 @@ static bool make_token(char *e) {
               break;
             }
             case '-': {
+              if(nr_token == 0) {
+                // this is a negative number
+                tokens[nr_token].type = NUM;
+                tokens[nr_token].member = 0;
+                printf("first token is minus, set num 0 ahead\n");
+                nr_token++;
+              }
               tokens[nr_token].type = '-';
               tokens[nr_token].member = '-';
               if(tokens[nr_token-1].type != NUM && tokens[nr_token-1].type != ')' ) {
@@ -171,6 +178,7 @@ static bool make_token(char *e) {
               }else {
                 tokens[nr_token].otherwise = false;
               }
+              printf("get minus operator, otherwise is %d\n", tokens[nr_token].otherwise);
               nr_token++;
             break;
             }
@@ -182,6 +190,7 @@ static bool make_token(char *e) {
               }else {
                 tokens[nr_token].otherwise = false;
               }
+              printf("get multiply operator, otherwise is %d\n", tokens[nr_token].otherwise);
               nr_token++;
               break;
             }
@@ -255,7 +264,13 @@ static bool make_token(char *e) {
           case REG_NAME: {
             bool success = true;
             int idx = 0;
-            tokens[nr_token].member = isa_reg_str2val(substr_start + 1, &success, &idx);
+            char reg_name[10] = {};
+            for(int k = 0; k < substr_len; k ++) {
+              reg_name[k] = substr_start[k];
+            }
+            reg_name[substr_len] = '\0';
+            printf("get reg name:%s\n", reg_name);
+            tokens[nr_token].member = isa_reg_str2val(reg_name, &success, &idx);
             if(!success) {
               printf("Invalid register name: %.*s\n", substr_len, substr_start);
               return false;

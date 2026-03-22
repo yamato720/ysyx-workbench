@@ -151,6 +151,40 @@ config ITRACE_COND
   string "Only trace instructions when the condition is true"
   default "true"
 
+config FTRACE
+  depends on TRACE && TARGET_NATIVE_ELF && ENGINE_INTERPRETER
+  bool "Enable function tracer"
+  default y
+
+config MTRACE
+  depends on TRACE && TARGET_NATIVE_ELF && ENGINE_INTERPRETER
+  bool "Enable memory tracer"
+  default y
+
+config DTRACE
+  depends on TRACE && TARGET_NATIVE_ELF
+  bool "Enable device (MMIO) access tracer"
+  default y
+  help
+    Record MMIO read/write accesses for debugging. Disable to improve
+    simulation performance.
+
+config WATCHPOINT
+  depends on TRACE && TARGET_NATIVE_ELF
+  bool "Enable watchpoint checking per instruction"
+  default y
+  help
+    Check watchpoints after every instruction. Disable this to improve
+    simulation performance when no watchpoints are needed.
+
+
+config NPC_DIFFTEST_NEMU
+  bool "Enable NPC vs NEMU software self-difftest"
+  default n
+  help
+    When using NPC hardware simulation mode (USENPC=1), run NEMU software
+    simulation in parallel and compare registers after each instruction.
+    This verifies NPC correctness using NEMU as the reference.
 
 config DIFFTEST
   depends on TARGET_NATIVE_ELF

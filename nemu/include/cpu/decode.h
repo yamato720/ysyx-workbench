@@ -57,6 +57,8 @@ finish:
   *key = __key >> __shift;
   *mask = __mask >> __shift;
   *shift = __shift;
+  // printf("pattern_decode: str=\"%s\" key=0x%lx mask=0x%lx shift=%lu\n",
+        //  str, *key, *mask, *shift);
 }
 
 __attribute__((always_inline))

@@ -1,12 +1,23 @@
 *.*
 *
 !*/
+
+# Ignore build artifact and generated directories
+target/
+generated-dpi/
+intermediate/
+out/
+.idea/
+VerilogVisualization/
+
+# Whitelist tracked file types
 !Makefile
 !*.mk
 !*.[cSh]
 !*.v
 !*.cc
 !*.cpp
+!*.scala
+!*.sbt
 !.gitignore
 !README.md
-build/
