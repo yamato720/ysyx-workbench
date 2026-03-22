@@ -8,7 +8,6 @@ generated-dpi/
 intermediate/
 out/
 .idea/
-VerilogVisualization/
 
 # Whitelist tracked file types
 !Makefile
