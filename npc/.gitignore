@@ -20,3 +20,4 @@ out/
 !*.sbt
 !.gitignore
 !README.md
+!SETUP.md

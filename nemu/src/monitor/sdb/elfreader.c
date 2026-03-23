@@ -59,14 +59,47 @@ void analyze_elf(const char *elf_file) {
 
     // 读取所有 section headers
     Elf64_Shdr *shdr_table = malloc(sizeof(Elf64_Shdr) * ehdr.e_shnum);
-    fseek(file, ehdr.e_shoff, SEEK_SET);
-    fread(shdr_table, sizeof(Elf64_Shdr), ehdr.e_shnum, file);
+    if (shdr_table == NULL) {
+        printf("Failed to allocate section header table\n");
+        fclose(file);
+        return;
+    }
+    if (fseek(file, ehdr.e_shoff, SEEK_SET) != 0) {
+        printf("Failed to seek section header table\n");
+        free(shdr_table);
+        fclose(file);
+        return;
+    }
+    if (fread(shdr_table, sizeof(Elf64_Shdr), ehdr.e_shnum, file) != ehdr.e_shnum) {
+        printf("Failed to read section header table\n");
+        free(shdr_table);
+        fclose(file);
+        return;
+    }
 
     // 找到 section header string table
     Elf64_Shdr *shstrtab_hdr = &shdr_table[ehdr.e_shstrndx];
     char *shstrtab = malloc(shstrtab_hdr->sh_size);
-    fseek(file, shstrtab_hdr->sh_offset, SEEK_SET);
-    fread(shstrtab, 1, shstrtab_hdr->sh_size, file);
+    if (shstrtab == NULL) {
+        printf("Failed to allocate section header string table\n");
+        free(shdr_table);
+        fclose(file);
+        return;
+    }
+    if (fseek(file, shstrtab_hdr->sh_offset, SEEK_SET) != 0) {
+        printf("Failed to seek section header string table\n");
+        free(shstrtab);
+        free(shdr_table);
+        fclose(file);
+        return;
+    }
+    if (fread(shstrtab, 1, shstrtab_hdr->sh_size, file) != shstrtab_hdr->sh_size) {
+        printf("Failed to read section header string table\n");
+        free(shstrtab);
+        free(shdr_table);
+        fclose(file);
+        return;
+    }
 
     // 查找 .symtab 和 .strtab
     Elf64_Shdr *symtab_hdr = NULL;
@@ -92,13 +125,58 @@ void analyze_elf(const char *elf_file) {
     // 读取符号表
     int sym_num = symtab_hdr->sh_size / sizeof(Elf64_Sym);
     Elf64_Sym *symtab = malloc(symtab_hdr->sh_size);
-    fseek(file, symtab_hdr->sh_offset, SEEK_SET);
-    fread(symtab, 1, symtab_hdr->sh_size, file);
+    if (symtab == NULL) {
+        printf("Failed to allocate symbol table\n");
+        free(shstrtab);
+        free(shdr_table);
+        fclose(file);
+        return;
+    }
+    if (fseek(file, symtab_hdr->sh_offset, SEEK_SET) != 0) {
+        printf("Failed to seek symbol table\n");
+        free(symtab);
+        free(shstrtab);
+        free(shdr_table);
+        fclose(file);
+        return;
+    }
+    if (fread(symtab, 1, symtab_hdr->sh_size, file) != symtab_hdr->sh_size) {
+        printf("Failed to read symbol table\n");
+        free(symtab);
+        free(shstrtab);
+        free(shdr_table);
+        fclose(file);
+        return;
+    }
 
     // 读取字符串表
     char *strtab = malloc(strtab_hdr->sh_size);
-    fseek(file, strtab_hdr->sh_offset, SEEK_SET);
-    fread(strtab, 1, strtab_hdr->sh_size, file);
+    if (strtab == NULL) {
+        printf("Failed to allocate string table\n");
+        free(symtab);
+        free(shstrtab);
+        free(shdr_table);
+        fclose(file);
+        return;
+    }
+    if (fseek(file, strtab_hdr->sh_offset, SEEK_SET) != 0) {
+        printf("Failed to seek string table\n");
+        free(strtab);
+        free(symtab);
+        free(shstrtab);
+        free(shdr_table);
+        fclose(file);
+        return;
+    }
+    if (fread(strtab, 1, strtab_hdr->sh_size, file) != strtab_hdr->sh_size) {
+        printf("Failed to read string table\n");
+        free(strtab);
+        free(symtab);
+        free(shstrtab);
+        free(shdr_table);
+        fclose(file);
+        return;
+    }
 
     // 解析函数符号
     func_count = 0;
