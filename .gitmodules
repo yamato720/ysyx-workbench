@@ -1,6 +1,6 @@
 [submodule "npc/VerilogVisualization"]
 	path = npc/VerilogVisualization
-	url = https://github.com/yamato720/VerilogVisualization.git
+	url = git@github.com:yamato720/VerilogVisualization.git
 	branch = 2.1
 [submodule "am-kernels"]
 	path = am-kernels
