@@ -70,7 +70,6 @@ static int decode_exec(Decode *s) {
 
   INSTPAT_START();
 
-  INSTPAT("0000000 00001 00000 000 00000 11100 11", ebreak , N, NEMUTRAP(s->pc, R(10))); // R(10) is $a0
   
   // ============== RV64I Base Integer Instruction Set ==============
   
@@ -128,6 +127,13 @@ static int decode_exec(Decode *s) {
   INSTPAT("??????? ????? ????? ??? ????? 11011 11", jal   , J, R(rd) = s->pc + 4; s->dnpc = s->pc + imm);
   INSTPAT("??????? ????? ????? 000 ????? 11001 11", jalr  , I, { word_t t = s->pc + 4; s->dnpc = (src1 + imm) & ~1; R(rd) = t; });
 
+// ecall, ebreak, fence, mret
+  INSTPAT("0000000 00000 00000 000 00000 11100 11", ecall  , N, s->dnpc = isa_raise_intr(11, s->pc)); // M-mode ecall
+  INSTPAT("0000000 00000 00000 001 00000 11100 11", fence  , N, /* no side effect in NEMU */);
+  INSTPAT("0000000 00001 00000 000 00000 11100 11", ebreak , N, NEMUTRAP(s->pc, R(10))); // R(10) is $a0
+  INSTPAT("0011000 00010 00000 000 00000 11100 11", mret   , N, s->dnpc = cpu.mepc);
+
+
   // ============== RV64I: 32-bit Operations (RV64 only) ==============
   
   // 32-bit Integer Computational Instructions
@@ -163,13 +169,29 @@ static int decode_exec(Decode *s) {
   INSTPAT("0000001 ????? ????? 111 ????? 01110 11", remuw , R, { if((uint32_t)src2 == 0) R(rd) = (sword_t)(int32_t)src1; else R(rd) = (sword_t)(int32_t)((uint32_t)src1 % (uint32_t)src2); });
   
 
-  // ============== Zicsr: Control and Status Register Instructions ==============
-  INSTPAT("??????? ????? ????? 001 ????? 11100 11", csrrw ,  I, { R(rd) = src1; /* TODO: read csr[src2] */ });
-  INSTPAT("??????? ????? ????? 010 ????? 11100 11", csrrs  , I, { word_t t = R(rd); R(rd) = src1 | t; /* TODO: read csr[src2] */ });
-  INSTPAT("??????? ????? ????? 011 ????? 11100 11", csrrc  , I, { word_t t = R(rd); R(rd) = src1 & t; /* TODO: read csr[src2] */ });
-  INSTPAT("??????? ????? ????? 101 ????? 11100 11", csrrwi , I, { R(rd) = src1; /* TODO: read csr[src2] */ });
-  INSTPAT("??????? ????? ????? 110 ????? 11100 11", csrrsi , I, { word_t t = R(rd); R(rd) = src1 | t; /* TODO: read csr[src2] */ });
-  INSTPAT("??????? ????? ????? 111 ????? 11100 11", csrrci , I, { word_t t = R(rd); R(rd) = src1 & t; /* TODO: read csr[src2] */ });
+  // ============== Zicsr: Control and Status Register Instructions =============
+#define csr_read(addr) ( \
+  (addr) == 0x300 ? cpu.mstatus : \
+  (addr) == 0x305 ? cpu.mtvec   : \
+  (addr) == 0x341 ? cpu.mepc    : \
+  (addr) == 0x342 ? cpu.mcause  : \
+  ({ panic("Unknown CSR 0x%lx", (word_t)(addr)); (word_t)0; }) )
+#define csr_write(addr, val) do { \
+  switch((addr)) { \
+    case 0x300: cpu.mstatus = (val); break; \
+    case 0x305: cpu.mtvec   = (val); break; \
+    case 0x341: cpu.mepc    = (val); break; \
+    case 0x342: cpu.mcause  = (val); break; \
+    default: panic("Unknown CSR 0x%lx", (word_t)(addr)); \
+  } \
+} while(0)
+
+  INSTPAT("??????? ????? ????? 001 ????? 11100 11", csrrw ,  I, { word_t old = csr_read(imm); csr_write(imm, src1); R(rd) = old; });
+  INSTPAT("??????? ????? ????? 010 ????? 11100 11", csrrs  , I, { word_t old = csr_read(imm); R(rd) = old; csr_write(imm, old | src1); });
+  INSTPAT("??????? ????? ????? 011 ????? 11100 11", csrrc  , I, { word_t old = csr_read(imm); R(rd) = old; csr_write(imm, old & ~src1); });
+  INSTPAT("??????? ????? ????? 101 ????? 11100 11", csrrwi , I, { word_t zimm = BITS(s->isa.inst, 19, 15); word_t old = csr_read(imm); csr_write(imm, zimm); R(rd) = old; });
+  INSTPAT("??????? ????? ????? 110 ????? 11100 11", csrrsi , I, { word_t zimm = BITS(s->isa.inst, 19, 15); word_t old = csr_read(imm); R(rd) = old; csr_write(imm, old | zimm); });
+  INSTPAT("??????? ????? ????? 111 ????? 11100 11", csrrci , I, { word_t zimm = BITS(s->isa.inst, 19, 15); word_t old = csr_read(imm); R(rd) = old; csr_write(imm, old & ~zimm); });
 
 
 

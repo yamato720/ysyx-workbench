@@ -19,5 +19,4 @@ out/
 !*.scala
 !*.sbt
 !.gitignore
-!README.md
-!SETUP.md
+!*.md
