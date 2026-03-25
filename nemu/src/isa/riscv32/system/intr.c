@@ -18,6 +18,7 @@
 word_t isa_raise_intr(word_t NO, vaddr_t epc) {
   cpu.mcause = NO;
   cpu.mepc   = epc;
+  printf("Raising interrupt NO = %lu, epc = 0x%08lx\n", NO, epc);
   return cpu.mtvec;
 }
 
