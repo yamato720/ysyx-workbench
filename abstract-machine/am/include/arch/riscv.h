@@ -9,7 +9,7 @@
 
 struct Context {
   uintptr_t gpr[NR_REGS];
-  uintptr_t mcause, mstatus, mepc;
+  uintptr_t mcause, mstatus, mepc; // mcause: interrupt/exception code; mstatus: machine status; mepc: machine exception program counter
   void *pdir;
 };
 
