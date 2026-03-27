@@ -21,6 +21,7 @@ word_t isa_raise_intr(word_t NO, vaddr_t epc) { // NO: interrupt/exception code;
   cpu.mepc   = epc;
   printf("Raising interrupt NO = %lu, epc = 0x%08lx\n", NO, epc);
   // nemu_state.state = NEMU_STOP;
+  record_error(NO, epc);
   return cpu.mtvec; // s->dnpc = cpu.mtvec;
 }
 
