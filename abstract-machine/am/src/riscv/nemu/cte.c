@@ -8,7 +8,14 @@ Context* __am_irq_handle(Context *c) {
   if (user_handler) {
     Event ev = {0};
     switch (c->mcause) {
-      case 11: ev.event = EVENT_YIELD ;c->mepc += 4;break; // M-mode ecall (yield)
+      case 11:
+        if (c->GPR1 == (uintptr_t)-1) {
+          ev.event = EVENT_YIELD;
+        } else {
+          ev.event = EVENT_SYSCALL;
+        }
+        c->mepc += 4;
+        break;
       case 12: ev.event = EVENT_IRQ_TIMER; break; // M-mode timer interrupt
       case 13: ev.event = EVENT_IRQ_IODEV; break; // M-mode external
       default: ev.event = EVENT_ERROR; break;
