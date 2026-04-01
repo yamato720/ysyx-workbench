@@ -1,4 +1,5 @@
 #include <proc.h>
+#include <fs.h>
 
 #define MAX_NR_PROC 4
 
@@ -24,8 +25,14 @@ void init_proc() {
 
   Log("Initializing processes...");
 
-  // load program here
-  naive_uload(NULL, "/bin/dummy");
+  // Load program: use PROG from make variable, or default to first file in ramdisk
+#ifdef PROGRAM_NAME
+  const char *prog = PROGRAM_NAME;
+#else
+  const char *prog = fs_first_file();
+#endif
+  Log("Loading %s", prog);
+  naive_uload(NULL, prog);
 
 }
 

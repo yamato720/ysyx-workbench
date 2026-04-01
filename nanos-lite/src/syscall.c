@@ -1,4 +1,6 @@
 #include <common.h>
+#include <fs.h>
+#include <memory.h>
 #include "syscall.h"
 
 void do_syscall(Context *c) {
@@ -9,15 +11,68 @@ void do_syscall(Context *c) {
   a[3] = c->GPR4; // arg2 (a2)
 
   switch (a[0]) {
-    case SYS_yield:
-      yield();
-      printf("Yielding...\n");
-      c->GPRx = 0;
-      break;
     case SYS_exit:
-      printf("Exiting with code %lu...\n", a[1]);
       halt(a[1]);
       break;
+
+    case SYS_yield:
+      yield();
+      c->GPRx = 0;
+      break;
+
+    case SYS_open:
+      c->GPRx = fs_open((const char *)a[1], (int)a[2], (int)a[3]);
+      break;
+
+    case SYS_read:
+      c->GPRx = fs_read((int)a[1], (void *)a[2], (size_t)a[3]);
+      break;
+
+    case SYS_write:
+      c->GPRx = fs_write((int)a[1], (const void *)a[2], (size_t)a[3]);
+      break;
+
+    case SYS_close:
+      c->GPRx = fs_close((int)a[1]);
+      break;
+
+    case SYS_lseek:
+      c->GPRx = fs_lseek((int)a[1], (intptr_t)a[2], (int)a[3]);
+      break;
+
+    case SYS_brk:
+      c->GPRx = mm_brk((uintptr_t)a[1]);
+      break;
+
+    case SYS_getpid:
+      c->GPRx = 0;
+      break;
+
+    case SYS_gettimeofday: {
+      // arg0: struct timeval *tv  {long tv_sec; long tv_usec;}
+      // arg1: struct timezone *tz (ignored)
+      if (a[1] != 0) {
+        uint64_t us = io_read(AM_TIMER_UPTIME).us;
+        long *tv = (long *)a[1];
+        tv[0] = (long)(us / 1000000); // tv_sec
+        tv[1] = (long)(us % 1000000); // tv_usec
+      }
+      c->GPRx = 0;
+      break;
+    }
+
+    case SYS_time: {
+      // returns seconds since some epoch (use uptime as approximation)
+      uint64_t us = io_read(AM_TIMER_UPTIME).us;
+      c->GPRx = (uintptr_t)(us / 1000000);
+      break;
+    }
+
+    case SYS_fstat:
+      // not implemented; return -1 to signal unsupported
+      c->GPRx = (uintptr_t)-1;
+      break;
+
     default: panic("Unhandled syscall ID = %lu", a[0]);
   }
 }
