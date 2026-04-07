@@ -13,4 +13,4 @@
 fceux-am.worktrees/
 !.github/*
 !.*.md
-!docs/*
+!document/*
