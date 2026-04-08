@@ -19,7 +19,12 @@ object Elaborate extends App {
 object ElaborateDPI extends App {
   println("正在生成 DPI-C 模式的 Verilog 文件...")
   (new chisel3.stage.ChiselStage).emitVerilog(
-    new CPU(Width = 64, Debug = true, useDPI = true, M_Extension = true),  // 启用 DPI-C 模式
+    new CPU(
+      Width  = 64,
+      Debug  = true,
+      useDPI = true,
+      cfg    = CPUConfig(M = true)   // ← 在这里开关扩展，加新扩展只改这一行
+    ),
     Array(
       "--target-dir", "./generated-dpi",
       "--output-file", "CPU_64_DPI"

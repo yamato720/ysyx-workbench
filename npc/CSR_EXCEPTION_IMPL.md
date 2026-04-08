@@ -2,6 +2,10 @@
 
 本文档记录 PA3 阶段「yield/自陷」特性在软件（NEMU）层面的完整实现，以及后续在 Chisel 硬件中对应实现的方法和建议。
 
+> **文档状态（2026-04-07）**：  
+> - NEMU 软件层面（第一节）已全部实现，内容与代码一致。  
+> - Chisel 硬件层面（第二节）：`CSRs` 模块已实现（Step 1 完成），`Control.scala` / `top.scala` / `npc/cte.c` 尚未接入（Step 2–5 待完成）。
+
 ---
 
 ## 一、软件（NEMU）实现总结
@@ -14,7 +18,7 @@
 | `nemu/src/isa/riscv64/system/intr.c` | 实现 `isa_raise_intr()` |
 | `nemu/src/isa/riscv64/inst.c` | ecall 改为触发异常，新增 mret，完整实现 6 条 CSR 指令 |
 | `abstract-machine/am/include/arch/riscv.h` | 修正 Context 结构体字段排列顺序 |
-| `abstract-machine/am/src/riscv/nemu/cte.c` | `__am_irq_handle` 加入 `case 11: EVENT_YIELD` |
+| `abstract-machine/am/src/riscv/nemu/cte.c` | `__am_irq_handle` 完整处理 yield/syscall/timer/iodev |
 
 ### 1.2 CPU 状态扩展（isa-def.h）
 
@@ -52,7 +56,7 @@ RISC-V M-mode 异常原因码（mcause）对照（常用）：
 
 **ecall**（自陷）：
 ```c
-// 将 NEMUTRAP 改为调用 isa_raise_intr，正确跳转到 mtvec
+// 调用 isa_raise_intr，写入 mcause/mepc，跳转到 mtvec
 INSTPAT("0000000 00000 00000 000 00000 11100 11", ecall, N,
     s->dnpc = isa_raise_intr(11, s->pc));
 ```
@@ -63,7 +67,7 @@ INSTPAT("0011000 00010 00000 000 00000 11100 11", mret, N,
     s->dnpc = cpu.mepc);
 ```
 
-> **注意**：`cte_init()` 设置的 `__am_asm_trap` 中，trap handler 结束前会 `csrw mepc, t2` 恢复保存的 mepc，然后 `mret` 返回。AM 的 `simple_trap` 回调不修改 `ctx->mepc`，因此 mret 返回到 ecall 指令本身，ecall 再次触发，形成无限循环（不断打印 `y`）——这是目前阶段的正确行为。未来 syscall 实现时，handler 中需要 `ctx->mepc += 4`。
+> **注意**：`__am_irq_handle` 在 case 11 中会执行 `c->mepc += 4`（见 §1.6），因此 mret 返回到 ecall 之后的下一条指令，而不是 ecall 本身。
 
 **CSR 指令**（csrrw / csrrs / csrrc / csrrwi / csrrsi / csrrci）：
 
@@ -109,18 +113,49 @@ struct Context {
 
 ### 1.6 执行流程
 
+`abstract-machine/am/src/riscv/nemu/cte.c` 中 `__am_irq_handle` 的完整实现（已落地）：
+
+```c
+Context* __am_irq_handle(Context *c) {
+  if (user_handler) {
+    Event ev = {0};
+    switch (c->mcause) {
+      case 11:
+        if (c->GPR1 == (uintptr_t)-1) {
+          ev.event = EVENT_YIELD;
+        } else {
+          ev.event = EVENT_SYSCALL;
+        }
+        c->mepc += 4;   // 跳过 ecall 指令，mret 返回到 ecall+4
+        break;
+      case 12: ev.event = EVENT_IRQ_TIMER; break;  // M-mode timer interrupt
+      case 13: ev.event = EVENT_IRQ_IODEV; break;  // M-mode external interrupt
+      default: ev.event = EVENT_ERROR; break;
+    }
+    c = user_handler(ev, c);
+    assert(c != NULL);
+  }
+  return c;
+}
+```
+
+完整调用链：
+
 ```
 yield()           → li a7, -1; ecall
 ecall（NEMU）     → isa_raise_intr(11, pc_of_ecall)
                      mcause=11, mepc=pc_of_ecall
                      dnpc = mtvec = __am_asm_trap 的地址
 __am_asm_trap     → 保存所有 gpr + mcause/mstatus/mepc 到栈
+                     csrw mstatus, mstatus|MPRV（仅 NEMU difftest 用）
                      调用 __am_irq_handle(ctx)
-__am_irq_handle   → switch(mcause=11) → EVENT_YIELD → 调用 simple_trap
-simple_trap       → putch('y'); return ctx（mepc 未 +4）
-__am_asm_trap 恢复 → csrw mepc, mepc; mret
-mret（NEMU）      → dnpc = cpu.mepc = pc_of_ecall
-                     回到 ecall，再次触发（无限打印 'y'）
+__am_irq_handle   → switch(mcause=11)
+                     GPR1==-1 → EVENT_YIELD；否则 EVENT_SYSCALL
+                     c->mepc += 4
+                     → 调用 user_handler（如 schedule/syscall handler）
+__am_asm_trap 恢复 → csrw mepc, mepc（已 +4）; mret
+mret（NEMU）      → dnpc = cpu.mepc = pc_of_ecall + 4
+                     返回 ecall 之后继续执行
 ```
 
 ---
@@ -129,63 +164,37 @@ mret（NEMU）      → dnpc = cpu.mepc = pc_of_ecall
 
 ### 2.1 需要新增的硬件结构
 
-#### A. CSR 寄存器文件（新模块 `CSRFile.scala`）
+#### A. CSR 寄存器文件（`CSRs` 类，已实现于 `DataManage.scala`）✅
+
+`CSRs` 模块已在 `npc/chisel/src/main/scala/DataManage.scala` 中实现，接口如下：
 
 ```scala
-class CSRFile(Width: Int = 64) extends Module {
+class CSRs(Width: Int = 64) extends Module {
   val io = IO(new Bundle {
-    // 读端口：给 csrrw/csrrs 等指令用
-    val addr   = Input(UInt(12.W))   // CSR 地址（I-type imm[11:0]）
-    val rdata  = Output(UInt(Width.W))
-    // 写端口
-    val wen    = Input(Bool())
-    val waddr  = Input(UInt(12.W))
-    val wdata  = Input(UInt(Width.W))
-    // 异常控制端口
-    val trap_en   = Input(Bool())         // ecall 触发异常
-    val trap_pc   = Input(UInt(Width.W))  // ecall 的 PC → mepc
-    val trap_cause = Input(UInt(Width.W)) // mcause 值（11 for ecall）
-    val mtvec_out = Output(UInt(Width.W)) // 异常入口地址（→ 新 PC）
-    // mret 端口
+    // CSR 读/写接口（csrr* 指令）
+    val addr    = Input(UInt(12.W))    // CSR 地址（imm[11:0]）
+    val wdata   = Input(UInt(Width.W)) // 待写入值（外部运算好后传入）
+    val we      = Input(Bool())        // 写使能
+
+    val rdata   = Output(UInt(Width.W)) // 读出旧值（写回 rd 用）
+
+    // Trap 接口（ecall）
+    val trap_en    = Input(Bool())
+    val trap_cause = Input(UInt(Width.W))  // → mcause
+    val trap_epc   = Input(UInt(Width.W))  // → mepc
+    val mtvec_out  = Output(UInt(Width.W)) // 异常入口地址
+
+    // mret 接口
     val mret_en   = Input(Bool())
-    val mepc_out  = Output(UInt(Width.W)) // mret 目标地址
+    val mepc_out  = Output(UInt(Width.W))  // 返回地址
   })
-
-  val mstatus = RegInit(0.U(Width.W))
-  val mtvec   = RegInit(0.U(Width.W))
-  val mepc    = RegInit(0.U(Width.W))
-  val mcause  = RegInit(0.U(Width.W))
-
-  // 读逻辑
-  io.rdata := MuxLookup(io.addr, 0.U)(Seq(
-    0x300.U -> mstatus,
-    0x305.U -> mtvec,
-    0x341.U -> mepc,
-    0x342.U -> mcause,
-  ))
-
-  // 写逻辑（普通 CSR 指令）
-  when(io.wen) {
-    switch(io.waddr) {
-      is(0x300.U) { mstatus := io.wdata }
-      is(0x305.U) { mtvec   := io.wdata }
-      is(0x341.U) { mepc    := io.wdata }
-      is(0x342.U) { mcause  := io.wdata }
-    }
-  }
-
-  // 异常触发（ecall）优先级高于普通 CSR 写
-  when(io.trap_en) {
-    mepc   := io.trap_pc
-    mcause := io.trap_cause
-  }
-
-  io.mtvec_out := mtvec
-  io.mepc_out  := mepc
+  // trap_en 优先级高于 we；4 个 CSR：mstatus/mtvec/mepc/mcause
 }
 ```
 
-#### B. OpcodeCtrl 扩展
+实际实现中 `trap_en` 优先级高于普通 CSR 写（`we`），与规范一致。
+
+#### B. OpcodeCtrl 扩展（`Control.scala`，**待实现**）
 
 在 `Control.scala` 的 `OpcodeCtrlTop` / `OpcodeCtrl_I` 里，针对 opcode `1110011`（SYSTEM）新增处理：
 
@@ -207,80 +216,142 @@ val csrOp   = Output(UInt(2.W)) // 00=写 01=置位 10=清位
 val csrRegWrite = Output(Bool()) // CSR 结果写回 rd
 ```
 
-#### C. PC 控制扩展
+#### C. PC 控制扩展（`top.scala`，**待实现**）
 
-`PC_Ctrl` / `mux8_3` 模块需要新增两个 PC 来源：
-
+`mux8_3` 已有 8 个输入槽，in3/in4 目前接 `0.U`，直接改为接 CSRs 的输出即可：
 | sel 值 | PC 来源 |
 |--------|--------|
-| 原有 0 | PC+4 |
-| 原有 1 | 分支目标 |
-| 原有 2 | JALR 目标 |
-| **新增 3** | `mtvec`（ecall 时跳转到异常入口）|
-| **新增 4** | `mepc`（mret 时返回） |
+| 0 | PC+4 |
+| 1 | 分支目标（B-type/JAL） |
+| 2 | JALR 目标 |
+| **3（新增）** | `mtvec_out`（ecall 跳异常入口）|
+| **4（新增）** | `mepc_out`（mret 返回）|
 
-`mux8_3` 已经有 8 个输入，直接连：
 ```scala
-mux8_3_inst.io.in3 := CSRFile_inst.io.mtvec_out  // ecall 入口
-mux8_3_inst.io.in4 := CSRFile_inst.io.mepc_out   // mret 返回
-// sel 逻辑：
+// top.scala 中 mux8_3 的 sel 逻辑（原来只有 branch 分支，需替换）：
+mux8_3_inst.io.in3 := CSRs_inst.io.mtvec_out  // 原来接 0.U
+mux8_3_inst.io.in4 := CSRs_inst.io.mepc_out   // 原来接 0.U
 mux8_3_inst.io.sel := MuxCase(0.U, Seq(
   OpcodeCtrlTop_inst.io.trapEn -> 3.U,
   OpcodeCtrlTop_inst.io.mretEn -> 4.U,
-  OpcodeCtrlTop_inst.io.branch -> ALU_Top_inst.io.branch_taken,
+  (OpcodeCtrlTop_inst.io.branch && ALU_Top_inst.io.branch_taken) -> 1.U,
+  // JALR 的跳转逻辑保持不变（原 sel=2）
 ))
 ```
 
-#### D. 写回路径扩展
+**注意**：原来的 sel 逻辑为 `Mux(branch, branch_taken, 0.U)`，需要改成 `MuxCase` 并加入 trapEn/mretEn 的优先匹配（trap 优先级最高）。
 
-CSR 指令（csrrw 等）将 CSR 旧值写入 rd，需要在 mux2_1_WriteBack 上增加一路：
+#### D. 写回路径扩展（`top.scala`，**待实现**）
+
+CSR 指令（csrrw 等）将 CSR 旧值写入 rd，需要在 `mux2_1_WriteBack` 上增加一路（目前只有 ALU 结果和内存读结果两路）：
 
 ```scala
-// 改为 Mux4_2（4 选 1）或串联多个 Mux2_1
+// 改为 Mux4_2（4 选 1）或串联 Mux2_1
 // in0: ALU 结果
 // in1: 内存读结果
-// in2: CSR 旧值（CSRFile_inst.io.rdata）
+// in2: CSR 旧值（CSRs_inst.io.rdata）
+// sel: OpcodeCtrlTop_inst.io.memtoReg（扩展为 2-bit）
 ```
 
-### 2.2 实现步骤建议
+#### E. `npc/cte.c` 补全（**待实现**）
 
-**Step 1：新建 `CSRFile.scala`**  
-按 2.1-A 的模板实现，先不接入流水线，单独写一个 chiseltest 单元测试验证读写行为和 trap_en 逻辑。
+`abstract-machine/am/src/riscv/npc/cte.c` 的 `__am_irq_handle` 目前是空壳（只有 `default: EVENT_ERROR`），需要与 nemu 版对齐：
 
-**Step 2：扩展 `Control.scala` 的 `OpcodeCtrl_I`**  
-在 opcode=1110011 的分支中，根据 funct3 和 funct12 产生 `trapEn` / `mretEn` / `csrEn` / `csrOp` 信号。同时在 `OpcodeCtrlTop` 的 io Bundle 中暴露这些新信号。
+```c
+Context* __am_irq_handle(Context *c) {
+  if (user_handler) {
+    Event ev = {0};
+    switch (c->mcause) {
+      case 11:
+        if (c->GPR1 == (uintptr_t)-1) {
+          ev.event = EVENT_YIELD;
+        } else {
+          ev.event = EVENT_SYSCALL;
+        }
+        c->mepc += 4;
+        break;
+      case 12: ev.event = EVENT_IRQ_TIMER; break;
+      case 13: ev.event = EVENT_IRQ_IODEV; break;
+      default: ev.event = EVENT_ERROR; break;
+    }
+    c = user_handler(ev, c);
+    assert(c != NULL);
+  }
+  return c;
+}
+```
 
-**Step 3：在 `top.scala` 中实例化 CSRFile 并连线**  
-- `CSRFile.trap_pc` ← `PC_Ctrl.pc_out`（ecall 指令的 PC）
-- `CSRFile.trap_cause` ← 11.U
-- `CSRFile.trap_en` ← `OpcodeCtrlTop.trapEn`
-- `CSRFile.mret_en` ← `OpcodeCtrlTop.mretEn`
-- `mux8_3.in3` ← `CSRFile.mtvec_out`
-- `mux8_3.in4` ← `CSRFile.mepc_out`
-- CSR 指令的读数据路径接入写回 Mux
+npc 的 `trap.S` 不设置 `mstatus.MPRV`（这是 NEMU 仿真器专有逻辑），其余与 nemu 版相同，不需修改。
 
-**Step 4：处理流水线级间 stall/flush（如有流水线）**  
-ecall/mret 是控制流变化指令，需要清空 IF/ID 流水线寄存器（类似 branch flush），防止后续取入的指令被错误执行。当前 CPU 如使用 InsBuffer 级联方式，需在 ecall/mret 时 flush InsBuffer。
+### 2.2 实现步骤（当前进度）
 
-**Step 5：DPI-C 配合验证（difftest）**  
-在 `npc_core.cpp` 的 DPI-C 接口中，通过 `dut_regs` 机制同时暴露 CSR 值给 NEMU difftest 对比框架。NEMU 和 NPC 的 CSR 状态可以逐条指令对比。
+| 步骤 | 内容 | 状态 |
+|------|------|------|
+| Step 1 | 新建 `CSRs` 模块（CSR 寄存器文件） | ✅ 已完成（`DataManage.scala`）|
+| Step 2 | 扩展 `Control.scala` 的 `OpcodeCtrl_I`，增加 `trapEn/mretEn/csrEn/csrOp` 信号 | ⬜ 待完成 |
+| Step 3 | 在 `top.scala` 中实例化 `CSRs` 并连线（PC mux + 写回 mux） | ⬜ 待完成 |
+| Step 4 | 处理流水线 flush（ecall/mret 触发时清空 InsBuffer） | ⬜ 待完成 |
+| Step 5 | DPI-C 接口暴露 CSR 状态给 difftest，补全 `npc/cte.c` | ⬜ 待完成 |
+
+**Step 2**：在 `OpcodeCtrl_I` 里，opcode=`1110011` 时根据 funct3 / funct12 产生控制信号，同时在 `OpcodeCtrlTop` 的 io Bundle 中暴露：
+
+```scala
+// 追加到 OpcodeCtrlTop 的 io Bundle：
+val trapEn      = Output(Bool())    // ecall：触发异常
+val mretEn      = Output(Bool())    // mret：从异常返回
+val csrEn       = Output(Bool())    // CSR 指令：需要读写 CSR
+val csrOp       = Output(UInt(2.W)) // 00=写 01=置位 10=清位（对应 csrrw/csrrs/csrrc）
+val csrRegWrite = Output(Bool())    // CSR 旧值写回 rd
+```
+
+**Step 3**：在 `top.scala` 中实例化 `CSRs`，完成如下连线：
+
+```scala
+val CSRs_inst = Module(new CSRs(Width = Width))
+
+// CSRs 写入（CSR 指令）
+CSRs_inst.io.addr  := ImmGenerator_inst.io.imm_out(11, 0)  // I-type imm[11:0] = CSR addr
+CSRs_inst.io.wdata := // csrrw: rs1; csrrs: old|rs1; csrrc: old&~rs1（需在外部计算好）
+CSRs_inst.io.we    := OpcodeCtrlTop_inst.io.csrEn && Metronome_inst.io.tick_memwb
+
+// Trap
+CSRs_inst.io.trap_en    := OpcodeCtrlTop_inst.io.trapEn
+CSRs_inst.io.trap_epc   := PC_Ctrl_inst.io.pc_out
+CSRs_inst.io.trap_cause := 11.U
+
+// mret
+CSRs_inst.io.mret_en    := OpcodeCtrlTop_inst.io.mretEn
+
+// PC 选择（接入 mux8_3 的 in3/in4）
+mux8_3_inst.io.in3 := CSRs_inst.io.mtvec_out
+mux8_3_inst.io.in4 := CSRs_inst.io.mepc_out
+
+// 写回（将 CSRs.io.rdata 作为第三路加入写回 mux）
+```
+
+**Step 4**：ecall / mret 是控制流变化指令，和 branch/JAL 一样需要 flush InsBuffer，防止已取入的后续指令被错误执行。
+
+**Step 5**：补全 `abstract-machine/am/src/riscv/npc/cte.c`（见 §2.1-E），并在 `npc_core.cpp` 的 DPI-C 接口中暴露 CSR 值以供 difftest 比对。
 
 ### 2.3 测试方法
 
 ```bash
-# 1. 编译 AM yield-test，检查 NEMU 软件模拟是否正常（先验证）
+# 1. 验证 NEMU 软件模拟（已可用）
 cd am-kernels/tests/am-tests
 make ARCH=riscv64-nemu run mainargs=y
+# 期望：打印 'y' 后继续执行（不是无限循环——因为 mepc 已 +4）
 
-# 期望输出：不断打印 'y'（每秒若干次，Ctrl-C 停止）
-
-# 2. 实现 Chisel CSR 后，运行 NPC difftest 模式
+# 2. Chisel CSR 接入完成后，用 NPC 运行
 cd am-kernels/tests/am-tests
+make ARCH=riscv64-npc run mainargs=y
+
+# 3. NPC difftest 模式（需先 make -C npc chisel-dpi 并补全 npc/cte.c）
 make ARCH=riscv64-nemu run-npc mainargs=y
 ```
 
 ### 2.4 注意事项
 
-- **mret 的 mepc += 4**：当前 NEMU 软件层面 mret 返回 ecall 本身的 PC（AM 的 `simple_trap` 回调不做 +4）。硬件同理，对应 `mepc` 中存的是 ecall 的 PC，每次 mret 又回到 ecall，实现无限 yield 循环，这是正确的。未来实现 `syscall` 时，OS 的 trap handler 会把 `ctx->mepc += 4`，这样 mret 才会跳过 ecall 继续执行。
-- **mstatus.MPRV**：`nemu/trap.S` 在保存 Context 后设置了 `mstatus.MPRV = 1`（bit 17），这用于 difftest 时让 KVM 正确读写内存。NPC 硬件一般无需实现此细节（NEMU 是仿真器专有逻辑）。
-- **流水线中的 CSR 时序**：CSR 写（如 `csrw mtvec, __am_asm_trap`）必须在 ecall 之前完成。标准流水线需确保写-后-读不发生 hazard（csrw 在 WB 阶段写，ecall 在 ID 阶段读到错误值）——可通过 CSR forwarding 或加一个 bubble 解决。
+- **`npc/cte.c` 是空壳**：`abstract-machine/am/src/riscv/npc/cte.c` 的 `__am_irq_handle` 目前只有 `default: EVENT_ERROR`，任何 ecall（yield/syscall）打到 NPC 上都会触发 `EVENT_ERROR`。这是当前 NPC 无法运行 am-tests 的直接原因之一（见 §2.1-E 的修复方案）。
+- **CSR 时序 hazard**：CSR 写（如 `csrw mtvec, __am_asm_trap`）必须在 ecall 之前提交。若 csrw 在 WB 阶段写而 ecall 在 ID 阶段读，会读到旧值。可通过 CSR forwarding 或在 ecall 前插一个 bubble 解决。
+- **mstatus.MPRV**：`nemu/trap.S` 在保存 Context 后设置了 `mstatus.MPRV = 1`（bit 17），用于 difftest 时让 KVM 正确读写内存。`npc/trap.S` 没有这一步，NPC 硬件无需实现此细节。
+- **mepc 存的是 ecall 的 PC**：AM 在 `__am_irq_handle` 中统一执行 `mepc += 4`，因此 mret 跳回 ecall+4，调用方（yield/syscall）正常返回。OS trap handler 无需再额外 +4。

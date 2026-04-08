@@ -3,9 +3,8 @@ import chisel3._
 import chisel3.util._
 
 class CPU(Width:Int = 64, Debug:Boolean = false, useDPI:Boolean = false,
-          M_Extension:Boolean = false
+          cfg: CPUConfig = CPUConfig()
          ) extends Module {
-  val Sel_num = if (M_Extension) 2 else 1
   val io = IO(new Bundle{
     // Debug 端口：输出所有32个寄存器的值
     val regs_debug = if (Debug) Some(Output(Vec(32, UInt(Width.W)))) else None
@@ -43,11 +42,11 @@ class CPU(Width:Int = 64, Debug:Boolean = false, useDPI:Boolean = false,
   val Decoder_inst = Module(new Decoder())
   val InsBuffer_inst = Module(new InsBuffer(Width = Width, BufferSize = 128, Debug = Debug))
   val InsCacheL1_inst = Module(new insCacheL1(useDPI = useDPI, initFile = if (useDPI) None else Some("init_data/program.hex")))
-  val OpcodeCtrlTop_inst = Module(new OpcodeCtrlTop(Width = Width, M_Extension = M_Extension))
+  val OpcodeCtrlTop_inst = Module(new OpcodeCtrlTop(Width = Width, cfg = cfg))
   val ImmGenerator_inst = Module(new ImmGenerator(Width = Width))
   val RegisterFile_inst = Module(new RegisterFile(Width = Width, Debug = Debug))
-  val ALU_Top_inst = Module(new ALU_Top(Width = Width, M_Extension = M_Extension))
-  val ALU_Ctrl_Top_inst = Module(new ALU_Ctrl_Top(Width = Width, M_Extension = M_Extension))
+  val ALU_Top_inst = Module(new ALU_Top(Width = Width, cfg = cfg))
+  val ALU_Ctrl_Top_inst = Module(new ALU_Ctrl_Top(Width = Width, cfg = cfg))
   val DataMemory_inst = Module(new DataMemory(Width = Width))
   val IODistribute_inst = Module(new IO_Distribute(Width = Width))
   val DataCacheL1_inst = Module(new dataCacheL1(useDPI = useDPI))

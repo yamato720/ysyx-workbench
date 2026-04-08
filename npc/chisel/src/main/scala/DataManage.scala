@@ -422,6 +422,57 @@ class RegisterFile(numRegs:Int = 32, Width:Int = 32, Debug:Boolean = false) exte
 
 }
 
+
+class CSRs(Width: Int = 64) extends Module {
+  val io = IO(new Bundle {
+    // ── CSR 读/写接口（csrr* 指令）──────────────────
+    val addr    = Input(UInt(12.W))   // CSR 地址（imm[11:0]）
+    val wdata   = Input(UInt(Width.W)) // 待写入值（已由外部运算好）
+    val we      = Input(Bool())        // 写使能（tick_memwb节拍控制）
+
+    val rdata   = Output(UInt(Width.W)) // 读出旧值（写回 rd 用）
+
+    // ── Trap 接口（ecall / 未来异常）─────────────────
+    val trap_en    = Input(Bool())
+    val trap_cause = Input(UInt(Width.W))  // → mcause
+    val trap_epc   = Input(UInt(Width.W))  // → mepc
+    val mtvec_out  = Output(UInt(Width.W)) // 跳转目标
+
+    // ── mret 接口 ─────────────────────────────────────
+    val mret_en   = Input(Bool())
+    val mepc_out  = Output(UInt(Width.W))  // 返回地址
+  })
+
+  val mstatus = RegInit(0.U(Width.W))  // 0x300
+  val mtvec   = RegInit(0.U(Width.W))  // 0x305
+  val mepc    = RegInit(0.U(Width.W))  // 0x341
+  val mcause  = RegInit(0.U(Width.W))  // 0x342
+
+  // 读（组合逻辑，输出旧值供 rd 写回）
+  io.rdata := MuxLookup(io.addr, 0.U)(Seq(
+    0x300.U -> mstatus,
+    0x305.U -> mtvec,
+    0x341.U -> mepc,
+    0x342.U -> mcause,
+  ))
+
+  io.mtvec_out := mtvec
+  io.mepc_out  := mepc
+
+  // Trap 优先级最高
+  when(io.trap_en) {
+    mcause := io.trap_cause
+    mepc   := io.trap_epc
+  }.elsewhen(io.we) {
+    switch(io.addr) {
+      is(0x300.U) { mstatus := io.wdata }
+      is(0x305.U) { mtvec   := io.wdata }
+      is(0x341.U) { mepc    := io.wdata }
+      is(0x342.U) { mcause  := io.wdata }
+    }
+  }
+}
+
 //class CSRs(numRegs:Int = 32, Width:Int = 32, Debug:Boolean = false) extends Module{
 //  val io = IO(new Bundle() {
 //

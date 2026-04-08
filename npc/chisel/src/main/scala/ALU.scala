@@ -4,10 +4,9 @@ import chisel3._
 import chisel3.util._
 
 
-class ALU_Top(Width:Int = 32, M_Extension:Boolean = false, USEDPI:Boolean = true) extends Module{
-  val Sel_num = if (M_Extension) 2 else 1
+class ALU_Top(Width:Int = 32, cfg: CPUConfig = CPUConfig(), USEDPI:Boolean = true) extends Module{
   val io = IO(new Bundle{
-    val extSel = Input(UInt(Sel_num.W))
+    val extSel = Input(UInt(ExtSel.width.W))  // fixed 4-bit; see object ExtSel
     val a_in = Input(UInt(Width.W))
     val b_in = Input(UInt(Width.W))
     val alu_ctrl_in = Input(UInt(5.W))
@@ -32,7 +31,7 @@ class ALU_Top(Width:Int = 32, M_Extension:Boolean = false, USEDPI:Boolean = true
 
   val m_alu_result = RegInit(0.U(Width.W))
 
-  if(M_Extension){
+  if(cfg.M){
     val m_ALU_inst = Module(new ALU_M(Width = Width, USEDPI = USEDPI))
     m_ALU_inst.io.a_in := io.a_in
     m_ALU_inst.io.b_in := io.b_in
@@ -46,9 +45,9 @@ class ALU_Top(Width:Int = 32, M_Extension:Boolean = false, USEDPI:Boolean = true
   val sel_m = RegInit(UInt(1.W), 0.U)
 
   when(io.tick_idex){
-    sel_i := io.extSel(0)
-    if(M_Extension){
-      sel_m := io.extSel(1)
+    sel_i := io.extSel(ExtSel.I)
+    if(cfg.M){
+      sel_m := io.extSel(ExtSel.M)
     }
   }
 
