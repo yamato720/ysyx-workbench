@@ -3,32 +3,6 @@ package scpu
 import chisel3._
 import chisel3.util._
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ExtSel: fixed-width ALU extension selector (always 4 bits).
-// Each ISA extension occupies one named bit.  Adding a new extension only
-// requires adding a constant here — NO other files need a width change.
-// ─────────────────────────────────────────────────────────────────────────────
-object ExtSel {
-  val width = 4   // fixed; increase if ever needed beyond 4 extensions
-  val I = 0       // bit 0 — base integer ISA
-  val M = 1       // bit 1 — M extension (mul / div)
-  // val F = 2   // bit 2 — F extension (float, future)
-  // val V = 3   // bit 3 — V extension (vector, future)
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// CPUConfig: all ISA extension switches in one place.
-// Adding a new extension = add one field here (with a default of false) +
-// a constant in ExtSel + the handful of lines that use it.  No other
-// module signatures need to change.
-// ─────────────────────────────────────────────────────────────────────────────
-case class CPUConfig(
-  M:     Boolean = false,   // M extension: integer multiply / divide
-  Zicsr: Boolean = true,    // Zicsr extension: CSR instructions (ecall/mret always on)
-  // F:  Boolean = false,   // F extension: single-precision float (future)
-  // V:  Boolean = false,   // V extension: vector (future)
-)
-
 
 
 
@@ -158,11 +132,11 @@ case class CPUConfig(
 //  }
 //}
 
-class ALU_Ctrl_Top(Width: Int = 32, cfg: CPUConfig = CPUConfig()) extends Module{
+class ALU_Ctrl_Top(cfg: ISAConfig = ISAConfig()) extends Module{
   val io = IO(new Bundle() {
     val aluop = Input(UInt(4.W))
     val funct3 = Input(UInt(3.W))
-    val extSel = Input(UInt(ExtSel.width.W))  // fixed 4-bit; see object ExtSel
+    val extSel = Input(UInt(ExtSelBits.extSelWidth.W))
     val alu_ctrl = Output(UInt(5.W))
   })
 
@@ -171,21 +145,21 @@ class ALU_Ctrl_Top(Width: Int = 32, cfg: CPUConfig = CPUConfig()) extends Module
   val i_sel = WireDefault(1.U)
   val m_sel = WireDefault(0.U)
 
-  val alu_ctrl_i = Module(new ALU_Ctrl_I(Width))
+  val alu_ctrl_i = Module(new ALU_Ctrl_I(cfg.xlen))
 
   alu_ctrl_i.io.aluop := io.aluop
   alu_ctrl_i.io.funct3 := io.funct3
   i_alu_ctrl_out := alu_ctrl_i.io.alu_ctrl
-  i_sel := io.extSel(ExtSel.I)
+  i_sel := io.extSel(ExtSelBits.I)
 
   if(cfg.M){
-    val alu_ctrl_m = Module(new ALU_Ctrl_M(Width))
+    val alu_ctrl_m = Module(new ALU_Ctrl_M(cfg.xlen))
 
     alu_ctrl_m.io.aluop := io.aluop
     alu_ctrl_m.io.funct3 := io.funct3
 
     m_alu_ctrl_out := alu_ctrl_m.io.alu_ctrl
-    m_sel := io.extSel(ExtSel.M)
+    m_sel := io.extSel(ExtSelBits.M)
   }
 
 
@@ -388,7 +362,7 @@ class ImmGenerator(Width: Int = 32) extends Module {
   when(reset.asBool){
     io.imm_out := 0.U
   }.otherwise{
-    when(io.instruction(6, 0) === "b0010011".U || io.instruction(6, 0) === "b0000011".U || io.instruction(6, 0) === "b1100111".U ||
+    when(io.instruction(6, 0) === "b0010011".U || io.instruction(6, 0) === "b0000011".U || io.instruction(6, 0) === "b1100111".U || io.instruction(6, 0) === "b1110011".U ||
          (if(Width == 64) io.instruction(6, 0) === "b0011011".U else false.B)){ // I-type (including RV64I ADDIW/SLLIW/etc)
       imm_out_reg := Cat(Fill(Width - 12, io.instruction(31)), io.instruction(31,20))
     }.elsewhen(io.instruction(6, 0) === "b0100011".U){ // S-type
@@ -542,7 +516,7 @@ class PC_Ctrl(Width:Int = 32, initPC: BigInt = BigInt("80000000", 16)) extends M
 
 }
 
-class OpcodeCtrlTop(Width: Int = 32, cfg: CPUConfig = CPUConfig()) extends Module {
+class OpcodeCtrlTop(cfg: ISAConfig = ISAConfig()) extends Module {
   val io = IO(new Bundle {
     val opcode   = Input(UInt(7.W))
     val funct7   = Input(UInt(7.W))
@@ -554,20 +528,19 @@ class OpcodeCtrlTop(Width: Int = 32, cfg: CPUConfig = CPUConfig()) extends Modul
     val memWrite = Output(Bool())
     val aluSrc   = Output(Bool())
     val regWrite = Output(Bool())
-    // fixed 4-bit; ExtSel.I=base, ExtSel.M=M-ext; see object ExtSel
-    val extSel      = Output(UInt(ExtSel.width.W))
+    val extSel      = Output(UInt(ExtSelBits.extSelWidth.W))
     // ── Priv / Zicsr signals ────────────────────────────────────────────
+    val privSel     = Output(Bool())    // any SYSTEM instruction hit
     val trapEn      = Output(Bool())    // ecall
     val mretEn      = Output(Bool())    // mret
     val csrEn       = Output(Bool())    // any csr* instruction
     val csrOp       = Output(UInt(2.W)) // 00=write 01=set 10=clear
-    val csrImm      = Output(Bool())    // immediate variant
+    val csrImm      = Output(Bool())    // immediate variant 1=csr[11:0] is source, 0=rs1 is source
     val csrRegWrite = Output(Bool())    // CSR old value → rd
-    val privSel     = Output(Bool())    // any SYSTEM instruction hit
   })
 
   // ── Standard decoder ─────────────────────────────────────────────────
-  val std = Module(new OpcodeCtrl_I(Width))
+  val std = Module(new OpcodeCtrl_I(cfg.xlen))
   std.io.opcode := io.opcode
   std.io.funct7 := io.funct7
   std.io.funct3 := io.funct3
@@ -585,7 +558,7 @@ class OpcodeCtrlTop(Width: Int = 32, cfg: CPUConfig = CPUConfig()) extends Modul
   val mAluop = WireDefault(0.U(4.W))
 
   if (cfg.M) {
-    val mext = Module(new OpcodeCtrl_M(Width))
+    val mext = Module(new OpcodeCtrl_M(cfg.xlen))
     mext.io.opcode := io.opcode
     mext.io.funct7 := io.funct7
     mSel   := mext.io.sel
@@ -601,19 +574,20 @@ class OpcodeCtrlTop(Width: Int = 32, cfg: CPUConfig = CPUConfig()) extends Modul
   val csrRegWrite_w = WireDefault(false.B)
   val privSel_w     = WireDefault(false.B)
 
-  if (cfg.Zicsr) {
-    val priv = Module(new OpcodeCtrl_Priv(Zicsr = true))
-    priv.io.opcode := io.opcode
-    priv.io.funct3 := io.funct3
-    priv.io.funct7 := io.funct7
-    trapEn_w      := priv.io.trapEn
-    mretEn_w      := priv.io.mretEn
-    csrEn_w       := priv.io.csrEn
-    csrOp_w       := priv.io.csrOp
-    csrImm_w      := priv.io.csrImm
-    csrRegWrite_w := priv.io.csrRegWrite
-    privSel_w     := priv.io.sel
-  }
+  // if (cfg.Zicsr) {
+  val priv = Module(new OpcodeCtrl_Priv(cfg = cfg))
+  priv.io.opcode := io.opcode
+  priv.io.funct3 := io.funct3
+  priv.io.funct7 := io.funct7
+  trapEn_w      := priv.io.trapEn
+  mretEn_w      := priv.io.mretEn
+  csrEn_w       := priv.io.csrEn
+  csrOp_w       := priv.io.csrOp
+  csrImm_w      := priv.io.csrImm
+  csrRegWrite_w := priv.io.csrRegWrite
+  privSel_w     := priv.io.sel
+  io.privSel    := priv.io.sel
+  // }
 
   io.trapEn      := trapEn_w
   io.mretEn      := mretEn_w
@@ -628,8 +602,8 @@ class OpcodeCtrlTop(Width: Int = 32, cfg: CPUConfig = CPUConfig()) extends Modul
 
   // ── aluop mux + extSel ───────────────────────────────────────────────
   // Each extension OR-s its matching bit into the fixed-width extSel.
-  // Adding a new extension: just add one more line here + a constant in ExtSel.
-  io.extSel := std.io.sel.asUInt | (mSel.asUInt << ExtSel.M)
+  // Adding a new extension: just add one more line here + a constant in ISAConfig companion.
+  io.extSel := std.io.sel.asUInt | (mSel.asUInt << ExtSelBits.M)
   when(std_sel){
     io.aluop := std.io.aluop
   }.elsewhen(mSel){
@@ -868,7 +842,7 @@ class OpcodeCtrl_M(Width: Int = 32) extends Module {
   io.sel   := sel
 }
 
-class OpcodeCtrl_Priv(Zicsr: Boolean = true) extends Module {
+class OpcodeCtrl_Priv(cfg: ISAConfig) extends Module {
   val io = IO(new Bundle {
     val opcode  = Input(UInt(7.W))
     val funct3  = Input(UInt(3.W))
@@ -880,15 +854,17 @@ class OpcodeCtrl_Priv(Zicsr: Boolean = true) extends Module {
     // 0110: csrrw,  0111: csrrs,  1000: csrrc
     // 1001: csrrwi, 1010: csrrsi, 1011: csrrci
     val priv_op     = Output(UInt(4.W))
-    val trapEn      = Output(Bool())    // ecall: trigger trap → jump to mtvec
-    val mretEn      = Output(Bool())    // mret: return from trap → jump to mepc
-    val csrEn       = Output(Bool())    // any csr* instruction
-    val csrOp       = Output(UInt(2.W)) // 00=write, 01=set(OR), 10=clear(AND-NOT)
-    val csrImm      = Output(Bool())    // immediate variant (csrrwi/csrrsi/csrrci)
-    val csrRegWrite = Output(Bool())    // CSR old value write back to rd
     val sel         = Output(Bool())    // any SYSTEM instruction hit
+    val trapEn      = Output(Bool())    // ecall
+    val mretEn      = Output(Bool())    // mret
+    val csrEn       = Output(Bool())    // any csr* instruction
+    val csrOp       = Output(UInt(2.W)) // 00=write 01=set 10=clear
+    val csrImm      = Output(Bool())    // immediate variant (csrrwi/csrrsi/csrrci)
+    val csrRegWrite = Output(Bool())    // CSR old value → rd
   })
 
+
+  val sel         = WireDefault(false.B)
   val priv_op     = WireDefault(0.U(4.W))
   val trapEn      = WireDefault(false.B)
   val mretEn      = WireDefault(false.B)
@@ -896,7 +872,6 @@ class OpcodeCtrl_Priv(Zicsr: Boolean = true) extends Module {
   val csrOp       = WireDefault(0.U(2.W))
   val csrImm      = WireDefault(false.B)
   val csrRegWrite = WireDefault(false.B)
-  val sel         = WireDefault(false.B)
 
   when(io.opcode === "b1110011".U) {
     // ── funct3=000: privileged instructions (ecall / mret / sret / wfi) ─
@@ -922,12 +897,12 @@ class OpcodeCtrl_Priv(Zicsr: Boolean = true) extends Module {
     }
 
     // ── Zicsr: CSR instructions (funct3 != 000) ──────────────────────
-    if (Zicsr) {
+    if (cfg.Zicsr) {
       when(io.funct3 =/= "b000".U) {
         sel         := true.B
         csrEn       := true.B
+        csrImm      := io.funct3(2)
         csrRegWrite := true.B
-        csrImm      := io.funct3(2)              // funct3[2]=1 → immediate variant
         when(io.funct3(1, 0) === "b01".U) {      // csrrw (001) / csrrwi (101)
           priv_op := Mux(io.funct3(2), "b1001".U, "b0110".U)
           csrOp   := "b00".U
@@ -942,6 +917,7 @@ class OpcodeCtrl_Priv(Zicsr: Boolean = true) extends Module {
     }
   }
 
+  io.sel         := sel
   io.priv_op     := priv_op
   io.trapEn      := trapEn
   io.mretEn      := mretEn
@@ -949,7 +925,6 @@ class OpcodeCtrl_Priv(Zicsr: Boolean = true) extends Module {
   io.csrOp       := csrOp
   io.csrImm      := csrImm
   io.csrRegWrite := csrRegWrite
-  io.sel         := sel
 }
 
 

@@ -8,7 +8,7 @@ import org.scalatest.flatspec.AnyFlatSpec
 class CPUTest extends AnyFlatSpec with ChiselScalatestTester{
   "CPU" should "correctly perform instruction fetch and decode" in {
     val Width = 64  // You can change this to 64 to test 64-bit CPU
-    test(new CPU(Width = Width, Debug = true)) { c =>
+    test(new CPU(Debug = true, cfg = ISAConfig(xlen = Width))) { c =>
       var cycleMax = if (Width == 64) 29 else 25
       c.reset.poke(true.B)
       c.clock.step(4)

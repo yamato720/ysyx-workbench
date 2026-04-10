@@ -15,6 +15,7 @@ class Decoder extends Module{
       var rd = Output(UInt(5.W))
       var rs1 = Output(UInt(5.W))
       var rs2 = Output(UInt(5.W))
+      var csr_addr = Output(UInt(12.W))  // inst[31:20]，CSR 地址字段
     }
   )
 
@@ -27,12 +28,13 @@ class Decoder extends Module{
     instruction_reg := instruction_reg
   }
 
-  io.opcode := instruction_reg(6,0)
-  io.rd := instruction_reg(11,7)
-  io.funct3 := instruction_reg(14,12)
-  io.rs1 := instruction_reg(19,15)
-  io.rs2 := instruction_reg(24,20)
-  io.funct7 := instruction_reg(31,25)
+  io.opcode    := instruction_reg(6,0)
+  io.rd        := instruction_reg(11,7)
+  io.funct3    := instruction_reg(14,12)
+  io.rs1       := instruction_reg(19,15)
+  io.rs2       := instruction_reg(24,20)
+  io.funct7    := instruction_reg(31,25)
+  io.csr_addr  := instruction_reg(31,20)  // inst[31:20] — CSR address field
 
 
 

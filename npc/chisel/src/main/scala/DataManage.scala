@@ -423,30 +423,31 @@ class RegisterFile(numRegs:Int = 32, Width:Int = 32, Debug:Boolean = false) exte
 }
 
 
-class CSRs(Width: Int = 64) extends Module {
+class CSRs(cfg: ISAConfig = ISAConfig()) extends Module {
   val io = IO(new Bundle {
     // ── CSR 读/写接口（csrr* 指令）──────────────────
     val addr    = Input(UInt(12.W))   // CSR 地址（imm[11:0]）
-    val wdata   = Input(UInt(Width.W)) // 待写入值（已由外部运算好）
+    val wdata   = Input(UInt(cfg.xlen.W)) // 待写入值（已由外部运算好）
     val we      = Input(Bool())        // 写使能（tick_memwb节拍控制）
+    val allow   = Input(Bool())        // 访问合法（地址有效且指令合法）
 
-    val rdata   = Output(UInt(Width.W)) // 读出旧值（写回 rd 用）
+    val rdata   = Output(UInt(cfg.xlen.W)) // 读出旧值（写回 rd 用）
 
     // ── Trap 接口（ecall / 未来异常）─────────────────
     val trap_en    = Input(Bool())
-    val trap_cause = Input(UInt(Width.W))  // → mcause
-    val trap_epc   = Input(UInt(Width.W))  // → mepc
-    val mtvec_out  = Output(UInt(Width.W)) // 跳转目标
+    val trap_cause = Input(UInt(cfg.xlen.W))  // → mcause
+    val trap_epc   = Input(UInt(cfg.xlen.W))  // → mepc
+    val mtvec_out  = Output(UInt(cfg.xlen.W)) // 跳转目标
 
     // ── mret 接口 ─────────────────────────────────────
     val mret_en   = Input(Bool())
-    val mepc_out  = Output(UInt(Width.W))  // 返回地址
+    val mepc_out  = Output(UInt(cfg.xlen.W))  // 返回地址
   })
 
-  val mstatus = RegInit(0.U(Width.W))  // 0x300
-  val mtvec   = RegInit(0.U(Width.W))  // 0x305
-  val mepc    = RegInit(0.U(Width.W))  // 0x341
-  val mcause  = RegInit(0.U(Width.W))  // 0x342
+  val mstatus = RegInit(0.U(cfg.xlen.W))  // 0x300
+  val mtvec   = RegInit(0.U(cfg.xlen.W))  // 0x305
+  val mepc    = RegInit(0.U(cfg.xlen.W))  // 0x341
+  val mcause  = RegInit(0.U(cfg.xlen.W))  // 0x342
 
   // 读（组合逻辑，输出旧值供 rd 写回）
   io.rdata := MuxLookup(io.addr, 0.U)(Seq(
@@ -463,7 +464,7 @@ class CSRs(Width: Int = 64) extends Module {
   when(io.trap_en) {
     mcause := io.trap_cause
     mepc   := io.trap_epc
-  }.elsewhen(io.we) {
+  }.elsewhen(io.we && io.allow) {
     switch(io.addr) {
       is(0x300.U) { mstatus := io.wdata }
       is(0x305.U) { mtvec   := io.wdata }
@@ -472,6 +473,9 @@ class CSRs(Width: Int = 64) extends Module {
     }
   }
 }
+
+
+
 
 //class CSRs(numRegs:Int = 32, Width:Int = 32, Debug:Boolean = false) extends Module{
 //  val io = IO(new Bundle() {
@@ -1155,33 +1159,6 @@ class DataMemory64 extends Module{
     ena := false.B
     enb := false.B
   }
-}
-
-
-object DeviceMap {
-  // 设备名称顺序决定 enable 信号的位编号（bit 0 = physiscal memory, bit 1 = serial, ...）
-  val startAddrs: Map[String, Long] = Map(
-    "physiscal memory" -> 0x80000000L,
-    "serial"           -> 0xa00003f8L,
-    "rtc"              -> 0xa0000048L,
-    "vgactrl"          -> 0xa0000100L,
-    "vmem"             -> 0xa1000000L,
-    "keyboard"         -> 0xa0000060L,
-    "audio"            -> 0xa0000200L,
-    "audio-sbuf"       -> 0xa1200000L
-  )
-  val endAddrs: Map[String, Long] = Map(
-    "physiscal memory" -> 0x8fffffffL,
-    "serial"           -> 0xa00003ffL,
-    "rtc"              -> 0xa000004fL,
-    "vgactrl"          -> 0xa0000107L,
-    "vmem"             -> 0xa10752ffL,
-    "keyboard"         -> 0xa0000063L,
-    "audio"            -> 0xa0000217L,
-    "audio-sbuf"       -> 0xa120ffffL
-  )
-  // 这是一个纯 Scala Int，可以在任意 chisel 类中以 IO_Distribute.device_num.W 的形式使用
-  val device_num: Int = startAddrs.size
 }
 
 
