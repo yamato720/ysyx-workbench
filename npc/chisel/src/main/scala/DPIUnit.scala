@@ -139,5 +139,23 @@ class MMIO_Core() extends BlackBox with HasBlackBoxResource {
 
 }
 
-
+/**
+ * DPI-C 64-bit Memory BlackBox
+ * Single-port 64-bit read/write with byte-lane write mask (wstrb).
+ * Used by AxiLiteDpiRamSlave for AXI4-Lite bus integration.
+ * Address alignment is handled in the C++ DPI functions.
+ */
+class DPIMem64 extends BlackBox with HasBlackBoxResource {
+  val io = IO(new Bundle {
+    val clk   = Input(Clock())
+    val rst   = Input(Bool())
+    val addr  = Input(UInt(32.W))
+    val din   = Input(UInt(64.W))
+    val dout  = Output(UInt(64.W))
+    val wstrb = Input(UInt(8.W))
+    val ren   = Input(Bool())
+    val wen   = Input(Bool())
+  })
+  this.addResource("/rtl/shell/DPIMem64.v")
+}
 

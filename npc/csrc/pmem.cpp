@@ -192,6 +192,47 @@ void pmem_write_b(int addr, char data) {
 #endif
 }
 
+// ============== 64-bit Interface (for AXI4-Lite bus) ==============
+
+// Read 8 bytes from aligned address. Caller sends raw addr; we align to 8.
+void pmem_read_64(int addr, uint64_t *data) {
+    uint32_t aligned = (uint32_t)addr & ~0x7u;
+#ifdef NPC_STANDALONE
+    if (aligned < PMEM_BASE || (aligned + 7) >= PMEM_BASE + PMEM_SIZE) {
+        *data = 0;
+        return;
+    }
+    memcpy(data, guest_to_host_impl(aligned), 8);
+#else
+    if (is_pmem_addr(aligned)) {
+        uint8_t *p = guest_to_host_impl(aligned);
+        if (p == nullptr) { *data = 0; return; }
+        memcpy(data, p, 8);
+    } else {
+        *data = 0;
+    }
+#endif
+}
+
+// Write 8 bytes with byte-lane mask. Caller sends raw addr; we align to 8.
+void pmem_write_64(int addr, uint64_t data, char wstrb) {
+    uint32_t aligned = (uint32_t)addr & ~0x7u;
+#ifdef NPC_STANDALONE
+    if (aligned < PMEM_BASE || (aligned + 7) >= PMEM_BASE + PMEM_SIZE) return;
+    uint8_t *p = guest_to_host_impl(aligned);
+#else
+    if (!is_pmem_addr(aligned)) return;
+    uint8_t *p = guest_to_host_impl(aligned);
+    if (p == nullptr) return;
+#endif
+    uint8_t mask = (uint8_t)wstrb;
+    for (int i = 0; i < 8; i++) {
+        if (mask & (1 << i)) {
+            p[i] = (data >> (i * 8)) & 0xFF;
+        }
+    }
+}
+
 // ============== Legacy 32-bit interface (for compatibility) ==============
 
 // Read 32-bit word (for instruction fetch)
