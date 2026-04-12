@@ -8,6 +8,16 @@ Context* __am_irq_handle(Context *c) {
   if (user_handler) {
     Event ev = {0};
     switch (c->mcause) {
+      case 11:
+        if (c->GPR1 == (uintptr_t)-1) {
+          ev.event = EVENT_YIELD;
+        } else {
+          ev.event = EVENT_SYSCALL;
+        }
+        c->mepc += 4;
+        break;
+      case 12: ev.event = EVENT_IRQ_TIMER; break; // M-mode timer interrupt
+      case 13: ev.event = EVENT_IRQ_IODEV; break; // M-mode external
       default: ev.event = EVENT_ERROR; break;
     }
 
@@ -17,6 +27,20 @@ Context* __am_irq_handle(Context *c) {
 
   return c;
 }
+
+/*user_handler实质为这个函数的指针:
+
+am-kernels/kernels/yield-os/yield-os.c:
+
+static Context *schedule(Event ev, Context *prev) {
+  current->cp = prev;
+  current = (current == &pcb[0] ? &pcb[1] : &pcb[0]);
+  return current->cp;
+}
+
+
+*/
+
 
 extern void __am_asm_trap(void);
 

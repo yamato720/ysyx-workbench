@@ -8,20 +8,20 @@
 #endif
 
 struct Context {
-  // TODO: fix the order of these members to match trap.S
-  uintptr_t mepc, mcause, gpr[NR_REGS], mstatus;
+  uintptr_t gpr[NR_REGS];
+  uintptr_t mcause, mstatus, mepc; // mcause: interrupt/exception code; mstatus: machine status; mepc: machine exception program counter
   void *pdir;
 };
 
 #ifdef __riscv_e
-#define GPR1 gpr[15] // a5
+#define GPR1 gpr[15] // a5: syscall number
 #else
-#define GPR1 gpr[17] // a7
+#define GPR1 gpr[17] // a7: syscall number
 #endif
 
-#define GPR2 gpr[0]
-#define GPR3 gpr[0]
-#define GPR4 gpr[0]
-#define GPRx gpr[0]
+#define GPR2 gpr[10] // a0: arg0
+#define GPR3 gpr[11] // a1: arg1
+#define GPR4 gpr[12] // a2: arg2
+#define GPRx gpr[10] // a0: return value
 
 #endif

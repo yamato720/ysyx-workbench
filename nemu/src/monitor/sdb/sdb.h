@@ -65,6 +65,9 @@ void record_ins_info();
 void record_device_access(paddr_t addr, int len, word_t data, bool is_write, const char *dev_name);
 void show_device_access();
 
+void record_error(word_t NO, vaddr_t epc);
+void show_error();
+
 #ifdef NPC
 extern void npc_display_mem_access();
 #endif
@@ -78,6 +81,7 @@ int get_func_count();
 
 void check_ftrace(uint64_t pc, uint32_t inst);
 void display_ftrace();
+
 
 #ifdef NPC
 extern void npc_start_trace();

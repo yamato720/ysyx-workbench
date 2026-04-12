@@ -160,6 +160,9 @@ static int cmd_info(char *args) {
   else if (strcmp(args, "w") == 0) {
     wp_display();
     return 0;
+  } else if(strcmp(args, "e") == 0) {
+    show_error();
+    return 0;
   }
   #ifdef CONFIG_TRACE
   else if (strcmp(args, "i") == 0) {

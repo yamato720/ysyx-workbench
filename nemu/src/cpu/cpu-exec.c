@@ -126,24 +126,42 @@ static void exec_once(Decode *s, vaddr_t pc) {
     isa_exec_once(&nemu_s);
     // cpu.gpr[] has been updated by isa_exec_once
 
-    bool diff = false;
+    // Collect ALL mismatches before printing anything
+    struct { const char *name; uint64_t nemu_val; uint64_t npc_val; } mm[33];
+    int nm = 0;
     for (int i = 0; i < 32; i++) {
       uint64_t npc_val = npc_get_reg(i);
       if (cpu.gpr[i] != npc_val) {
-        Log("NPC self-difftest: GPR[%d] mismatch at pc=" FMT_WORD ": NEMU=" FMT_WORD " NPC=" FMT_WORD,
-            i, pc, cpu.gpr[i], npc_val);
-        diff = true;
+        mm[nm].name     = reg_name(i);
+        mm[nm].nemu_val = cpu.gpr[i];
+        mm[nm].npc_val  = npc_val;
+        nm++;
       }
     }
     if (nemu_s.dnpc != s->dnpc) {
-      Log("NPC self-difftest: next PC mismatch at pc=" FMT_WORD ": NEMU=" FMT_WORD " NPC=" FMT_WORD,
-          pc, nemu_s.dnpc, s->dnpc);
-      diff = true;
+      mm[nm].name     = "next_pc";
+      mm[nm].nemu_val = nemu_s.dnpc;
+      mm[nm].npc_val  = s->dnpc;
+      nm++;
     }
-    if (diff) {
-      Log("NPC self-difftest FAILED at instruction #%" PRIu64 ", pc=" FMT_WORD,
-          g_nr_guest_inst + 1, pc);
-      isa_reg_display();
+
+    if (nm > 0) {
+      printf(ANSI_FG_RED
+        "╔══════════════════════════════════════════════════════════╗\n"
+        "║            NPC self-difftest FAILED                      ║\n"
+        "╚══════════════════════════════════════════════════════════╝"
+        ANSI_NONE "\n");
+      printf("  inst #" ANSI_FG_YELLOW "%" PRIu64 ANSI_NONE
+             "   pc=" ANSI_FG_YELLOW FMT_WORD ANSI_NONE "\n",
+             g_nr_guest_inst + 1, pc);
+      printf(ANSI_FG_CYAN "  %-10s  %-20s  %-20s\n" ANSI_NONE,
+             "register", "NEMU (expected)", "NPC (got)");
+      for (int i = 0; i < nm; i++) {
+        printf("  " ANSI_FG_YELLOW "%-10s" ANSI_NONE
+               "  " ANSI_FG_GREEN  "0x%016" PRIx64 ANSI_NONE
+               "  " ANSI_FG_RED    "0x%016" PRIx64 ANSI_NONE "\n",
+               mm[i].name, mm[i].nemu_val, mm[i].npc_val);
+      }
       nemu_state.state = NEMU_ABORT;
       nemu_state.halt_pc = pc;
     }

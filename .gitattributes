@@ -1,0 +1,3 @@
+[attr]binaryfile binary -diff -merge -text
+nanos-lite/build/ramdisk.img binaryfile
+navy-apps/fsimg/bin/* binaryfile

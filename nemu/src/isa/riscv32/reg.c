@@ -22,157 +22,163 @@ const char *regs[] = {
   "a6", "a7", "s2", "s3", "s4", "s5", "s6", "s7",
   "s8", "s9", "s10", "s11", "t3", "t4", "t5", "t6"
 };
-const char *other_regs[] = {
-  "pc", "mstatus", "sstatus", "mepc", "sepc", "mtvec", "stvec",
-  "mcause", "scause", "mtval", "stval", "mip", "sip", "mie", "sie"
-};
+// ---------------------------------------------------------------------------
+// CSR / other-register table
+// Each entry: { name, pointer-to-current-value, stored-value-for-diff }
+// Add a new row here when a new CSR is implemented in cpu.
+// ---------------------------------------------------------------------------
+typedef struct {
+  const char *name;
+  word_t     *cur;     // points into cpu struct (NULL = not implemented)
+  word_t      stored;  // snapshot taken at the last stored_gpr() call
+} CsrEntry;
 
-word_t other_regs_val[] = {
-  0, 0, 0, 0, 0, 0, 0,
-  0, 0, 0, 0, 0, 0, 0, 0
-};
+// Sentinel value used when NPC does not expose a getter yet
+#define CSR_NOT_IMPL ((word_t)-1ULL)
 
-word_t other_regs_val_stored[] = {
-  0, 0, 0, 0, 0, 0, 0,
-  0, 0, 0, 0, 0, 0, 0, 0
+static CsrEntry csr_table[] = {
+  // name        cur-pointer (NEMU only)   stored
+#ifndef NPC
+  { "pc",      (word_t*)&cpu.pc,       0 },
+  { "mstatus", &cpu.mstatus,           0 },
+  { "mcause",  &cpu.mcause,            0 },
+  { "mepc",    (word_t*)&cpu.mepc,     0 },
+  { "mtvec",   (word_t*)&cpu.mtvec,    0 },
+#else
+  { "pc",      NULL, 0 },
+  { "mstatus", NULL, 0 },
+  { "mcause",  NULL, 0 },
+  { "mepc",    NULL, 0 },
+  { "mtvec",   NULL, 0 },
+#endif
 };
+#define NR_CSRS ((int)(sizeof(csr_table) / sizeof(csr_table[0])))
 
+// Keep legacy arrays alive so existing callers (check_reg / isa_reg_str2val)
+// that index into other_regs_val / other_regs_val_stored still work.
+// They are now just aliases into csr_table and are updated in sync.
 word_t reg_val[32] = {0};
 
+// ---------------------------------------------------------------------------
 
+static word_t csr_read_cur(int i) {
+#ifdef NPC
+  extern uint64_t npc_get_pc();
+  if (strcmp(csr_table[i].name, "pc") == 0) return (word_t)npc_get_pc();
+  return CSR_NOT_IMPL;
+#else
+  return csr_table[i].cur ? *csr_table[i].cur : CSR_NOT_IMPL;
+#endif
+}
 
 void stored_gpr() {
 #ifndef NPC
-  for(int i = 0; i < 32; i ++) {
-    reg_val[i] = gpr(i);
-  }
-  other_regs_val_stored[0] = cpu.pc;
+  for (int i = 0; i < 32; i++) reg_val[i] = gpr(i);
 #else
-  // In NPC integration mode, get registers from NPC
-
-  for(int i = 0; i < 32; i ++) {
-    reg_val[i] = npc_get_reg(i);
-  }
-  other_regs_val_stored[0] = npc_get_pc();
-  // printf("Stored pc: 0x%08lx\n", other_regs_val_stored[0]);
+  for (int i = 0; i < 32; i++) reg_val[i] = npc_get_reg(i);
 #endif
+  for (int i = 0; i < NR_CSRS; i++) csr_table[i].stored = csr_read_cur(i);
 }
+
 void update_other_regs() {
-#ifndef NPC
-  other_regs_val[0] = cpu.pc;
-  // other_regs_val[1] = cpu.mstatus.val;
-  // other_regs_val[2] = cpu.sstatus.val;
-  // other_regs_val[3] = cpu.mepc;
-  // other_regs_val[4] = cpu.sepc;
-  // other_regs_val[5] = cpu.mtvec;
-  // other_regs_val[6] = cpu.stvec;
-  // other_regs_val[7] = cpu.mcause;
-  // other_regs_val[8] = cpu.scause;
-  // other_regs_val[9] = cpu.mtval;
-  // other_regs_val[10] = cpu.stval;
-  // other_regs_val[11] = cpu.mip.val;
-  // other_regs_val[12] = cpu.sip.val;
-  // other_regs_val[13] = cpu.mie.val;
-  // other_regs_val[14] = cpu.sie.val;
-#else
-  // In NPC integration mode, get PC from NPC
-  extern uint64_t npc_get_pc();
-  other_regs_val[0] = npc_get_pc();
-#endif
+  // nothing to do: csr_table[i].cur already points live into cpu
+  // (read on demand via csr_read_cur)
 }
 
 void check_reg(int idx, bool *success) {
-  if(idx < 32) {
-    #ifndef NPC
-    if(gpr(idx) != reg_val[idx]) {
-      *success = true;
-      return ;
-    }
-    #else
+  if (idx < 32) {
+#ifndef NPC
+    *success = (gpr(idx) != reg_val[idx]);
+#else
     extern uint64_t npc_get_reg(int idx);
-    if(npc_get_reg(idx) != reg_val[idx]) {
-      *success = true;
-      return ;
-    }
-    #endif
-    *success = false;
-    return ;
+    *success = (npc_get_reg(idx) != reg_val[idx]);
+#endif
+    return;
   }
-  else if(idx - 32 < 15) {
-    if(other_regs_val[idx - 32] != other_regs_val_stored[idx - 32]) {
-      *success = true;
-      return ;
-    }
-    *success = false;
-    return ;
-  } else {
-    *success = false;
-    return ;
+  int ci = idx - 32;
+  if (ci < NR_CSRS) {
+    word_t cur = csr_read_cur(ci);
+    *success = (cur != CSR_NOT_IMPL) && (cur != csr_table[ci].stored);
+    return;
   }
+  *success = false;
 }
 
 
+// Format one register slot into buf (up to buflen bytes).
+// Layout: "  %8s: 0x%016lx  %-22s" or "  %8s: not implemented"
+// Total slot width = 2+8+2+18+2+22+1(when register update) = 55 chars (fixed for alignment).
+#define SLOT_WIDTH 55
+static void fmt_reg_slot(char *buf, int buflen,
+                         const char *name, word_t stored,
+                         bool not_impl, bool changed, word_t cur) {
+  if (not_impl) {
+    snprintf(buf, buflen, "  %8s: not implemented", name);
+  } else {
+    char status[32];
+    if (changed)
+      snprintf(status, sizeof(status), "new: 0x%016lx", cur);
+    else
+      snprintf(status, sizeof(status), "no update");
+    snprintf(buf, buflen, "  %8s: 0x%016lx  %s", name, stored, status);
+  }
+}
+
 void isa_reg_display() {
-  for(int i = 0; i < 32; i ++) {
-    bool success = false;
-    // word_t val = isa_reg_str2val(regs[i], &success);
-    // if(!success) {
-    //   printf("Cannot find register %s\n", regs[i]);
-    //   return;
-    // }
-    check_reg(i, &success);
+  char slot[128];
+
+  // ── common registers ─────────────────────────────────────────────────
+  printf("common:\n");
+  for (int i = 0; i < 32; i++) {
 #ifndef NPC
-    word_t current_val = gpr(i);
+    word_t cur = gpr(i);
 #else
-    word_t current_val = npc_get_reg(i);
+    extern uint64_t npc_get_reg(int idx);
+    word_t cur = (word_t)npc_get_reg(i);
 #endif
-    if(success) {
-      printf("%s:0x%08lx <-- 0x%08lx\t", regs[i], reg_val[i], current_val);
-    } else {
-    printf("%s:0x%08lx\t\t\t", regs[i], current_val);}
-    if(i % 4 == 3) {
-      printf("\n");
-    }
+    fmt_reg_slot(slot, sizeof(slot), regs[i], reg_val[i],
+                 false, cur != reg_val[i], cur);
+    if (i % 2 == 0)
+      printf("%-*s", SLOT_WIDTH, slot);
+    else
+      printf("%s\n", slot);
   }
-  printf("here are other regs:\n");
-  for(int i = 0; i < 1; i ++) { // currently only pc is supported
-    bool success = false;
-    check_reg(i + 32, &success);
-    if(success) {
-      printf("%s:0x%08lx <-- 0x%08lx\t", other_regs[i], other_regs_val_stored[i], other_regs_val[i]);
-    } else {
-      printf("%s:0x%08lx\t\t\t", other_regs[i], other_regs_val[i]);
-    }
-    if(i % 3 == 2) {
-      printf("\n");
-    }
+  // 32 is even, no trailing newline needed
+
+  // ── CSR registers ────────────────────────────────────────────────────
+  printf("csr:\n");
+  for (int i = 0; i < NR_CSRS; i++) {
+    word_t cur = csr_read_cur(i);
+    bool not_impl = (cur == CSR_NOT_IMPL);
+    fmt_reg_slot(slot, sizeof(slot), csr_table[i].name, csr_table[i].stored,
+                 not_impl, !not_impl && cur != csr_table[i].stored, cur);
+    if (i % 2 == 0)
+      printf("%-*s", SLOT_WIDTH, slot);
+    else
+      printf("%s\n", slot);
   }
-  printf("\n");
+  if (NR_CSRS % 2 != 0) printf("\n");
 }
 
 word_t isa_reg_str2val(const char *s, bool *success, int *idx) {
-  
-  for(int i = 0; i < 32; i ++) {
-    if(strcmp(s, regs[i]) == 0) {
+  for (int i = 0; i < 32; i++) {
+    if (strcmp(s, regs[i]) == 0) {
       *success = true;
       *idx = i;
-      // printf("%s\n%s\n", s, regs[i]);
-      // printf("Find register %s\n", regs[i]);
-      #ifndef NPC
+#ifndef NPC
       return gpr(i);
-      #else
+#else
+      extern uint64_t npc_get_reg(int idx);
       return npc_get_reg(i);
-      #endif
+#endif
     }
   }
-  // printf("Other regs that not in registers file\n");
-  for(int i = 0; i < 15; i ++) { 
-    if(strcmp(s, other_regs[i]) == 0) {
+  for (int i = 0; i < NR_CSRS; i++) {
+    if (strcmp(s, csr_table[i].name) == 0) {
       *success = true;
       *idx = i + 32;
-      // printf("%s\n%s\n", s, other_regs[i]);
-      // printf("Find other register %s\n", other_regs[i]);
-      return other_regs_val[i];
+      word_t v = csr_read_cur(i);
+      return (v == CSR_NOT_IMPL) ? 0 : v;
     }
   }
   *success = false;
@@ -180,25 +186,25 @@ word_t isa_reg_str2val(const char *s, bool *success, int *idx) {
 }
 
 word_t isa_reg_idx2val(int idx) {
-  if(idx < 32)
-    #ifndef NPC
+  if (idx < 32) {
+#ifndef NPC
     return gpr(idx);
-    #else
+#else
+    extern uint64_t npc_get_reg(int idx);
     return npc_get_reg(idx);
-    #endif
-  else if(idx - 32 < 15)
-    return other_regs_val[idx - 32];
-  else
-    return 0;
+#endif
+  }
+  int ci = idx - 32;
+  if (ci < NR_CSRS) {
+    word_t v = csr_read_cur(ci);
+    return (v == CSR_NOT_IMPL) ? 0 : v;
+  }
+  return 0;
 }
 
-
-
-const char* isa_reg_idx2str(int idx) {
-  if(idx < 32)
-    return regs[idx];
-  else if(idx - 32 < 15)
-    return other_regs[idx - 32];
-  else
-    return "UNK";
+const char *isa_reg_idx2str(int idx) {
+  if (idx < 32) return regs[idx];
+  int ci = idx - 32;
+  if (ci < NR_CSRS) return csr_table[ci].name;
+  return "UNK";
 }

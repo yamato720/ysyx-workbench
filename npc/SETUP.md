@@ -182,6 +182,22 @@ cd ysyx-workbench
 git submodule update --init --recursive
 ```
 
+验证所有 submodule 已初始化（应有 4 条，无 `-` 前缀）：
+
+```bash
+git submodule status
+# am-kernels            (heads/ics2021)
+# fceux-am              (heads/ics2021)
+# npc/VerilogVisualization  (heads/2.1)   ← 在 npc/ 子目录下，同样会被一并拉取
+# nvboard               (heads/master)
+```
+
+> **注意**：`npc/VerilogVisualization` 虽然路径带有子目录 `npc/`，但它是在**根仓库的 `.gitmodules`** 中注册的一级 submodule，不需要额外操作，`--init --recursive` 会自动处理它。若某条显示 `-` 前缀（未初始化），可单独初始化：
+>
+> ```bash
+> git submodule update --init npc/VerilogVisualization
+> ```
+
 ---
 
 ## 第七步：验证构建

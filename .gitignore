@@ -9,4 +9,9 @@
 !Makefile
 !README.md
 !.gitignore
+!.gitattributes
 !init.sh
+fceux-am.worktrees/
+!.github/*
+!.*.md
+!document/*
