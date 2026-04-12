@@ -61,11 +61,8 @@ class CPU(Debug:Boolean = false, useDPI:Boolean = false,
   val Priv_Exec_inst = Module(new Priv_Exec(cfg = cfg))
   val CSRs_inst      = Module(new CSRs(cfg = cfg))
 
-  if(useDPI == true){
-    Metronome_inst.io.stuck := InsBuffer_inst.io.busy && Decoder_inst.io.opcode =/= "b111_0011".U
-  }else{
-    Metronome_inst.io.stuck := InsBuffer_inst.io.busy
-  }
+  // InsBuffer busy → stall the super-cycle until instruction is delivered
+  Metronome_inst.io.stuck := InsBuffer_inst.io.busy
 
   PC_Ctrl_inst.io.next_pc := mux8_3_inst.io.out
   PC_Ctrl_inst.io.pc_write_en := Metronome_inst.io.tick_pc
@@ -90,6 +87,7 @@ class CPU(Debug:Boolean = false, useDPI:Boolean = false,
   OpcodeCtrlTop_inst.io.opcode := Decoder_inst.io.opcode
   OpcodeCtrlTop_inst.io.funct7 := Decoder_inst.io.funct7
   OpcodeCtrlTop_inst.io.funct3 := Decoder_inst.io.funct3
+  OpcodeCtrlTop_inst.io.rs2    := Decoder_inst.io.rs2
 
   // ── 路径选择：普通指令 vs 特权指令 ─────────────────────────────────────
   // privSel=1: ecall / mret / csr*  → 普通访存路径全部关闭，由特权路径接管
@@ -134,7 +132,14 @@ class CPU(Debug:Boolean = false, useDPI:Boolean = false,
   // B-type 和 J-type 立即数已经在 ImmGenerator 中左移过了（末尾接 0.U(1.W)）
   // 不需要再次左移
 
-  adder2_1_forJALR.io.a := RegisterFile_inst.io.rs1_dout
+  // JALR target: rs1 must be latched at tick_idex (before tick_memwb writes rd).
+  // If rd==rs1 in JALR, tick_memwb updates rs1 before tick_pc of the next
+  // super-cycle reads rs1_dout, producing the wrong jump target.
+  val rs1_latch = RegInit(0.U(cfg.xlen.W))
+  when(Metronome_inst.io.tick_idex) {
+    rs1_latch := RegisterFile_inst.io.rs1_dout
+  }
+  adder2_1_forJALR.io.a := rs1_latch
   adder2_1_forJALR.io.b := ImmGenerator_inst.io.imm_out
 
   mux2_1_Rs2.io.sel := OpcodeCtrlTop_inst.io.aluSrc

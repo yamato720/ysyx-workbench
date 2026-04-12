@@ -521,6 +521,7 @@ class OpcodeCtrlTop(cfg: ISAConfig = ISAConfig()) extends Module {
     val opcode   = Input(UInt(7.W))
     val funct7   = Input(UInt(7.W))
     val funct3   = Input(UInt(3.W))
+    val rs2      = Input(UInt(5.W))
     val branch   = Output(Bool())
     val memRead  = Output(Bool())
     val memtoReg = Output(Bool())
@@ -579,6 +580,7 @@ class OpcodeCtrlTop(cfg: ISAConfig = ISAConfig()) extends Module {
   priv.io.opcode := io.opcode
   priv.io.funct3 := io.funct3
   priv.io.funct7 := io.funct7
+  priv.io.rs2    := io.rs2
   trapEn_w      := priv.io.trapEn
   mretEn_w      := priv.io.mretEn
   csrEn_w       := priv.io.csrEn
@@ -847,6 +849,7 @@ class OpcodeCtrl_Priv(cfg: ISAConfig) extends Module {
     val opcode  = Input(UInt(7.W))
     val funct3  = Input(UInt(3.W))
     val funct7  = Input(UInt(7.W))  // needed to distinguish ecall/mret/sret/wfi
+    val rs2     = Input(UInt(5.W))  // needed to distinguish ecall (rs2=0) / ebreak (rs2=1)
 
     // Combined operation code:
     // 0000: none
@@ -891,8 +894,13 @@ class OpcodeCtrl_Priv(cfg: ISAConfig) extends Module {
       }.elsewhen(io.funct7 === "b0001000".U) {   // sret / wfi (funct12 = 0x102 / 0x105)
         priv_op := "b0100".U                     // sret (wfi treated same for now)
       }.otherwise {                               // ecall (0x000) or ebreak (0x001)
-        priv_op := "b0001".U
-        trapEn  := true.B
+        when(io.rs2(0) === 0.U) {                 // ecall: inst[20] = 0
+          priv_op := "b0001".U
+          trapEn  := true.B
+        }.otherwise {                             // ebreak: inst[20] = 1
+          priv_op := "b0010".U
+          // ebreak does not trap; handled by simulation driver
+        }
       }
     }
 

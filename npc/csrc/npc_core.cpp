@@ -1,5 +1,6 @@
 // NPC core functions for both standalone and NEMU integration
 #include "npc_core.h"
+#include "VCPU___024root.h"
 #include <cstdio>
 #include <cstring>
 #include <verilated.h>
@@ -29,6 +30,10 @@ int inst_count = 0;
 static uint64_t last_pc = 0;
 
 bool trace_enabled = false;
+
+// mepc change monitor (enable for debugging CSR issues)
+static uint64_t last_mepc = 0;
+static bool mepc_monitor_enabled = false;
 
 #define MAX_SIM_TIME 1000000 * 29 * 2
 
@@ -278,6 +283,29 @@ void single_run() {
         if(trace_enabled)
         npc_trace->dump(sim_time++);
 #endif
+
+        // Per-clock mepc change monitor
+        if (mepc_monitor_enabled) {
+            uint64_t cur_mepc = npc_cpu->rootp->CPU__DOT__CSRs_inst__DOT__mepc;
+            if (cur_mepc != last_mepc) {
+                uint64_t r_pc = npc_cpu->rootp->CPU__DOT__Priv_Exec_inst__DOT__r_pc;
+                uint8_t r_trapEn = npc_cpu->rootp->CPU__DOT__Priv_Exec_inst__DOT__r_trapEn;
+                uint8_t io_trap_en = npc_cpu->rootp->CPU__DOT__CSRs_inst__DOT__io_trap_en;
+                uint8_t io_we = npc_cpu->rootp->CPU__DOT__CSRs_inst__DOT__io_we;
+                uint8_t r_csrEn = npc_cpu->rootp->CPU__DOT__Priv_Exec_inst__DOT__r_csrEn;
+                uint8_t io_allow = npc_cpu->rootp->CPU__DOT__Priv_Exec_inst__DOT__io_csr_allow;
+                uint16_t r_addr = npc_cpu->rootp->CPU__DOT__Priv_Exec_inst__DOT__r_addr;
+                uint64_t pc_current = npc_cpu->rootp->CPU__DOT__PC_Ctrl_inst__DOT__pc_current;
+                uint64_t trap_epc = npc_cpu->rootp->CPU__DOT__Priv_Exec_inst__DOT__r_pc;
+                uint8_t tick_memwb = npc_cpu->rootp->CPU__DOT__Metronome_inst__DOT__tick_memwb_reg;
+                printf("[mepc-CLK] inst#%d pc=0x%lx last_pc=0x%lx: mepc 0x%lx -> 0x%lx\n",
+                       inst_count, npc_cpu->io_pc, last_pc, last_mepc, cur_mepc);
+                printf("  r_trapEn=%d io_trap_en=%d tick_memwb=%d io_we=%d io_allow=%d r_csrEn=%d r_addr=0x%x\n",
+                       r_trapEn, io_trap_en, tick_memwb, io_we, io_allow, r_csrEn, r_addr);
+                printf("  r_pc(trap_epc)=0x%lx pc_current=0x%lx\n", trap_epc, pc_current);
+                last_mepc = cur_mepc;
+            }
+        }
         
         // Halt detection: if PC doesn't change for HALT_THRESHOLD cycles, assume halt
         if (npc_cpu->io_pc == last_halt_pc) {
@@ -306,6 +334,7 @@ void single_run() {
     //     npc_cpu_state.gpr[i] = get_npc_reg(i);
     // }
     last_pc = npc_cpu->io_pc;
+
     #if defined(NPC_STANDALONE) || defined(TRACE_NEMU)
     if(trace_enabled)printf("Trace dumped up to cycle %lu\n", sim_time);
     #endif

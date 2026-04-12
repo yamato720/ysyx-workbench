@@ -1072,7 +1072,7 @@ class DataMemory64 extends Module{
       wea := false.B
       web := false.B
     }.elsewhen(Cat(state, io.access_type)==="b011110".U){
-      result := Cat(0.U(32.W), result(31,0))
+      result := Cat(0.U(32.W), io.recv_data_b, io.recv_data_a, result(15,0))
       state := state + 1.U
       addra := io.addr + 4.U
       addrb := io.addr + 5.U
