@@ -146,6 +146,10 @@ class AxiLiteMasterIO(val addrWidth: Int, val dataWidth: Int) extends Bundle {
   // Slave 在 AR 握手后返回读数据和状态码
   val r  = Flipped(Decoupled(new AxiLiteReadData(dataWidth)))
 }
+// 相当于C语言的结构体套结构体，可以从外面一路访问进来
+// 其中方向已经被 Decoupled 和 Flipped 定义好了，使用时直接访问 aw.valid/aw.bits.addr 等即可
+// Decoupled 方向是可以理解为IO的输出，Flipped 是反转方向，变成输入。这样 Master 侧直接使用 AxiLiteMasterIO，而 Slave 侧则用 Flipped(AxiLiteMasterIO) 来接收信号。 
+
 
 
 // ============================================================================
@@ -193,6 +197,9 @@ object AxiLiteWstrb {
   }
 
   /** 将写数据左移到正确的 byte lane
+    *
+    * 这个输出不是直接发到 CPU 内部，它是最终送入 AXI W 通道的
+    * payload.data 字段：io.axi.w.bits.data
     *
     * @param wdata      原始写数据（来自寄存器堆 rs2）
     * @param byteOffset 地址低位偏移
@@ -249,121 +256,81 @@ object AxiLiteLoadUnpack {
 }
 
 
+
 // ============================================================================
 //  六、取指 AXI4-Lite 适配器 (IFetchAXIAdapter)
 // ============================================================================
 
-/** 取指 AXI4-Lite Master 适配器
+/** 取指 AXI4-Lite Master 适配器（PC 变化检测版）
   *
-  * 将 CPU 取指请求转换为 AXI4-Lite 读事务。
-  *
-  * 功能：
-  *   - 接收来自 PC_Ctrl / InsBuffer 的取指请求（PC 地址）
-  *   - 发起 AXI4-Lite AR 通道握手
-  *   - 等待 R 通道返回整拍数据
-  *   - 从整拍数据中提取 32-bit 指令
-  *
-  * 限制（AXI4-Lite 固有）：
-  *   - 无 burst：每条指令需要独立的一次读事务
-  *   - 最多 outstanding 1 笔读
-  *   - 若需高性能预取/cache line fill，应使用 AXI4 Full
+  * 当 PC 改变时自动发起 AXI 读事务取指。
+  * 内部缓存上一条指令的 PC；与当前 PC 不同时触发取指。
   *
   * 状态机：
-  *   sIdle   → 等待取指请求
-  *   sArWait → 已发 ARVALID，等待 ARREADY 握手
-  *   sRWait  → AR 握手完成，等待 RVALID + RDATA
-  *   sDone   → 指令已就绪，等待 CPU 取走
+  *   sIdle   → 比较 PC，若不同进入 sArWait
+  *   sArWait → 发 ARVALID，等 ARREADY
+  *   sRWait  → 等 RVALID，拿到指令后回 sIdle
   *
-  * @param addrWidth 地址位宽（默认 32）
-  * @param dataWidth 总线数据位宽（默认 64）
+  * busy 驱动 Metronome.stuck，冻结流水线至取指完成。
   */
 class IFetchAXIAdapter(addrWidth: Int = 32, dataWidth: Int = 64) extends Module {
   val io = IO(new Bundle {
-    // ── CPU 侧接口 ──
-    val pc         = Input(UInt(addrWidth.W))  // 当前需要取指的 PC 地址
-    val fetchEn    = Input(Bool())             // 取指请求使能（脉冲或电平）
-    val inst       = Output(UInt(32.W))        // 取回的 32-bit 指令
-    val instValid  = Output(Bool())            // 指令有效标志
-    val busy       = Output(Bool())            // 适配器正忙，不能接受新请求
-
-    // ── AXI4-Lite Master 端口 ──
-    val axi        = new AxiLiteMasterIO(addrWidth, dataWidth)
+    val pc   = Input(UInt(addrWidth.W))   // 当前 PC（来自 PC_Ctrl）
+    val inst = Output(UInt(32.W))         // 取回的 32-bit 指令
+    val busy = Output(Bool())             // 正忙 → 流水线暂停
+    val axi  = new AxiLiteMasterIO(addrWidth, dataWidth)
   })
 
   // ── 状态定义 ──
-  val sIdle :: sArWait :: sRWait :: sDone :: Nil = Enum(4)
+  val sIdle :: sArWait :: sRWait :: Nil = Enum(3)
   val state = RegInit(sIdle)
 
   // ── 内部寄存器 ──
-  val instReg   = RegInit(0.U(32.W))        // 锁存取回的指令
-  val pcReg     = RegInit(0.U(addrWidth.W)) // 锁存请求的 PC（用于从整拍数据中提取）
-  val respError = RegInit(false.B)          // 记录是否收到错误响应
+  val instReg  = RegInit(0x00000013.U(32.W)) // 初始 NOP (addi x0,x0,0)
+  val cachedPC = RegInit(~0.U(addrWidth.W))  // 初始值 ≠ 任何有效 PC → 强制首次取指
 
-  // ── AXI 通道默认值 ──
-  // 取指适配器是只读的，写通道永远关闭
-  io.axi.aw.valid      := false.B
-  io.axi.aw.bits.addr  := 0.U
-  io.axi.aw.bits.prot  := 0.U
-  io.axi.w.valid       := false.B
-  io.axi.w.bits.data   := 0.U
-  io.axi.w.bits.strb   := 0.U
-  io.axi.b.ready       := false.B
+  // ── PC 变化检测 ──
+  val needFetch = (io.pc =/= cachedPC)
 
-  // AR 通道默认值
-  io.axi.ar.valid      := false.B
-  io.axi.ar.bits.addr  := 0.U
-  io.axi.ar.bits.prot  := "b100".U  // prot[2]=1 表示指令访问
+  // ── CPU 侧输出 ──
+  io.inst := instReg
+  io.busy := needFetch || (state =/= sIdle)
 
-  // R 通道默认值
-  io.axi.r.ready       := false.B
-
-  // CPU 侧输出
-  io.inst      := instReg
-  io.instValid := (state === sDone)
-  io.busy      := (state =/= sIdle)
+  // ── AXI 通道默认值（只读 master，写通道永久关闭）──
+  io.axi.aw.valid     := false.B
+  io.axi.aw.bits.addr := 0.U
+  io.axi.aw.bits.prot := 0.U
+  io.axi.w.valid      := false.B
+  io.axi.w.bits.data  := 0.U
+  io.axi.w.bits.strb  := 0.U
+  io.axi.b.ready      := false.B
+  io.axi.ar.valid     := false.B
+  io.axi.ar.bits.addr := io.pc
+  io.axi.ar.bits.prot := "b100".U  // prot[2]=1 → 指令访问
+  io.axi.r.ready      := false.B
 
   // ── 状态机 ──
   switch(state) {
     is(sIdle) {
-      // 空闲态：等待 CPU 发起取指请求
-      when(io.fetchEn) {
-        pcReg := io.pc
+      when(needFetch) {
         state := sArWait
       }
     }
-
     is(sArWait) {
-      // 发送读地址：置 ARVALID，给出对齐后的地址
-      // 64-bit 总线下，地址低 3 位清零（8 字节对齐）
       io.axi.ar.valid     := true.B
-      io.axi.ar.bits.addr := pcReg & ~((dataWidth / 8 - 1).U(addrWidth.W))
-
-      // 等 slave 拉高 ARREADY，地址握手完成
+      io.axi.ar.bits.addr := io.pc
       when(io.axi.ar.fire) {
         state := sRWait
       }
     }
-
     is(sRWait) {
-      // 等待读数据：拉高 RREADY，准备接收
       io.axi.r.ready := true.B
-
       when(io.axi.r.fire) {
-        // 读数据握手完成：从整拍 RDATA 中按 PC 低位提取 32-bit 指令
-        // 对 64-bit 总线，PC[2] 决定取高 32 位还是低 32 位
-        val byteOffset = pcReg(log2Ceil(dataWidth / 8) - 1, 0)
-        val shifted    = (io.axi.r.bits.data >> (byteOffset << 3))(31, 0)
-        instReg   := shifted
-        respError := (io.axi.r.bits.resp =/= AxiLiteResp.OKAY)
-        state     := sDone
-      }
-    }
-
-    is(sDone) {
-      // 指令就绪：等待 CPU 取走后回到空闲
-      // CPU 应在读到 instValid=1 后，下一拍不再保持 fetchEn
-      when(!io.fetchEn) {
-        state := sIdle
+        // 从 64-bit RDATA 按 PC[2:0] 提取 32-bit 指令
+        val byteOffset = io.pc(log2Ceil(dataWidth / 8) - 1, 0)
+        instReg  := (io.axi.r.bits.data >> (byteOffset << 3))(31, 0)
+        cachedPC := io.pc
+        state    := sIdle
       }
     }
   }
@@ -376,97 +343,71 @@ class IFetchAXIAdapter(addrWidth: Int = 32, dataWidth: Int = 64) extends Module 
 
 /** Load/Store Unit AXI4-Lite Master 适配器
   *
-  * 将 CPU 的 load/store 请求转换为 AXI4-Lite 读写事务。
-  *
   * 功能：
-  *   - Load：发起 AR+R 读事务，对 RDATA 做拆包 + 符号/零扩展
-  *   - Store：发起 AW+W+B 写事务，自动生成 WSTRB 和对齐 WDATA
+  *   - Load：AR+R 读事务，AxiLiteLoadUnpack 拆包
+  *   - Store：AW+W+B 写事务，AxiLiteWstrb 生成 WSTRB
   *
-  * 读事务状态机：
-  *   sIdle → sReadAr → sReadR → sDone
+  * 触发：start 脉冲（tick_device && memRead/Write && !privSel）。
+  * 完成后直接回 sIdle，busy 驱动 Metronome.stuck。
   *
-  * 写事务状态机：
-  *   sIdle → sWrite → sWriteB → sDone
-  *
-  *   写事务中 AW 和 W 同时发出（同拍 valid），
-  *   分别记录各自的握手完成状态 (aw_done / w_done)，
-  *   两者都完成后才转去等 B 响应。
-  *
-  * @param addrWidth 地址位宽（默认 32）
-  * @param dataWidth 总线数据位宽（默认 64）
+  * accessType 编码在 ARPROT/AWPROT[1:0]，供 MMIO slave 提取 len。
   */
 class LSUAXIAdapter(addrWidth: Int = 32, dataWidth: Int = 64) extends Module {
   val io = IO(new Bundle {
-    // ── CPU 侧接口 ──
-    val addr       = Input(UInt(addrWidth.W))  // 访存地址（来自 ALU 计算结果）
-    val wdata      = Input(UInt(dataWidth.W))  // 写数据（来自 rs2 寄存器）
-    val accessType = Input(UInt(3.W))          // funct3：指示 load/store 类型
-    val memRead    = Input(Bool())             // load 请求
-    val memWrite   = Input(Bool())             // store 请求
-    val reqValid   = Input(Bool())             // 请求有效使能
-
-    val rdata      = Output(UInt(dataWidth.W)) // 读回数据（已拆包 + 扩展）
-    val respValid  = Output(Bool())            // 响应有效标志
-    val busy       = Output(Bool())            // 适配器正忙
-
-    // ── AXI4-Lite Master 端口 ──
+    // ── CPU 侧 ──
+    val start      = Input(Bool())             // 单周期启动脉冲
+    val addr       = Input(UInt(addrWidth.W))  // 访存地址（ALU 结果）
+    val wdata      = Input(UInt(dataWidth.W))  // 写数据（rs2）
+    val accessType = Input(UInt(3.W))          // funct3
+    val memRead    = Input(Bool())
+    val memWrite   = Input(Bool())
+    val rdata      = Output(UInt(dataWidth.W)) // 读回数据（已拆包扩展）
+    val busy       = Output(Bool())            // 正忙 → 流水线暂停
+    // ── AXI4-Lite Master ──
     val axi        = new AxiLiteMasterIO(addrWidth, dataWidth)
   })
 
   // ── 状态定义 ──
-  // 读写共用 sIdle 和 sDone，中间态各自独立
-  val sIdle    = 0.U(3.W)          // 0: 空闲
-  val sReadAr  = 1.U(3.W)        // 1: 读 — 等 AR 握手
-  val sReadR   = 2.U(3.W)        // 2: 读 — 等 R 数据
-  val sWrite   = 3.U(3.W)        // 3: 写 — 发 AW+W，等握手
-  val sWriteB  = 4.U(3.W)        // 4: 写 — 等 B 响应
-  val sDone    = 5.U(3.W)        // 5: 事务完成
+  val sIdle :: sReadAr :: sReadR :: sWrite :: sWriteB :: Nil = Enum(5)
+  val state = RegInit(sIdle)
 
-  val state = RegInit(0.U(3.W))  // sIdle = 0
+  // ── 锁存的请求参数 ──
+  val addrReg   = RegInit(0.U(addrWidth.W))
+  val wdataReg  = RegInit(0.U(dataWidth.W))
+  val accessReg = RegInit(0.U(3.W))
+  val rdataReg  = RegInit(0.U(dataWidth.W))
+  val awDone    = RegInit(false.B)
+  val wDone     = RegInit(false.B)
 
-  // ── 内部寄存器 ──
-  val addrReg    = RegInit(0.U(addrWidth.W))  // 锁存的访存地址
-  val wdataReg   = RegInit(0.U(dataWidth.W))  // 锁存的写数据
-  val accessReg  = RegInit(0.U(3.W))          // 锁存的 funct3
-  val rdataReg   = RegInit(0.U(dataWidth.W))  // 读回的拆包后数据
-  val awDone     = RegInit(false.B)           // AW 通道已握手标志
-  val wDone      = RegInit(false.B)           // W  通道已握手标志
-
-  // ── 地址对齐与偏移 ──
-  val strbWidth  = dataWidth / 8
-  val alignMask  = (~((strbWidth - 1).U(addrWidth.W))).asUInt
-  val alignedAddr = addrReg & alignMask               // 按总线宽度对齐的地址
-  val byteOffset  = addrReg(log2Ceil(strbWidth) - 1, 0) // 地址低位偏移
-
-  // ── 生成写掩码和对齐写数据 ──
-  val wstrb = AxiLiteWstrb.genStrb(accessReg, byteOffset, dataWidth)
-  val wdata = AxiLiteWstrb.alignData(wdataReg, byteOffset, dataWidth)
+  // ── 地址偏移与写掩码 ──
+  val strbWidth   = dataWidth / 8
+  val byteOffset  = addrReg(log2Ceil(strbWidth) - 1, 0)
+  // 计算 AXI W 通道所需的两个 payload 字段：WSTRB 和 对齐后的 WDATA
+  val wstrb       = AxiLiteWstrb.genStrb(accessReg, byteOffset, dataWidth)
+  val alignedData = AxiLiteWstrb.alignData(wdataReg, byteOffset, dataWidth)
 
   // ── AXI 通道默认值 ──
   io.axi.aw.valid     := false.B
-  io.axi.aw.bits.addr := alignedAddr
-  io.axi.aw.bits.prot := 0.U      // 数据访问，非特权，安全
+  io.axi.aw.bits.addr := addrReg
+  io.axi.aw.bits.prot := Cat(0.U(1.W), accessReg(1, 0))
   io.axi.w.valid      := false.B
-  io.axi.w.bits.data  := wdata
+  // 这里把计算出来的 alignedData 和 wstrb 直接塞进 AXI W 通道的 payload
+  io.axi.w.bits.data  := alignedData
   io.axi.w.bits.strb  := wstrb
   io.axi.b.ready      := false.B
   io.axi.ar.valid     := false.B
-  io.axi.ar.bits.addr := alignedAddr
-  io.axi.ar.bits.prot := 0.U
+  io.axi.ar.bits.addr := addrReg
+  io.axi.ar.bits.prot := Cat(0.U(1.W), accessReg(1, 0))
   io.axi.r.ready      := false.B
 
-  // CPU 侧输出
-  io.rdata     := rdataReg
-  io.respValid := (state === sDone)
-  io.busy      := (state =/= 0.U)  // sIdle = 0
+  // ── CPU 侧输出 ──
+  io.rdata := rdataReg
+  io.busy  := (state =/= sIdle)
 
   // ── 状态机 ──
   switch(state) {
-    // ────────────────────────────────────────────────
-    // 空闲态：根据请求类型决定进入读或写路径
-    // ────────────────────────────────────────────────
     is(sIdle) {
-      when(io.reqValid) {
+      when(io.start) {
         addrReg   := io.addr
         wdataReg  := io.wdata
         accessReg := io.accessType
@@ -480,52 +421,30 @@ class LSUAXIAdapter(addrWidth: Int = 32, dataWidth: Int = 64) extends Module {
       }
     }
 
-    // ────────────────────────────────────────────────
-    // 读路径 — 第一阶段：发送读地址
-    // ────────────────────────────────────────────────
     is(sReadAr) {
-      io.axi.ar.valid     := true.B
-      io.axi.ar.bits.addr := alignedAddr
-
+      io.axi.ar.valid := true.B
       when(io.axi.ar.fire) {
         state := sReadR
       }
     }
 
-    // ────────────────────────────────────────────────
-    // 读路径 — 第二阶段：等待读数据
-    // ────────────────────────────────────────────────
     is(sReadR) {
       io.axi.r.ready := true.B
-
       when(io.axi.r.fire) {
-        // 用 AxiLiteLoadUnpack 做拆包 + 扩展
         rdataReg := AxiLiteLoadUnpack.unpack(io.axi.r.bits.data, byteOffset, accessReg)
-        state    := sDone
+        state    := sIdle
       }
     }
 
-    // ────────────────────────────────────────────────
-    // 写路径 — 发送 AW + W（可并行握手）
-    // ────────────────────────────────────────────────
     is(sWrite) {
-      // AW 通道：如果还没握手完成，就保持 valid
       when(!awDone) {
         io.axi.aw.valid := true.B
-        when(io.axi.aw.fire) {
-          awDone := true.B
-        }
+        when(io.axi.aw.fire) { awDone := true.B }
       }
-
-      // W 通道：如果还没握手完成，就保持 valid
       when(!wDone) {
         io.axi.w.valid := true.B
-        when(io.axi.w.fire) {
-          wDone := true.B
-        }
+        when(io.axi.w.fire) { wDone := true.B }
       }
-
-      // 当 AW 和 W 都完成握手（包括本拍刚完成的），转去等 B 响应
       val awComplete = awDone || io.axi.aw.fire
       val wComplete  = wDone  || io.axi.w.fire
       when(awComplete && wComplete) {
@@ -533,24 +452,10 @@ class LSUAXIAdapter(addrWidth: Int = 32, dataWidth: Int = 64) extends Module {
       }
     }
 
-    // ────────────────────────────────────────────────
-    // 写路径 — 等待写响应
-    // ────────────────────────────────────────────────
     is(sWriteB) {
       io.axi.b.ready := true.B
-
       when(io.axi.b.fire) {
-        // 可在此检查 io.axi.b.bits.resp 判断写是否成功
-        state := sDone
-      }
-    }
-
-    // ────────────────────────────────────────────────
-    // 完成态：等待 CPU 撤销请求后回到空闲
-    // ────────────────────────────────────────────────
-    is(sDone) {
-      when(!io.reqValid) {
-        state := 0.U  // sIdle
+        state := sIdle
       }
     }
   }
@@ -558,152 +463,217 @@ class LSUAXIAdapter(addrWidth: Int = 32, dataWidth: Int = 64) extends Module {
 
 
 // ============================================================================
-//  八、AXI4-Lite RAM Slave
+//  八、AXI4-Lite DPI RAM Slave (AxiLiteDpiRamSlave)
 // ============================================================================
 
-/** AXI4-Lite RAM Slave
+/** AXI4-Lite DPI 物理内存 Slave
   *
-  * 简单的单周期 AXI4-Lite 内存 slave，内部使用 Chisel SyncReadMem。
-  * 用于替代当前的 PhysicalMemory / dataCacheL1 / insCacheL1 字节口架构。
+  * 封装 DPIMem64 BlackBox，提供 AXI4-Lite 从设备接口。
+  * DPI-C 函数 pmem_read_64 / pmem_write_64 访问 NEMU 共享内存。
   *
-  * 特性：
-  *   - 支持 AXI4-Lite 读写事务
-  *   - 写操作按 WSTRB 做字节级写入
-  *   - 读操作返回整拍数据（master 侧自行拆包）
-  *   - 单周期响应（组合逻辑 ready 或 1-cycle 延迟）
+  * 读事务：sIdle → sRResp（1 拍 DPI 读延迟）
+  * 写事务：sIdle → sWResp（AW+W 都收到后写入）
   *
-  * 状态机（简化实现）：
-  *   读：sIdle → sRRead → sRResp
-  *   写：sIdle → (接收 AW+W) → sWResp
-  *
-  * @param addrWidth   地址位宽
-  * @param dataWidth   数据位宽
-  * @param memSizeBytes 内存大小（字节数），决定 SyncReadMem 的深度
+  * 地址对齐由 DPI-C 侧完成（pmem_read_64 内部 addr & ~7）。
   */
-class AxiLiteRamSlave(
-  addrWidth: Int = 32,
-  dataWidth: Int = 64,
-  memSizeBytes: Int = 128 * 1024 * 1024  // 默认 128 MB（匹配当前 pmem）
-) extends Module {
+class AxiLiteDpiRamSlave(addrWidth: Int = 32, dataWidth: Int = 64) extends Module {
   val io = IO(new Bundle {
     val axi = Flipped(new AxiLiteMasterIO(addrWidth, dataWidth))
   })
 
-  val bytesPerBeat = dataWidth / 8                     // 每拍字节数（64-bit → 8）
-  val depth        = memSizeBytes / bytesPerBeat        // SyncReadMem 深度（以 beat 为单位）
-
-  // ── 内部存储 ──
-  // SyncReadMem：同步读（读地址注册后下一拍出数据），组合写
-  // 每个条目是一个 Vec[UInt(8.W)]，支持按字节写入（对应 WSTRB）
-  val mem = SyncReadMem(depth, Vec(bytesPerBeat, UInt(8.W)))
+  val dpiMem = Module(new DPIMem64)
+  dpiMem.io.clk := clock
+  dpiMem.io.rst := reset.asBool
 
   // ── 状态定义 ──
   val sIdle :: sRResp :: sWResp :: Nil = Enum(3)
   val state = RegInit(sIdle)
 
-  // ── 内部寄存器 ──
-  val rdata   = RegInit(VecInit(Seq.fill(bytesPerBeat)(0.U(8.W)))) // 读回的数据
-  val awAddr  = RegInit(0.U(addrWidth.W))   // 锁存的写地址
-  val awValid = RegInit(false.B)            // AW 已接收但尚未处理
-  val wData   = RegInit(VecInit(Seq.fill(bytesPerBeat)(0.U(8.W)))) // 锁存的写数据
-  val wStrb   = RegInit(0.U(bytesPerBeat.W)) // 锁存的写掩码
-  val wValid  = RegInit(false.B)             // W  已接收但尚未处理
+  // ── 写通道锁存 ──
+  val awAddr = RegInit(0.U(addrWidth.W))
+  val awDone = RegInit(false.B)
+  val wData  = RegInit(0.U(dataWidth.W))
+  val wStrb  = RegInit(0.U(8.W))
+  val wDone  = RegInit(false.B)
 
-  // ── 默认输出 ──
+  // ── DPIMem64 默认值 ──
+  dpiMem.io.ren   := false.B
+  dpiMem.io.wen   := false.B
+  dpiMem.io.addr  := 0.U
+  dpiMem.io.din   := 0.U
+  dpiMem.io.wstrb := 0.U
+
+  // ── AXI 默认输出 ──
+  io.axi.ar.ready     := false.B
   io.axi.aw.ready     := false.B
   io.axi.w.ready      := false.B
+  io.axi.r.valid      := false.B
+  io.axi.r.bits.data  := dpiMem.io.dout
+  io.axi.r.bits.resp  := AxiLiteResp.OKAY
   io.axi.b.valid      := false.B
   io.axi.b.bits.resp  := AxiLiteResp.OKAY
-  io.axi.ar.ready     := false.B
-  io.axi.r.valid      := false.B
-  io.axi.r.bits.data  := Cat(rdata.reverse)  // Vec[UInt(8.W)] → 拼成整拍 UInt
-  io.axi.r.bits.resp  := AxiLiteResp.OKAY
-
-  // ── 地址转换辅助函数 ──
-  // 将字节地址转换为 SyncReadMem 的索引（除以 bytesPerBeat）
-  def addrToIdx(addr: UInt): UInt = (addr >> log2Ceil(bytesPerBeat).U).asUInt
 
   // ── 状态机 ──
   switch(state) {
     is(sIdle) {
-      // ── 接受读地址 ──
-      // 读优先：如果 AR 和 AW 同时到来，先处理读
+      // 读优先
       io.axi.ar.ready := true.B
-
       when(io.axi.ar.fire) {
-        // SyncReadMem 的读在此时注册地址，下一拍输出数据
-        rdata := mem.read(addrToIdx(io.axi.ar.bits.addr))
+        dpiMem.io.ren  := true.B
+        dpiMem.io.addr := io.axi.ar.bits.addr
         state := sRResp
       }.otherwise {
-        // ── 接受写地址和写数据 ──
-        // AW 和 W 可以分别到达，也可以同拍到达
-        io.axi.aw.ready := !awValid  // 还没收到 AW 时才 ready
-        io.axi.w.ready  := !wValid   // 还没收到 W  时才 ready
-
-        when(io.axi.aw.fire) {
-          awAddr  := io.axi.aw.bits.addr
-          awValid := true.B
-        }
-        when(io.axi.w.fire) {
-          for (i <- 0 until bytesPerBeat) {
-            wData(i) := io.axi.w.bits.data(i * 8 + 7, i * 8)
-          }
-          wStrb  := io.axi.w.bits.strb
-          wValid := true.B
-        }
-
-        // 当 AW 和 W 都已收到（包括本拍刚收到），执行写入
-        val awReady = awValid || io.axi.aw.fire
-        val wReady  = wValid  || io.axi.w.fire
-        when(awReady && wReady) {
-          // 使用最新的地址和数据（可能来自本拍 fire，也可能来自寄存器）
-          val finalAddr = Mux(io.axi.aw.fire, io.axi.aw.bits.addr, awAddr)
-          val finalStrb = Mux(io.axi.w.fire, io.axi.w.bits.strb, wStrb)
-          val finalData = Wire(Vec(bytesPerBeat, UInt(8.W)))
-          for (i <- 0 until bytesPerBeat) {
-            finalData(i) := Mux(io.axi.w.fire,
-              io.axi.w.bits.data(i * 8 + 7, i * 8),
-              wData(i))
-          }
-
-          // 按 WSTRB 做字节级写入
-          val writeMask = VecInit((0 until bytesPerBeat).map(i => finalStrb(i)))
-          mem.write(addrToIdx(finalAddr), finalData, writeMask)
-
-          // 清空锁存状态，准备返回 B 响应
-          awValid := false.B
-          wValid  := false.B
-          state   := sWResp
+        io.axi.aw.ready := !awDone
+        io.axi.w.ready  := !wDone
+        when(io.axi.aw.fire) { awAddr := io.axi.aw.bits.addr; awDone := true.B }
+        when(io.axi.w.fire)  { wData  := io.axi.w.bits.data; wStrb := io.axi.w.bits.strb; wDone := true.B }
+        val awComplete = awDone || io.axi.aw.fire
+        val wComplete  = wDone  || io.axi.w.fire
+        when(awComplete && wComplete) {
+          dpiMem.io.wen   := true.B
+          dpiMem.io.addr  := Mux(io.axi.aw.fire, io.axi.aw.bits.addr, awAddr)
+          dpiMem.io.din   := Mux(io.axi.w.fire,  io.axi.w.bits.data,  wData)
+          dpiMem.io.wstrb := Mux(io.axi.w.fire,  io.axi.w.bits.strb,  wStrb)
+          awDone := false.B
+          wDone  := false.B
+          state  := sWResp
         }
       }
     }
 
     is(sRResp) {
-      // 读响应：SyncReadMem 数据已就绪，发送 R 通道
-      io.axi.r.valid     := true.B
-      io.axi.r.bits.data := Cat(rdata.reverse)
-      io.axi.r.bits.resp := AxiLiteResp.OKAY
-
-      when(io.axi.r.fire) {
-        state := sIdle
-      }
+      io.axi.r.valid := true.B
+      when(io.axi.r.fire) { state := sIdle }
     }
 
     is(sWResp) {
-      // 写响应：发送 B 通道
-      io.axi.b.valid     := true.B
-      io.axi.b.bits.resp := AxiLiteResp.OKAY
-
-      when(io.axi.b.fire) {
-        state := sIdle
-      }
+      io.axi.b.valid := true.B
+      when(io.axi.b.fire) { state := sIdle }
     }
   }
 }
 
 
 // ============================================================================
-//  九、AXI4-Lite 地址译码交叉开关 (AxiLiteCrossbar)
+//  九、AXI4-Lite DPI MMIO Slave (AxiLiteDpiMmioSlave)
+// ============================================================================
+
+/** AXI4-Lite DPI MMIO Slave
+  *
+  * 封装 MMIO_Core BlackBox，提供 AXI4-Lite 从设备接口。
+  * DPI-C 函数 mmio_read_impl / mmio_write_impl。
+  *
+  * len 来源：
+  *   - 读事务：ARPROT[1:0]（LSU 编码的 accessType）→ 换算
+  *   - 写事务：PopCount(WSTRB) → 换算
+  *
+  * 数据对齐：
+  *   - 读：MMIO_Core 返回低字节数据，slave 左移到正确 byte lane
+  *   - 写：AXI WDATA 在正确 byte lane，slave 右移到低字节给 MMIO_Core
+  */
+class AxiLiteDpiMmioSlave(addrWidth: Int = 32, dataWidth: Int = 64) extends Module {
+  val io = IO(new Bundle {
+    val axi = Flipped(new AxiLiteMasterIO(addrWidth, dataWidth))
+  })
+
+  val mmioCore = Module(new MMIO_Core())
+  mmioCore.io.clk := clock
+  mmioCore.io.rst := reset.asBool
+
+  // ── 状态定义 ──
+  val sIdle :: sRResp :: sWResp :: Nil = Enum(3)
+  val state = RegInit(sIdle)
+
+  // ── 锁存 ──
+  val addrReg = RegInit(0.U(addrWidth.W))
+  val awAddr  = RegInit(0.U(addrWidth.W))
+  val awDone  = RegInit(false.B)
+  val wData   = RegInit(0.U(dataWidth.W))
+  val wStrb   = RegInit(0.U(8.W))
+  val wDone   = RegInit(false.B)
+
+  // ARPROT[1:0] → len 换算
+  def protToLen(prot: UInt): UInt = MuxLookup(prot(1, 0), 1.U(5.W))(Seq(
+    "b00".U -> 1.U,  "b01".U -> 2.U,  "b10".U -> 4.U,  "b11".U -> 8.U
+  ))
+
+  // PopCount(WSTRB) → len 换算
+  def strbToLen(strb: UInt): UInt = MuxLookup(PopCount(strb), 1.U(5.W))(Seq(
+    1.U -> 1.U,  2.U -> 2.U,  4.U -> 4.U,  8.U -> 8.U
+  ))
+
+  // ── MMIO_Core 默认值 ──
+  mmioCore.io.re   := false.B
+  mmioCore.io.we   := false.B
+  mmioCore.io.addr := 0.U
+  mmioCore.io.din  := 0.U
+  mmioCore.io.len  := 0.U
+
+  // ── AXI 默认输出 ──
+  io.axi.ar.ready     := false.B
+  io.axi.aw.ready     := false.B
+  io.axi.w.ready      := false.B
+  io.axi.r.valid      := false.B
+  io.axi.r.bits.data  := 0.U
+  io.axi.r.bits.resp  := AxiLiteResp.OKAY
+  io.axi.b.valid      := false.B
+  io.axi.b.bits.resp  := AxiLiteResp.OKAY
+
+  // ── 状态机 ──
+  switch(state) {
+    is(sIdle) {
+      io.axi.ar.ready := true.B
+      when(io.axi.ar.fire) {
+        addrReg := io.axi.ar.bits.addr
+        // 发起 MMIO 读
+        mmioCore.io.re   := true.B
+        mmioCore.io.addr := io.axi.ar.bits.addr
+        mmioCore.io.len  := protToLen(io.axi.ar.bits.prot)
+        state := sRResp
+      }.otherwise {
+        io.axi.aw.ready := !awDone
+        io.axi.w.ready  := !wDone
+        when(io.axi.aw.fire) { awAddr := io.axi.aw.bits.addr; awDone := true.B }
+        when(io.axi.w.fire)  { wData  := io.axi.w.bits.data; wStrb := io.axi.w.bits.strb; wDone := true.B }
+
+        val awComplete = awDone || io.axi.aw.fire
+        val wComplete  = wDone  || io.axi.w.fire
+        when(awComplete && wComplete) {
+          val finalAddr = Mux(io.axi.aw.fire, io.axi.aw.bits.addr, awAddr)
+          val finalData = Mux(io.axi.w.fire,  io.axi.w.bits.data,  wData)
+          val finalStrb = Mux(io.axi.w.fire,  io.axi.w.bits.strb,  wStrb)
+          // WDATA 在 byte lane 位置 → 右移到低字节给 MMIO_Core
+          val byteOff     = finalAddr(2, 0)
+          val shiftedData = (finalData >> (byteOff << 3))(dataWidth - 1, 0)
+          mmioCore.io.we   := true.B
+          mmioCore.io.addr := finalAddr
+          mmioCore.io.din  := shiftedData
+          mmioCore.io.len  := strbToLen(finalStrb)
+          awDone := false.B
+          wDone  := false.B
+          state  := sWResp
+        }
+      }
+    }
+
+    is(sRResp) {
+      // MMIO_Core dout 在低字节 → 左移到正确 byte lane
+      val byteOff = addrReg(2, 0)
+      io.axi.r.valid     := true.B
+      io.axi.r.bits.data := (mmioCore.io.dout << (byteOff << 3))(dataWidth - 1, 0)
+      when(io.axi.r.fire) { state := sIdle }
+    }
+
+    is(sWResp) {
+      io.axi.b.valid := true.B
+      when(io.axi.b.fire) { state := sIdle }
+    }
+  }
+}
+
+
+// ============================================================================
+//  十、AXI4-Lite 地址译码交叉开关 (AxiLiteCrossbar)
 // ============================================================================
 
 /** AXI4-Lite 从设备地址区域描述
@@ -719,131 +689,98 @@ case class AxiLiteSlaveRange(baseAddr: Long, size: Long)
 
 /** AXI4-Lite 1-to-N 地址译码交叉开关
   *
-  * 替代当前的 IO_Distribute 模块。
-  *
   * 功能：
   *   - 接收 1 个 master 的 AXI4-Lite 请求
   *   - 根据地址范围路由到 N 个 slave 之一
   *   - 将被选中 slave 的响应返回给 master
   *   - 地址未命中任何 slave 时返回 DECERR
   *
-  * 当前 NPC 的地址空间可直接复用：
-  *   | 区域            | 地址范围                    |
-  *   | physical memory | 0x8000_0000 - 0x8FFF_FFFF   |
-  *   | serial          | 0xA000_03F8 - 0xA000_03FF   |
-  *   | rtc             | 0xA000_0048 - 0xA000_004F   |
-  *   | vgactrl         | 0xA000_0100 - 0xA000_0107   |
-  *   | vmem            | 0xA100_0000 - 0xA107_52FF   |
-  *   | keyboard        | 0xA000_0060 - 0xA000_0063   |
-  *   | audio           | 0xA000_0200 - 0xA000_0217   |
-  *   | audio-sbuf      | 0xA120_0000 - 0xA120_FFFF   |
-  *
-  * @param addrWidth   地址位宽
-  * @param dataWidth   数据位宽
-  * @param slaveRanges 各 slave 的地址范围列表，顺序对应 slaves 端口顺序
+  * @param addrWidth 地址位宽
+  * @param dataWidth 数据位宽
+  * @param ranges    每个 slave 的地址范围（有序）
   */
 class AxiLiteCrossbar(
-  addrWidth: Int,
-  dataWidth: Int,
-  slaveRanges: Seq[AxiLiteSlaveRange]
+    addrWidth: Int,
+    dataWidth: Int,
+    ranges:    Seq[AxiLiteSlaveRange]
 ) extends Module {
-  val numSlaves = slaveRanges.length
+
+  val numSlaves = ranges.length
 
   val io = IO(new Bundle {
-    // ── Master 侧（接收来自 CPU 的请求）──
-    // 使用 Flipped：因为 crossbar 对 master 来说是 slave 角色
     val master = Flipped(new AxiLiteMasterIO(addrWidth, dataWidth))
-
-    // ── Slave 侧（转发到各个从设备）──
-    // 对 slave 来说，crossbar 是 master 角色
     val slaves = Vec(numSlaves, new AxiLiteMasterIO(addrWidth, dataWidth))
   })
 
-  // ── 地址匹配函数 ──
-  // 检查给定地址是否落在某个 slave 的地址范围内
+  // ── 地址译码函数 ──
   def addrMatch(addr: UInt, range: AxiLiteSlaveRange): Bool = {
     (addr >= range.baseAddr.U) && (addr < (range.baseAddr + range.size).U)
   }
 
-  // ── 读地址译码 ──
-  // 根据 AR 通道的地址确定目标 slave
-  val arSel = VecInit(slaveRanges.map(r => addrMatch(io.master.ar.bits.addr, r)))
-  val arSelIdx = OHToUInt(arSel)
-  val arHit = arSel.asUInt.orR  // 是否命中任何 slave
+  // ──────────────────────────────────────────────────
+  //  AR 通道路由
+  // ──────────────────────────────────────────────────
+  val arSel = VecInit(ranges.map(r => addrMatch(io.master.ar.bits.addr, r)))
+  val arHit = arSel.asUInt.orR
 
-  // ── 写地址译码 ──
-  // 根据 AW 通道的地址确定目标 slave
-  val awSel = VecInit(slaveRanges.map(r => addrMatch(io.master.aw.bits.addr, r)))
-  val awSelIdx = OHToUInt(awSel)
-  val awHit = awSel.asUInt.orR
+  // 锁存 AR 路由结果，用于 R 通道回送
+  val rSelReg = RegInit(0.U(log2Ceil(numSlaves + 1).W))
+  val rHitReg = RegInit(false.B)
 
-  // ── 锁存选中的 slave 索引 ──
-  // 在事务期间保持 slave 选择不变（防止地址变化导致路由切换）
-  val rSelReg  = RegInit(0.U(log2Ceil(numSlaves + 1).W))
-  val rHitReg  = RegInit(false.B)
-  val bSelReg  = RegInit(0.U(log2Ceil(numSlaves + 1).W))
-  val bHitReg  = RegInit(false.B)
-
-  // 读事务：AR 握手时锁存
-  when(io.master.ar.fire) {
-    rSelReg := arSelIdx
-    rHitReg := arHit
-  }
-
-  // 写事务：AW 握手时锁存
-  when(io.master.aw.fire) {
-    bSelReg := awSelIdx
-    bHitReg := awHit
-  }
-
-  // ── 默认：所有 slave 端口无效 ──
-  for (i <- 0 until numSlaves) {
-    io.slaves(i).ar.valid     := false.B
-    io.slaves(i).ar.bits      := io.master.ar.bits
-    io.slaves(i).aw.valid     := false.B
-    io.slaves(i).aw.bits      := io.master.aw.bits
-    io.slaves(i).w.valid      := false.B
-    io.slaves(i).w.bits       := io.master.w.bits
-    io.slaves(i).b.ready      := false.B
-    io.slaves(i).r.ready      := false.B
-  }
-
-  // ── AR 通道路由 ──
-  // 将 master 的 AR 请求转发到匹配的 slave
   io.master.ar.ready := false.B
   for (i <- 0 until numSlaves) {
+    io.slaves(i).ar.valid     := false.B
+    io.slaves(i).ar.bits.addr := io.master.ar.bits.addr
+    io.slaves(i).ar.bits.prot := io.master.ar.bits.prot
     when(arSel(i)) {
       io.slaves(i).ar.valid := io.master.ar.valid
       io.master.ar.ready    := io.slaves(i).ar.ready
     }
   }
-  // 地址未命中：直接接受请求（后续返回 DECERR）
+  // 地址未命中：直接吞掉请求
   when(!arHit && io.master.ar.valid) {
     io.master.ar.ready := true.B
   }
+  // 锁存路由供 R 通道使用
+  when(io.master.ar.fire) {
+    rHitReg := arHit
+    rSelReg := OHToUInt(arSel.asUInt)
+  }
 
-  // ── R 通道路由 ──
-  // 将选中 slave 的 R 响应返回给 master
+  // ──────────────────────────────────────────────────
+  //  R 通道路由（返回方向）
+  // ──────────────────────────────────────────────────
   io.master.r.valid     := false.B
   io.master.r.bits.data := 0.U
-  io.master.r.bits.resp := AxiLiteResp.DECERR  // 默认 DECERR
+  io.master.r.bits.resp := AxiLiteResp.OKAY
   for (i <- 0 until numSlaves) {
+    io.slaves(i).r.ready := false.B
     when(rSelReg === i.U && rHitReg) {
       io.master.r.valid     := io.slaves(i).r.valid
       io.master.r.bits      := io.slaves(i).r.bits
       io.slaves(i).r.ready  := io.master.r.ready
     }
   }
-  // 未命中时：生成假的 R 响应（data=0, resp=DECERR）
   when(!rHitReg) {
     io.master.r.valid     := true.B
-    io.master.r.bits.data := 0.U
     io.master.r.bits.resp := AxiLiteResp.DECERR
   }
 
-  // ── AW 通道路由 ──
+  // ──────────────────────────────────────────────────
+  //  AW 通道路由
+  // ──────────────────────────────────────────────────
+  val awSel = VecInit(ranges.map(r => addrMatch(io.master.aw.bits.addr, r)))
+  val awHit = awSel.asUInt.orR
+
+  // 锁存 AW 路由结果，用于 B 通道回送
+  val bSelReg = RegInit(0.U(log2Ceil(numSlaves + 1).W))
+  val bHitReg = RegInit(false.B)
+
   io.master.aw.ready := false.B
   for (i <- 0 until numSlaves) {
+    io.slaves(i).aw.valid     := false.B
+    io.slaves(i).aw.bits.addr := io.master.aw.bits.addr
+    io.slaves(i).aw.bits.prot := io.master.aw.bits.prot
     when(awSel(i)) {
       io.slaves(i).aw.valid := io.master.aw.valid
       io.master.aw.ready    := io.slaves(i).aw.ready
@@ -852,11 +789,19 @@ class AxiLiteCrossbar(
   when(!awHit && io.master.aw.valid) {
     io.master.aw.ready := true.B
   }
+  when(io.master.aw.fire) {
+    bHitReg := awHit
+    bSelReg := OHToUInt(awSel.asUInt)
+  }
 
-  // ── W 通道路由 ──
-  // W 通道使用 AW 译码结果（写数据跟随写地址路由）
+  // ──────────────────────────────────────────────────
+  //  W 通道路由（使用 AW 译码结果 — LSU 同时发送 AW+W）
+  // ──────────────────────────────────────────────────
   io.master.w.ready := false.B
   for (i <- 0 until numSlaves) {
+    io.slaves(i).w.valid     := false.B
+    io.slaves(i).w.bits.data := io.master.w.bits.data
+    io.slaves(i).w.bits.strb := io.master.w.bits.strb
     when(awSel(i)) {
       io.slaves(i).w.valid := io.master.w.valid
       io.master.w.ready    := io.slaves(i).w.ready
@@ -866,10 +811,13 @@ class AxiLiteCrossbar(
     io.master.w.ready := true.B
   }
 
-  // ── B 通道路由 ──
+  // ──────────────────────────────────────────────────
+  //  B 通道路由（返回方向）
+  // ──────────────────────────────────────────────────
   io.master.b.valid     := false.B
-  io.master.b.bits.resp := AxiLiteResp.DECERR
+  io.master.b.bits.resp := AxiLiteResp.OKAY
   for (i <- 0 until numSlaves) {
+    io.slaves(i).b.ready := false.B
     when(bSelReg === i.U && bHitReg) {
       io.master.b.valid     := io.slaves(i).b.valid
       io.master.b.bits      := io.slaves(i).b.bits
