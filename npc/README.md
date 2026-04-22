@@ -283,6 +283,17 @@ ls out/chisel-cpu/
 | `minirv-nemu` + `run-npc` | 通过 NEMU 配置运行 NPC | Chisel CPU |
 | `riscv64-nemu` | 64位 RISC-V NEMU | NEMU 模拟器 |
 
+## AXI4-Lite 相关文档
+
+当前 NPC 的 AXI4-Lite 说明分成三类，建议按下面顺序阅读：
+
+1. `../docs/NPC_AXI4_LITE_TOP_INTEGRATION.md`
+   面向当前实现的总览，重点讲 top 接线、Crossbar 地址分发、Chisel 语法
+2. `AXI4_LITE_CHANGE_ANALYSIS.md`
+   重点讲接入 AXI4-Lite 后结构发生了什么变化
+3. `AXI4_LITE_MIGRATION.md`
+   重点讲迁移设计思路，以及为什么这样改
+
 ## DiffTest 支持
 
 DiffTest 可以让 NPC 与 NEMU 进行对比验证，每执行一条指令就比较两者的状态。

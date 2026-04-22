@@ -146,6 +146,10 @@ class AxiLiteMasterIO(val addrWidth: Int, val dataWidth: Int) extends Bundle {
   // Slave 在 AR 握手后返回读数据和状态码
   val r  = Flipped(Decoupled(new AxiLiteReadData(dataWidth)))
 }
+// 相当于C语言的结构体套结构体，可以从外面一路访问进来
+// 其中方向已经被 Decoupled 和 Flipped 定义好了，使用时直接访问 aw.valid/aw.bits.addr 等即可
+// Decoupled 方向是可以理解为IO的输出，Flipped 是反转方向，变成输入。这样 Master 侧直接使用 AxiLiteMasterIO，而 Slave 侧则用 Flipped(AxiLiteMasterIO) 来接收信号。 
+
 
 
 // ============================================================================
@@ -193,6 +197,9 @@ object AxiLiteWstrb {
   }
 
   /** 将写数据左移到正确的 byte lane
+    *
+    * 这个输出不是直接发到 CPU 内部，它是最终送入 AXI W 通道的
+    * payload.data 字段：io.axi.w.bits.data
     *
     * @param wdata      原始写数据（来自寄存器堆 rs2）
     * @param byteOffset 地址低位偏移
@@ -375,6 +382,7 @@ class LSUAXIAdapter(addrWidth: Int = 32, dataWidth: Int = 64) extends Module {
   // ── 地址偏移与写掩码 ──
   val strbWidth   = dataWidth / 8
   val byteOffset  = addrReg(log2Ceil(strbWidth) - 1, 0)
+  // 计算 AXI W 通道所需的两个 payload 字段：WSTRB 和 对齐后的 WDATA
   val wstrb       = AxiLiteWstrb.genStrb(accessReg, byteOffset, dataWidth)
   val alignedData = AxiLiteWstrb.alignData(wdataReg, byteOffset, dataWidth)
 
@@ -383,6 +391,7 @@ class LSUAXIAdapter(addrWidth: Int = 32, dataWidth: Int = 64) extends Module {
   io.axi.aw.bits.addr := addrReg
   io.axi.aw.bits.prot := Cat(0.U(1.W), accessReg(1, 0))
   io.axi.w.valid      := false.B
+  // 这里把计算出来的 alignedData 和 wstrb 直接塞进 AXI W 通道的 payload
   io.axi.w.bits.data  := alignedData
   io.axi.w.bits.strb  := wstrb
   io.axi.b.ready      := false.B

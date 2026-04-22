@@ -14,3 +14,6 @@
 	path = nvboard
 	url = git@github.com:yamato720/nvboard.git
 	branch = master
+[submodule "ysyxSoC"]
+	path = ysyxSoC
+	url = git@github.com:yamato720/ysyxSoC.git
