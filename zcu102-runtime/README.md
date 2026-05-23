@@ -224,6 +224,16 @@ zcu102-runtime/
     include/                   PS runtime 头文件
     src/                       PS runtime C helper
     examples/                  bring-up 示例
+
+本地任务入口：
+
+```bash
+make launcher                 # 查看启动器可选任务
+make launch                   # 同上
+make launch TASK=check        # 执行单个任务
+make launch TASK=all          # 执行 alias
+./tools/run.py list           # 直接使用 Python 启动器
+```
 ```
 
 ---

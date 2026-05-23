@@ -1,7 +1,13 @@
 NPC_DIR ?= ../npc
 GENERATED_DIR := generated
 
-.PHONY: chisel selftest clean-generated lint-sw lint-rtl lint-selftest check check-selftest
+.PHONY: chisel selftest launcher launch clean-generated lint-sw lint-rtl lint-selftest check check-selftest
+
+launcher:
+	@./tools/run.py list
+
+launch:
+	@./tools/run.py $(if $(TASK),$(TASK),list)
 
 chisel:
 	@echo "=== Generating ZCU102 NPC debugger from Chisel ==="
