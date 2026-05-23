@@ -1,15 +1,15 @@
 [submodule "npc/VerilogVisualization"]
 	path = npc/VerilogVisualization
 	url = git@github.com:yamato720/VerilogVisualization.git
-	branch = 2.1
+	branch = main
 [submodule "am-kernels"]
 	path = am-kernels
 	url = git@github.com:yamato720/am-kernels.git
-	branch = ics2021
+	branch = master
 [submodule "fceux-am"]
 	path = fceux-am
 	url = git@github.com:yamato720/fceux-am.git
-	branch = ics2021
+	branch = master
 [submodule "nvboard"]
 	path = nvboard
 	url = git@github.com:yamato720/nvboard.git
@@ -17,3 +17,4 @@
 [submodule "ysyxSoC"]
 	path = ysyxSoC
 	url = git@github.com:yamato720/ysyxSoC.git
+	branch = ysyx6
