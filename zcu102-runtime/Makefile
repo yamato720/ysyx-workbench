@@ -4,7 +4,7 @@ GENERATED_DIR := generated
 .PHONY: chisel selftest launcher launch clean-generated lint-sw lint-rtl lint-selftest check check-selftest
 
 launcher:
-	@./tools/run.py list
+	@./tools/run.py --interactive
 
 launch:
 	@./tools/run.py $(if $(TASK),$(TASK),list)

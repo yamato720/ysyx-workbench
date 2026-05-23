@@ -65,6 +65,87 @@ def print_tasks() -> None:
     print("  ./tools/run.py all")
 
 
+def menu_items() -> list[tuple[str, str, str]]:
+    items: list[tuple[str, str, str]] = []
+    for name, task in TASKS.items():
+        items.append((name, task["desc"], "task"))
+    for name, targets in ALIASES.items():
+        items.append((name, " -> ".join(targets), "alias"))
+    return items
+
+
+def print_menu(items: list[tuple[str, str, str]]) -> None:
+    print("\nZCU102 runtime launcher")
+    print("Select one or more tasks by number or name.")
+    print("Examples: 1, 2 5, check-selftest, all, dry all")
+    print("Commands: list, help, quit\n")
+    for idx, (name, desc, kind) in enumerate(items, start=1):
+        label = f"{idx:2d}. {name}"
+        print(f"  {label:<22} [{kind}] {desc}")
+
+
+def parse_selection(raw: str, items: list[tuple[str, str, str]]) -> tuple[list[str], bool] | None:
+    text = raw.strip()
+    if not text:
+        return None
+    if text in {"q", "quit", "exit"}:
+        return (["__quit__"], False)
+    if text in {"h", "help", "?", "list"}:
+        return (["__help__"], False)
+
+    dry_run = False
+    if text.startswith("dry "):
+        dry_run = True
+        text = text[4:].strip()
+
+    selected: list[str] = []
+    parts = text.replace(",", " ").split()
+    for part in parts:
+        if part.isdigit():
+            idx = int(part)
+            if idx < 1 or idx > len(items):
+                print(f"Invalid selection number: {part}")
+                return None
+            selected.append(items[idx - 1][0])
+        else:
+            names = set(TASKS) | set(ALIASES)
+            if part not in names:
+                print(f"Unknown task or alias: {part}")
+                return None
+            selected.append(part)
+    return (selected, dry_run)
+
+
+def interactive() -> int:
+    items = menu_items()
+    print_menu(items)
+    while True:
+        try:
+            raw = input("\nselect> ")
+        except EOFError:
+            print()
+            return 0
+
+        parsed = parse_selection(raw, items)
+        if parsed is None:
+            continue
+
+        selected, dry_run = parsed
+        if selected == ["__quit__"]:
+            return 0
+        if selected == ["__help__"]:
+            print_menu(items)
+            continue
+
+        tasks = expand_tasks(selected)
+        for task in tasks:
+            code = run_task(task, dry_run)
+            if code != 0:
+                print(f"\nTask failed: {task} (exit {code})", file=sys.stderr)
+                return code
+        print("\nDone.")
+
+
 def expand_tasks(names: list[str]) -> list[str]:
     expanded: list[str] = []
     for name in names:
@@ -109,7 +190,16 @@ def main() -> int:
         action="store_true",
         help="Print commands without executing them.",
     )
+    parser.add_argument(
+        "-i",
+        "--interactive",
+        action="store_true",
+        help="Open an interactive task menu.",
+    )
     args = parser.parse_args()
+
+    if args.interactive:
+        return interactive()
 
     if not args.tasks or args.tasks == ["list"]:
         print_tasks()

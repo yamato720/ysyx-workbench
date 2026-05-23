@@ -228,10 +228,11 @@ zcu102-runtime/
 本地任务入口：
 
 ```bash
-make launcher                 # 查看启动器可选任务
-make launch                   # 同上
+make launcher                 # 打开交互式任务选择器
+make launch                   # 显示可选任务
 make launch TASK=check        # 执行单个任务
 make launch TASK=all          # 执行 alias
+./tools/run.py --interactive  # 直接打开交互式任务选择器
 ./tools/run.py list           # 直接使用 Python 启动器
 ```
 ```
