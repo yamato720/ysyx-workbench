@@ -125,7 +125,9 @@ cpu.interrupt := false
 
 ## 7. Trace 策略
 
-不要第一版就做实时 DiffTest。建议 CPU 或 SoC 输出：
+不要第一版就做实时 DiffTest。ZCU102 的 PS ARM 可以运行 NEMU 或调试程序，但它应该消费 trace、控制 reset/run、读取状态，而不是逐周期推动 PL CPU。
+
+建议 CPU 或 SoC 输出：
 
 ```text
 valid
@@ -139,6 +141,8 @@ trap
 
 runtime 写入 BRAM/DDR ring buffer，PS 侧导出后离线比对。
 
+更完整的 PS ARM/NEMU 协作方式见 `ps-debug.md`。
+
 ## 8. 适配原则
 
 - 不在 `ysyxSoC` 内部硬编码 ZCU102 pinout。
@@ -146,3 +150,4 @@ runtime 写入 BRAM/DDR ring buffer，PS 侧导出后离线比对。
 - 先 CPU-only，再 full SoC。
 - 先 BRAM，再 PS DDR。
 - 先 polling，再 interrupt。
+- 让 PL CPU 自己跑高频路径，让 PS ARM 做控制和调试。

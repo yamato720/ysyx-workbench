@@ -2,6 +2,8 @@
 
 ZCU102 的 PS 侧软件承担 U55C host 程序的角色。
 
+PS ARM 的定位是控制器和调试器，不是 PL CPU 的逐周期执行引擎。`npc/chisel` 在仿真中可以被打包成 `.so` 给 NEMU 推动；上板后，PL 里的 CPU 应该通过硬件 AXI 自己取指和访存，PS ARM 负责加载、启动、读取状态、导出 trace，并可选运行 NEMU 做参考比对。
+
 ## MVP bare-metal 程序
 
 职责：
@@ -44,3 +46,26 @@ printf("exit=%u\n", regs[EXIT_CODE]);
 ```
 
 第一版可以用 Vitis bare-metal 写死地址，先证明硬件路径正确。
+
+## NEMU 协作
+
+PS Linux 下可以编译 aarch64 版 NEMU，或把 trace 拷回 host PC 运行 NEMU。推荐优先做离线 DiffTest：
+
+```text
+1. PS loads image and starts PL CPU
+2. PL CPU writes commit trace to ring buffer
+3. PS dumps trace
+4. NEMU runs same image
+5. compare pc / inst / rd / rd_wdata
+```
+
+实时逐条 DiffTest 只建议作为 debug 模式：
+
+```text
+single_step PL CPU
+PS reads one commit
+NEMU executes one instruction
+compare
+```
+
+这个模式很慢，但适合定位最早几条指令的问题。

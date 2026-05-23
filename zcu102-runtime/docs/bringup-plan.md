@@ -87,7 +87,8 @@ no AXI decode errors
 - 增加 trace ring buffer。
 - 每条 retired instruction 写入 trace。
 - PS 侧 dump trace 到文件。
-- Host PC 上用 NEMU 离线比对。
+- Host PC 或 PS Linux 上用 NEMU 离线比对。
+- 不让 PS ARM/NEMU 接管普通 fetch/load/store。
 
 成功标准：
 
@@ -117,3 +118,4 @@ board-specific peripherals are isolated in adapter layer
 - 如果 AR 有但 R 无，查 memory decode。
 - 如果 R 有但后续乱跳，查 reset vector、镜像格式、字节序。
 - 如果 store 到 `PUTCH` 不生效，查 MMIO 地址和 AXI write strobe。
+- 需要更强调试时，先加 single-step 和 trace snapshot，而不是把普通访存转发给 PS 软件。

@@ -36,6 +36,8 @@ ysyx CPU AXI master
 
 这些可以降低 SoC 集成工作量。尤其是 `CPU.scala` 已经把学生 CPU 包成 AXI master，这是上 ZCU102 最关键的接口。
 
+ZCU102 的 PS ARM 还能承担仿真 host 的一部分职责：加载程序、控制 reset/run、读取 trace，并在 PS Linux 或 host PC 上运行 NEMU 做参考比对。这让调试体验比纯 FPGA 板更好。
+
 ## 4. `ysyxSoC` 不能直接解决的问题
 
 ### 4.1 板级内存不匹配
@@ -91,3 +93,5 @@ ZCU102 设计中常见做法是由 PS 输出 PL clock/reset，或者使用板上
 ## 6. 结论
 
 有 `ysyxSoC` 后，ZCU102 不是“能不能做”的问题，而是“先收敛到哪个最小目标”。推荐优先交付一个小而硬的 BRAM MVP，再把内存换成 PS DDR，最后才扩大到完整 SoC 外设。
+
+PS ARM 应作为调试控制器和 trace/NEMU 协作端使用。不要把它放到普通访存高频路径里，否则会把硬件运行退化成慢速协同仿真。

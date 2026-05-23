@@ -48,11 +48,47 @@ ZCU102 的优势是 PS 可以直接承担 host runtime，不需要 PCIe/XRT host
 
 ---
 
-## 3. `ysyxSoC` 带来的变化
+## 3. PS ARM 调试模型
+
+当前 `npc/chisel` 可以被 Verilator 打包成 `.so`，再由 NEMU 在软件里推动。这种模式适合仿真，但上 ZCU102 后不能原样照搬：PL 中的 RISC-V CPU 已经是真硬件，不应该再让 NEMU 或 ARM 逐周期推动取指、译码、执行。
+
+ZCU102 的正确用法是把 PS ARM 当成 host/debug controller：
+
+```text
+ZCU102 PS ARM(A53/R5)
+  - load image.bin to BRAM / PS DDR / PL DDR
+  - configure boot_pc / reset / run
+  - poll halt / exit_code / putch
+  - read trace ring buffer
+  - optional: run NEMU for offline or low-speed checking
+
+ZCU102 PL
+  - npc/chisel CPU or ysyxSoC
+  - local memory path
+  - simple MMIO
+  - debug/control registers
+  - commit trace producer
+```
+
+高频路径必须留在 PL 本地：
+
+```text
+fetch/load/store -> BRAM/DDR in hardware
+halt/putch/debug/trace -> PS ARM
+trace dump -> PS ARM or host NEMU compare
+```
+
+不建议让 ARM/NEMU 处理每次取指、load、store。那会把硬件 CPU 退化成极慢的协同仿真。PS ARM 最适合做加载、复位控制、状态读取、trace 导出和离线 DiffTest。
+
+更详细的调试接口规划见 `docs/ps-debug.md`。
+
+---
+
+## 4. `ysyxSoC` 带来的变化
 
 现在仓库里已经有 `ysyxSoC/`，这明显提高了可行性，但不能把它当成“直接能上 ZCU102 的 bitstream”。
 
-### 3.1 有利条件
+### 4.1 有利条件
 
 - `ysyxSoC/src/CPU.scala` 已经把 CPU 封成 AXI4 master。
 - `ysyxSoC/src/SoC.scala` 已有 AXI/APB 互连、UART、SPI、GPIO、PSRAM、SDRAM、VGA 等外设接入。
@@ -60,7 +96,7 @@ ZCU102 的优势是 PS 可以直接承担 host runtime，不需要 PCIe/XRT host
 - `ysyxSoC/Makefile` 已有 Chisel 到 `ysyxSoCFull.v` 的生成流程。
 - `ysyxSoC/ready-to-run/D-stage/` 提供了一个可参考的 ready-to-run 形态。
 
-### 3.2 需要改造的地方
+### 4.2 需要改造的地方
 
 - 当前 `ysyxSoCTop` 把 `externalPins` 直接接成 `DontCare`，不能作为 ZCU102 板级顶层。
 - `ysyxSoC/src/device/MROM.scala` 里的 `MROMHelper` 使用 DPI-C，不可综合，必须替换成 BRAM/ROM 初始化或 AXI 可访问存储。
@@ -73,7 +109,7 @@ ZCU102 的优势是 PS 可以直接承担 host runtime，不需要 PCIe/XRT host
 
 ---
 
-## 4. 推荐总体架构
+## 5. 推荐总体架构
 
 ```text
 +--------------------------------------------------------+
@@ -109,7 +145,7 @@ ZCU102 的优势是 PS 可以直接承担 host runtime，不需要 PCIe/XRT host
 
 ---
 
-## 5. 阶段路线
+## 6. 阶段路线
 
 ### 阶段 0：生成可综合 RTL
 
@@ -147,11 +183,12 @@ ZCU102 的优势是 PS 可以直接承担 host runtime，不需要 PCIe/XRT host
 
 - CPU commit trace 写入 BRAM/DDR ring buffer。
 - PS 侧导出 trace。
-- Host PC 或 PS Linux 上跑 NEMU 做离线比对。
+- Host PC 或 PS Linux/PS bare-metal 上跑 NEMU 做离线或分段低速比对。
+- PS ARM 只消费 trace 和控制 CPU，不接管普通访存。
 
 ---
 
-## 6. 目录说明
+## 7. 目录说明
 
 ```text
 zcu102-runtime/
@@ -160,6 +197,7 @@ zcu102-runtime/
     feasibility.md             可行性分析
     memory-map.md              建议地址映射
     ysyxSoC-adaptation.md      ysyxSoC 适配点
+    ps-debug.md                PS ARM 调试/NEMU 协作模型
     bringup-plan.md            上板 bring-up checklist
   rtl/
     README.md                  PL RTL 顶层规划
@@ -175,7 +213,7 @@ zcu102-runtime/
 
 ---
 
-## 7. 当前结论
+## 8. 当前结论
 
 ZCU102 路线可行，而且有 `ysyxSoC` 后比从裸 CPU 做板级互连更现实。但第一版不应追求“一次把完整 ysyxSoC 外设全接上板”。最稳妥的路径是：
 
@@ -183,6 +221,7 @@ ZCU102 路线可行，而且有 `ysyxSoC` 后比从裸 CPU 做板级互连更现
 CPU AXI master
   -> BRAM memory + simple MMIO
   -> PS-controlled load/run/status
+  -> PS ARM trace dump / offline NEMU compare
   -> PS DDR memory
   -> ysyxSoC peripheral adaptation
 ```
