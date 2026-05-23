@@ -31,6 +31,11 @@ chisel-module:
 	@echo "=== Generating $(MODULE) from Chisel ==="
 	cd $(shell pwd) && sbt "root/runMain scpu.Elaborate$(MODULE)"
 
+zcu102-debugger-chisel:
+	@echo "=== Generating ZCU102 NPC debugger from Chisel ==="
+	cd $(shell pwd) && sbt "root/runMain zcu102.ElaborateZCU102NPCDebugger"
+	@echo "Generated Verilog files in ../zcu102-runtime/generated"
+
 # NEMU reference for DiffTest
 NEMU_HOME ?= $(shell pwd)/../nemu
 NEMU_REF_SO = $(NEMU_HOME)/build/riscv64-nemu-interpreter-so
@@ -156,7 +161,7 @@ run-difftest: chisel-cpu
 	@echo "=== Running NPC with DiffTest (REF: NEMU) ==="
 	cd ./out/chisel-cpu && ./npc-exec -d $(NEMU_REF_SO) $(IMG)
 
-.PHONY: chisel chisel-dpi chisel-module chisel-cpu chisel-cpu-lib run-chisel run-difftest
+.PHONY: chisel chisel-dpi chisel-module zcu102-debugger-chisel chisel-cpu chisel-cpu-lib run-chisel run-difftest
 
 # ============== Original Verilog CPU ==============
 
@@ -325,4 +330,3 @@ list:
 
 
 include ../Makefile
-

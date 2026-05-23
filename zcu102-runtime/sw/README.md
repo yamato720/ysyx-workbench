@@ -4,6 +4,14 @@ ZCU102 的 PS 侧软件承担 U55C host 程序的角色。
 
 PS ARM 的定位是控制器和调试器，不是 PL CPU 的逐周期执行引擎。`npc/chisel` 在仿真中可以被打包成 `.so` 给 NEMU 推动；上板后，PL 里的 CPU 应该通过硬件 AXI 自己取指和访存，PS ARM 负责加载、启动、读取状态、导出 trace，并可选运行 NEMU 做参考比对。
 
+当前目录已经放入最小 C 侧骨架：
+
+```text
+include/zcu102_npc_debugger.h   调试寄存器定义和 runtime API
+src/zcu102_npc_debugger.c       reset/load/start/poll/putch helper
+examples/bringup.c              Vitis/bare-metal bring-up 示例骨架
+```
+
 ## MVP bare-metal 程序
 
 职责：

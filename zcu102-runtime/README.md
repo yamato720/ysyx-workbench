@@ -203,8 +203,11 @@ zcu102-runtime/
     bringup-plan.md            上板 bring-up checklist
   rtl/
     README.md                  PL RTL 顶层规划
-    ZCU102NPCDebugger.sv       NPC 调试控制寄存器块
+    ZCU102NPCDebugger.sv       NPC 调试控制寄存器参考 RTL
     npc-debugger-interface.md  NPC 调试器 RTL 接口草案
+  chisel/
+    src/main/scala/
+      ZCU102NPCDebugger.scala  NPC 调试控制寄存器 Chisel 实现
   vivado/
     README.md                  Vivado 工程策略
     create_project.tcl         工程脚本骨架
@@ -213,6 +216,9 @@ zcu102-runtime/
     zcu102_runtime.xdc         占位约束文件
   sw/
     README.md                  PS 侧 runtime 软件规划
+    include/                   PS runtime 头文件
+    src/                       PS runtime C helper
+    examples/                  bring-up 示例
 ```
 
 ---

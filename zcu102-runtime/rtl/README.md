@@ -5,9 +5,11 @@
 计划文件：
 
 ```text
+../chisel/src/main/scala/ZCU102NPCDebugger.scala
+                             Chisel 版 NPC 调试控制寄存器块
 ZCU102RuntimeTop.scala       runtime 逻辑顶层
 ZCU102BoardTop.sv           Vivado 板级 wrapper，或由 block design 生成
-ZCU102NPCDebugger.sv        第一版 NPC 调试控制寄存器块
+ZCU102NPCDebugger.sv        参考 SystemVerilog 形态，后续以 Chisel 生成版为准
 SimpleMmio.scala            putch/halt/exit_code/control 寄存器
 GuestMemory.scala           BRAM/PS DDR 访问抽象
 TraceBuffer.scala           trace ring buffer
@@ -30,7 +32,7 @@ npc-debugger-interface.md
 ZCU102NPCDebugger.sv
 ```
 
-`ZCU102NPCDebugger.sv` 当前只实现 PS 可访问的 AXI-Lite 控制/状态寄存器，以及 NPC 侧 run/reset/single-step/trace 控制信号。它不实例化 CPU、不实现 guest memory、不实现 trace RAM；这些应由后续 board/runtime top 组合。
+Chisel 版 `ZCU102NPCDebugger` 当前只实现 PS 可访问的 AXI-Lite 控制/状态寄存器，以及 NPC 侧 run/reset/single-step/trace 控制信号。它不实例化 CPU、不实现 guest memory、不实现 trace RAM；这些应由后续 board/runtime top 组合。`ZCU102NPCDebugger.sv` 暂时保留为参考 RTL，长期应由 Chisel 生成。
 
 ## 关键接口
 

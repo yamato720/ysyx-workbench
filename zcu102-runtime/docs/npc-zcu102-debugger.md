@@ -125,10 +125,11 @@ ZCU102NPCDebugger
 当前仓库已放入第一版 RTL 控制块：
 
 ```text
+zcu102-runtime/chisel/src/main/scala/ZCU102NPCDebugger.scala
 zcu102-runtime/rtl/ZCU102NPCDebugger.sv
 ```
 
-它实现 PS AXI-Lite control/status registers、NPC run/reset/single-step/trace 控制、last commit 寄存器、putch/exit/halt 状态锁存和 `irq_to_ps`。它暂不实现 guest memory、simple MMIO AXI slave 或 trace RAM。
+Chisel 版实现 PS AXI-Lite control/status registers、NPC run/reset/single-step/trace 控制、last commit 寄存器、putch/exit/halt 状态锁存和 `irq_to_ps`。它暂不实现 guest memory、simple MMIO AXI slave 或 trace RAM。`rtl/ZCU102NPCDebugger.sv` 暂时保留为参考 RTL，长期以 Chisel 生成版为准。
 
 Vivado 集成时，通用基础设施优先使用 IP：
 
