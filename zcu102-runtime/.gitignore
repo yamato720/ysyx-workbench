@@ -1,0 +1,10 @@
+!*/
+!README.md
+!.gitignore
+!docs/*.md
+!rtl/*.md
+!vivado/*.md
+!vivado/*.tcl
+!constraints/*.md
+!constraints/*.xdc
+!sw/*.md
