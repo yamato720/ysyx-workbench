@@ -198,9 +198,13 @@ zcu102-runtime/
     memory-map.md              建议地址映射
     ysyxSoC-adaptation.md      ysyxSoC 适配点
     ps-debug.md                PS ARM 调试/NEMU 协作模型
+    npc-zcu102-debugger.md     NPC + ZCU102 调试器第一版
+    vivado-ip-plan.md          Vivado IP 优先集成方案
     bringup-plan.md            上板 bring-up checklist
   rtl/
     README.md                  PL RTL 顶层规划
+    ZCU102NPCDebugger.sv       NPC 调试控制寄存器块
+    npc-debugger-interface.md  NPC 调试器 RTL 接口草案
   vivado/
     README.md                  Vivado 工程策略
     create_project.tcl         工程脚本骨架

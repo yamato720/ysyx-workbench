@@ -29,7 +29,11 @@ create_project $project_name $project_dir -force
 # 2. instantiate Zynq UltraScale+ MPSoC PS
 # 3. enable PL clock/reset and AXI control port
 # 4. add AXI BRAM Controller + Block Memory Generator
-# 5. connect ZCU102RuntimeTop
-# 6. add ILA on CPU AXI and runtime status
-# 7. validate_bd_design
-# 8. generate_target all
+# 5. add AXI SmartConnect for PS control path
+# 6. add AXI SmartConnect for NPC memory/MMIO path
+# 7. add Processor System Reset
+# 8. add ZCU102NPCDebugger RTL module as an AXI-Lite peripheral
+# 9. add ILA/VIO on NPC AXI, commit, reset, and runtime status
+# 10. for DDR stage, add PS HP/HPC or DDR4 MIG + width/clock converters
+# 11. validate_bd_design
+# 12. generate_target all

@@ -2,6 +2,22 @@
 
 ZCU102 推荐使用 Vivado block design 管理 ZynqMP PS、AXI interconnect、clock/reset 和 PL RTL wrapper。
 
+本目录的原则是 IP 优先。凡是 Vivado 有成熟 IP 的基础设施，优先用 IP，不在 `zcu102-runtime` 手写：
+
+```text
+Zynq UltraScale+ MPSoC
+AXI SmartConnect
+AXI BRAM Controller
+Block Memory Generator
+Processor System Reset
+AXI Data Width Converter
+AXI Clock Converter
+DDR4 MIG
+ILA / VIO
+```
+
+手写 RTL 只保留 NPC 专用 glue、调试控制寄存器和少量 simple MMIO 适配。完整规划见 `../docs/vivado-ip-plan.md`。
+
 ## 第一版 block design
 
 ```text
@@ -12,6 +28,7 @@ Zynq UltraScale+ MPSoC PS
 
 PL
   - ZCU102RuntimeTop
+  - ZCU102NPCDebugger
   - AXI BRAM Controller
   - Block Memory Generator
   - AXI Interconnect / SmartConnect

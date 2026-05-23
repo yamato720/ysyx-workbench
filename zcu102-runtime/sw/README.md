@@ -47,6 +47,22 @@ printf("exit=%u\n", regs[EXIT_CODE]);
 
 第一版可以用 Vitis bare-metal 写死地址，先证明硬件路径正确。
 
+## NPC 调试器第一版
+
+配合 `docs/npc-zcu102-debugger.md`，PS 侧最小程序只需要支持：
+
+```text
+write_image()
+write_boot_pc()
+reset_cpu()
+run_cpu()
+poll_status()
+drain_putch()
+dump_trace()
+```
+
+不要在第一版 PS 软件中实现普通访存代理。NPC 的取指和 load/store 应该直接访问 PL BRAM、PS DDR 或 PL DDR4。
+
 ## NEMU 协作
 
 PS Linux 下可以编译 aarch64 版 NEMU，或把 trace 拷回 host PC 运行 NEMU。推荐优先做离线 DiffTest：

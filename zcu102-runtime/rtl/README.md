@@ -7,9 +7,11 @@
 ```text
 ZCU102RuntimeTop.scala       runtime 逻辑顶层
 ZCU102BoardTop.sv           Vivado 板级 wrapper，或由 block design 生成
+ZCU102NPCDebugger.sv        第一版 NPC 调试控制寄存器块
 SimpleMmio.scala            putch/halt/exit_code/control 寄存器
 GuestMemory.scala           BRAM/PS DDR 访问抽象
 TraceBuffer.scala           trace ring buffer
+npc-debugger-interface.md   NPC 接入 ZCU102 调试器的接口草案
 ```
 
 第一版建议只实现：
@@ -19,6 +21,16 @@ CPU AXI master -> BRAM + SimpleMmio
 ```
 
 不要第一版就接完整 `ysyxSoCFull`。先把 CPU 取指、访存、halt 跑通，再把 `ysyxSoC` 外设逐个迁入。
+
+NPC 专用第一版见：
+
+```text
+../docs/npc-zcu102-debugger.md
+npc-debugger-interface.md
+ZCU102NPCDebugger.sv
+```
+
+`ZCU102NPCDebugger.sv` 当前只实现 PS 可访问的 AXI-Lite 控制/状态寄存器，以及 NPC 侧 run/reset/single-step/trace 控制信号。它不实例化 CPU、不实现 guest memory、不实现 trace RAM；这些应由后续 board/runtime top 组合。
 
 ## 关键接口
 

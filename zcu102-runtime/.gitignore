@@ -3,6 +3,7 @@
 !.gitignore
 !docs/*.md
 !rtl/*.md
+!rtl/*.sv
 !vivado/*.md
 !vivado/*.tcl
 !constraints/*.md
