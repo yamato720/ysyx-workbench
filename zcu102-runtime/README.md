@@ -194,6 +194,8 @@ trace dump -> PS ARM or host NEMU compare
 zcu102-runtime/
   Makefile                     ZCU102 runtime 本地构建入口
   README.md                    总体设计与路线
+  tools/
+    run.py                     可交互查看/执行本地任务的 Python 启动器
   docs/
     feasibility.md             可行性分析
     memory-map.md              建议地址映射

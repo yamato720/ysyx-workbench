@@ -2,6 +2,8 @@
 !README.md
 !.gitignore
 !Makefile
+!tools/
+!tools/*.py
 !docs/*.md
 !rtl/*.md
 !rtl/*.sv
