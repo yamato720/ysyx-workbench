@@ -201,6 +201,7 @@ zcu102-runtime/
     ps-debug.md                PS ARM 调试/NEMU 协作模型
     npc-zcu102-debugger.md     NPC + ZCU102 调试器第一版
     vivado-ip-plan.md          Vivado IP 优先集成方案
+    ps-pl-selftest.md          PS + PL 联合自测方案
     bringup-plan.md            上板 bring-up checklist
   rtl/
     README.md                  PL RTL 顶层规划
@@ -209,6 +210,7 @@ zcu102-runtime/
   chisel/
     src/main/scala/
       ZCU102NPCDebugger.scala  NPC 调试控制寄存器 Chisel 实现
+      ZCU102NPCSelfTest.scala  PS/PL 通路自测 Chisel 顶层
   vivado/
     README.md                  Vivado 工程策略
     create_project.tcl         工程脚本骨架
