@@ -192,6 +192,7 @@ trace dump -> PS ARM or host NEMU compare
 
 ```text
 zcu102-runtime/
+  Makefile                     ZCU102 runtime 本地构建入口
   README.md                    总体设计与路线
   docs/
     feasibility.md             可行性分析

@@ -1,6 +1,7 @@
 !*/
 !README.md
 !.gitignore
+!Makefile
 !docs/*.md
 !rtl/*.md
 !rtl/*.sv

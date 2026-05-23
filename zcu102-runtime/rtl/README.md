@@ -34,6 +34,13 @@ ZCU102NPCDebugger.sv
 
 Chisel 版 `ZCU102NPCDebugger` 当前只实现 PS 可访问的 AXI-Lite 控制/状态寄存器，以及 NPC 侧 run/reset/single-step/trace 控制信号。它不实例化 CPU、不实现 guest memory、不实现 trace RAM；这些应由后续 board/runtime top 组合。`ZCU102NPCDebugger.sv` 暂时保留为参考 RTL，长期应由 Chisel 生成。
 
+生成入口在 `zcu102-runtime/` 下：
+
+```bash
+make chisel
+make check
+```
+
 ## 关键接口
 
 ```text
