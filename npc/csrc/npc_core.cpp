@@ -291,7 +291,6 @@ void single_run() {
                 uint64_t r_pc = npc_cpu->rootp->CPU__DOT__Priv_Exec_inst__DOT__r_pc;
                 uint8_t r_trapEn = npc_cpu->rootp->CPU__DOT__Priv_Exec_inst__DOT__r_trapEn;
                 uint8_t io_trap_en = npc_cpu->rootp->CPU__DOT__CSRs_inst__DOT__io_trap_en;
-                uint8_t io_we = npc_cpu->rootp->CPU__DOT__CSRs_inst__DOT__io_we;
                 uint8_t r_csrEn = npc_cpu->rootp->CPU__DOT__Priv_Exec_inst__DOT__r_csrEn;
                 uint8_t io_allow = npc_cpu->rootp->CPU__DOT__Priv_Exec_inst__DOT__io_csr_allow;
                 uint16_t r_addr = npc_cpu->rootp->CPU__DOT__Priv_Exec_inst__DOT__r_addr;
@@ -299,9 +298,9 @@ void single_run() {
                 uint64_t trap_epc = npc_cpu->rootp->CPU__DOT__Priv_Exec_inst__DOT__r_pc;
                 uint8_t tick_memwb = npc_cpu->rootp->CPU__DOT__Metronome_inst__DOT__tick_memwb_reg;
                 printf("[mepc-CLK] inst#%d pc=0x%lx last_pc=0x%lx: mepc 0x%lx -> 0x%lx\n",
-                       inst_count, npc_cpu->io_pc, last_pc, last_mepc, cur_mepc);
-                printf("  r_trapEn=%d io_trap_en=%d tick_memwb=%d io_we=%d io_allow=%d r_csrEn=%d r_addr=0x%x\n",
-                       r_trapEn, io_trap_en, tick_memwb, io_we, io_allow, r_csrEn, r_addr);
+                       inst_count, (unsigned long)npc_cpu->io_pc, last_pc, last_mepc, cur_mepc);
+                printf("  r_trapEn=%d io_trap_en=%d tick_memwb=%d io_allow=%d r_csrEn=%d r_addr=0x%x\n",
+                       r_trapEn, io_trap_en, tick_memwb, io_allow, r_csrEn, r_addr);
                 printf("  r_pc(trap_epc)=0x%lx pc_current=0x%lx\n", trap_epc, pc_current);
                 last_mepc = cur_mepc;
             }
@@ -311,7 +310,8 @@ void single_run() {
         if (npc_cpu->io_pc == last_halt_pc) {
             halt_count++;
             if (halt_count >= HALT_THRESHOLD) {
-                printf("Program halted at PC=0x%016lx after %lu cycles\n", npc_cpu->io_pc, cycle_count);
+                printf("Program halted at PC=0x%016lx after %lu cycles\n",
+                       (unsigned long)npc_cpu->io_pc, cycle_count);
                 Verilated::gotFinish(true);
                 break;
             }
@@ -344,8 +344,8 @@ void single_run() {
 void getvalue() {
     // Note: In NEMU integration mode, we don't print here
     // NEMU will handle the logging itself
-    printf("[%8d] PC=0x%016lx INST=0x%08x\n", 
-           inst_count, npc_cpu->io_pc, npc_cpu->io_instruction);
+    printf("[%8d] PC=0x%016lx INST=0x%08x\n",
+           inst_count, (unsigned long)npc_cpu->io_pc, npc_cpu->io_instruction);
     for(int i = 0; i < 32; i++) {
         printf("reg[%2d]=0x%016lx ", i, get_npc_reg(i));
         if (i % 4 == 3) printf("\n");

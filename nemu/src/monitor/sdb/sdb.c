@@ -116,19 +116,19 @@ static int cmd_x(char *args) {
     return 0;
   }
   // printf("0x%08lx: ", addr);
-  printf("Examine memory from address 0x%08lx:\n", addr);
+  printf("Examine memory from address " FMT_WORD ":\n", addr);
   printf("-------------------------------------------------------------------------------------------\n");
   printf("Address\t      0    1    2    3    4    5    6    7    8    9    a    b    c    d    e    f\n");
   printf("-------------------------------------------------------------------------------------------\n");
   for(int i = 0; i < len; i ++) {
     if(i % 16 == 0) {
-      printf("0x%08lx: ", addr + i);
+      printf(FMT_WORD ": ", addr + i);
     }
     word_t data = vaddr_read(addr + i, BYTE);
-    printf("0x%02lx ", data);
+    printf("0x%02x ", (unsigned)(data & 0xff));
     if(i % 16 == 15) {
       printf("\n");
-      printf("0x%08lx: ", addr + i - 15);
+      printf(FMT_WORD ": ", addr + i - 15);
       for(int j = i - 15; j <= i; j ++) {
         word_t c = vaddr_read(addr + j, BYTE);
         printf("%c    ", (char)c);
@@ -137,7 +137,7 @@ static int cmd_x(char *args) {
     }
     else if(i == len - 1) {
       printf("\n");
-      printf("0x%08lx: ", addr + i - (i % 16));
+      printf(FMT_WORD ": ", addr + i - (i % 16));
       for(int j = i - (i % 16); j <= i; j ++) {
         word_t c = vaddr_read(addr + j, BYTE);
         printf("%c    ", (char)c);
@@ -224,7 +224,9 @@ void calculate_expr(const char *expr, sword_t *result, char *info, int *success)
     // 读取结果
     if (fgets(output, sizeof(output), fp) != NULL) {
         // 尝试解析为数字
-        if (sscanf(output, "%ld", result) == 1) {
+        int64_t parsed = 0;
+        if (sscanf(output, "%" SCNd64, &parsed) == 1) {
+            *result = (sword_t)parsed;
             // 成功：output 包含数字字符串，result 被赋值
             pclose(fp);
             return;
@@ -444,7 +446,7 @@ static int cmd_test(char *args) {
           free(t);
           continue;
         }
-        printf("%s = %ld\n", t->expr, t->result);
+        printf("%s = %" PRId64 "\n", t->expr, (int64_t)t->result);
         if(t->success == 0) {
           Error_FLAG[i] = 1;
           strcpy(Error_INFO[i], t->info);
@@ -461,9 +463,10 @@ static int cmd_test(char *args) {
           free(t);
           continue;
         }
-        printf("NEMU result: %ld\n", nemu_result);
+        printf("NEMU result: %" PRId64 "\n", (int64_t)nemu_result);
         if(nemu_result != t->result) {
-          printf("Mismatch result! NEMU: %ld, Python: %ld\n", nemu_result, t->result);
+          printf("Mismatch result! NEMU: %" PRId64 ", Python: %" PRId64 "\n",
+              (int64_t)nemu_result, (int64_t)t->result);
         } else {
           printf("Match result!\n");
         }
@@ -475,7 +478,8 @@ static int cmd_test(char *args) {
   for(int i = 0; i < max; i ++) {
     printf("----- Expression %d -----\n", i + 1);
     printf("Expression: %s\n", EXPR_BUF[i]);
-    printf("NEMU result: %ld, Python result: %ld\n", results[i][0], results[i][1]);
+    printf("NEMU result: %" PRId64 ", Python result: %" PRId64 "\n",
+        (int64_t)results[i][0], (int64_t)results[i][1]);
 
     if(results[i][0] != results[i][1]) {
       printf("Mismatch result!\n");
@@ -492,7 +496,8 @@ static int cmd_test(char *args) {
       if(missmatch_flag[i] == 1) {
         printf("----- Expression %d -----\n", i + 1);
         printf("Expression: %s\n", EXPR_BUF[i]);
-        printf("NEMU result: %ld, Python result: %ld\n", results[i][0], results[i][1]);
+        printf("NEMU result: %" PRId64 ", Python result: %" PRId64 "\n",
+            (int64_t)results[i][0], (int64_t)results[i][1]);
       }
     }
   }
@@ -522,7 +527,7 @@ static int cmd_p(char *args) {
   sword_t result = 0;
   result = expr(args, &success);
   if (success) {
-    printf("%s = %ld (0x%lx)\n", args, result, result);
+    printf("%s = %" PRId64 " (" FMT_WORD ")\n", args, (int64_t)result, (word_t)result);
   } else {
     printf("Failed to evaluate expression: %s\n", args);
   }
@@ -644,7 +649,8 @@ static int cmd_w(char *args) {
     return 0;
   }
 
-  printf("Set watchpoint at address 0x%08lx with type %d, flag %d, setval %ld\n", addr, type, flag, setval);
+  printf("Set watchpoint at address " FMT_WORD " with type %d, flag %d, setval " FMT_WORD "\n",
+      addr, type, flag, setval);
   
   WP* wp = new_wp(addr, type, flag, setval);
   if(wp == NULL) {

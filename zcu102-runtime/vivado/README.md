@@ -64,7 +64,7 @@ PL DDR4 MIG
 ## 预期输入
 
 ```text
-ysyxSoC/build/ysyxSoCFull.v       可选 full SoC RTL
+npc/chisel/ysyxSoC/build/ysyxSoCFull.v       可选 full SoC RTL
 npc/chisel 或 ysyx CPU Verilog    CPU BlackBox 实现
 zcu102-runtime/rtl/*              runtime wrapper
 ```

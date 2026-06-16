@@ -4,9 +4,13 @@
 
 int main(int argc, char *argv[], char *envp[]);
 extern char **environ;
+
+const char *__navy_argv0 __attribute__((weak)) = "program";
+
 void call_main(uintptr_t *args) {
-  char *empty[] =  {NULL };
-  environ = empty;
-  exit(main(0, empty, empty));
+  char *argv[] = { (char *)__navy_argv0, NULL };
+  static char *envp[] = { NULL };
+  environ = envp;
+  exit(main(1, argv, envp));
   assert(0);
 }

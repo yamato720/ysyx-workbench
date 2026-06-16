@@ -25,7 +25,19 @@ static uint8_t *serial_base = NULL;
 
 
 static void serial_putc(char ch) {
-  MUXDEF(CONFIG_TARGET_AM, putch(ch), putc(ch, stderr));
+  MUXDEF(CONFIG_TARGET_AM, putch(ch), fputc(ch, stderr));
+#ifndef CONFIG_TARGET_AM
+  fflush(stderr);
+#endif
+}
+
+static uint8_t serial_getc() {
+#ifdef CONFIG_TARGET_AM
+  return 0xff;
+#else
+  int ch = getchar();
+  return ch == EOF ? 0xff : (uint8_t)ch;
+#endif
 }
 
 static void serial_io_handler(uint32_t offset, int len, bool is_write) {
@@ -39,12 +51,7 @@ static void serial_io_handler(uint32_t offset, int len, bool is_write) {
     /* We bind the serial port with the host stderr in NEMU. */
     case CH_OFFSET:
       if (is_write) serial_putc(serial_base[0]);
-      // else panic("do not support read");
-      else {
-        printf("do not support read! read from offset %u\n", offset);
-        nemu_state.state = NEMU_ABORT;
-        return;
-      }
+      else serial_base[0] = serial_getc();
       break;
     default: {
       printf("offset: %u, len: %d, is_write: %d\n", offset, len, is_write);

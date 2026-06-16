@@ -1,6 +1,7 @@
 #include <common.h>
 #include <fs.h>
 #include <memory.h>
+#include <inttypes.h>
 #include "syscall.h"
 
 #ifdef STRACE
@@ -39,7 +40,7 @@ void do_syscall(Context *c) {
 #ifdef STRACE
   const char *name = (a[0] < NR_SYSCALLS && syscall_names[a[0]])
                      ? syscall_names[a[0]] : "unknown";
-  Log("[strace] %s(%lu, %lu, %lu)", name, a[1], a[2], a[3]);
+  Log("[strace] %s(%" PRIuPTR ", %" PRIuPTR ", %" PRIuPTR ")", name, a[1], a[2], a[3]);
 #endif
 
   switch (a[0]) {
@@ -105,10 +106,10 @@ void do_syscall(Context *c) {
       c->GPRx = (uintptr_t)-1;
       break;
 
-    default: panic("Unhandled syscall ID = %lu", a[0]);
+    default: panic("Unhandled syscall ID = %" PRIuPTR, a[0]);
   }
 
 #ifdef STRACE
-  Log("[strace]   => %ld", (intptr_t)c->GPRx);
+  Log("[strace]   => %" PRIdPTR, (intptr_t)c->GPRx);
 #endif
 }

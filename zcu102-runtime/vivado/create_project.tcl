@@ -18,7 +18,7 @@ create_project $project_name $project_dir -force
 # set_property part xczu9eg-ffvb1156-2-i [current_project]
 
 # Add generated RTL and handwritten runtime sources here.
-# add_files ../../ysyxSoC/build/ysyxSoCFull.v
+# add_files ../../npc/chisel/ysyxSoC/build/ysyxSoCFull.v
 # add_files ../rtl/ZCU102BoardTop.sv
 
 # Add constraints derived from the official ZCU102 master XDC.

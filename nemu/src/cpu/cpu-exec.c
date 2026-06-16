@@ -28,8 +28,6 @@ extern uint32_t npc_get_inst();
 extern int npc_is_finished();
 extern uint64_t npc_get_reg(int idx);
 #endif
-#include "../isa/riscv64/local-include/reg.h"
-
 #include "../../src/monitor/sdb/sdb.h"
 
 /* The assembly code of instructions executed is only output to the screen
@@ -132,7 +130,7 @@ static void exec_once(Decode *s, vaddr_t pc) {
     for (int i = 0; i < 32; i++) {
       uint64_t npc_val = npc_get_reg(i);
       if (cpu.gpr[i] != npc_val) {
-        mm[nm].name     = reg_name(i);
+        mm[nm].name     = isa_reg_idx2str(i);
         mm[nm].nemu_val = cpu.gpr[i];
         mm[nm].npc_val  = npc_val;
         nm++;

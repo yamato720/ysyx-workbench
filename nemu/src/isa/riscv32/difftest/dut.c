@@ -41,15 +41,17 @@ bool isa_difftest_checkregs(CPU_state *ref_r, vaddr_t pc) {
   // NPC mode: compare with NPC's CPU state
   bool success = true;
   for (int i = 0; i < 32; i++) {
-    if (ref_r->gpr[i] != npc_get_reg(i)) {
+    word_t npc_val = (word_t)npc_get_reg(i);
+    if (ref_r->gpr[i] != npc_val) {
       Log("Mismatch at register %d: expected " FMT_WORD ", got " FMT_WORD,
-          i, ref_r->gpr[i], npc_get_reg(i));
+          i, ref_r->gpr[i], npc_val);
       success = false;
     }
   }
-  if (ref_r->pc != npc_get_pc()) {
+  word_t npc_pc = (word_t)npc_get_pc();
+  if (ref_r->pc != npc_pc) {
     Log("Mismatch at PC: expected " FMT_WORD ", got " FMT_WORD,
-        ref_r->pc, npc_get_pc());
+        ref_r->pc, npc_pc);
     success = false;
   }
   #endif

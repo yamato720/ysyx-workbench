@@ -9,5 +9,7 @@
 !README.md
 !Kconfig
 !src/isa/riscv64
+!configs/riscv32-nemu-interpreter-defconfig
+!configs/riscv64-nemu-interpreter-defconfig
 include/config
 include/generated

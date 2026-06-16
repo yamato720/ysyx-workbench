@@ -92,8 +92,9 @@ class ZCU102NPCSelfTest extends Module {
 }
 
 object ElaborateZCU102NPCSelfTest extends App {
-  (new chisel3.stage.ChiselStage).emitVerilog(
+  _root_.circt.stage.ChiselStage.emitSystemVerilogFile(
     new ZCU102NPCSelfTest,
-    Array("--target-dir", "../zcu102-runtime/generated", "--output-file", "ZCU102NPCSelfTest")
+    Array("--target-dir", "../zcu102-runtime/generated"),
+    Array("--disable-annotation-unknown")
   )
 }

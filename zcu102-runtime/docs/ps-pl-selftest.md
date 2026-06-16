@@ -41,7 +41,7 @@ make -C zcu102-runtime check-selftest
 输出：
 
 ```text
-zcu102-runtime/generated/ZCU102NPCSelfTest.v
+zcu102-runtime/generated/ZCU102NPCSelfTest.sv
 ```
 
 ## 3. Vivado block design

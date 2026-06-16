@@ -1,0 +1,95 @@
+diff --git a/Makefile b/Makefile
+index 5b9ca05..2f55303 100644
+--- a/Makefile
++++ b/Makefile
+@@ -1,5 +1,6 @@
+ NAME = libc
+ CFLAGS = -DNO_FLOATING_POINT -DHAVE_INITFINI_ARRAY
+ CFLAGS += -U_FORTIFY_SOURCE  # fix compile error on ubuntu
++CFLAGS += -Wno-implicit-function-declaration  # suppress implicit-decl errors in old newlib code
+ SRCS = $(shell find src/ -name "*.c" -o -name "*.S" -o -name "*.cpp")
+ include $(NAVY_HOME)/Makefile
+diff --git a/include/sys/resource.h b/include/sys/resource.h
+index b99506b..bda0c4c 100644
+--- a/include/sys/resource.h
++++ b/include/sys/resource.h
+@@ -6,12 +6,33 @@
+ #define	RUSAGE_SELF	0		/* calling process */
+ #define	RUSAGE_CHILDREN	-1		/* terminated child processes */
+ 
++typedef unsigned long rlim_t;
++
++#define RLIM_INFINITY ((rlim_t)-1)
++
++#define RLIMIT_CORE   0
++#define RLIMIT_DATA   1
++#define RLIMIT_NICE   2
++#define RLIMIT_FSIZE  3
++#define RLIMIT_NOFILE 4
++#define RLIMIT_STACK  5
++#define RLIMIT_CPU    6
++#define RLIMIT_NPROC  7
++#define RLIMIT_AS     8
++#define RLIMIT_NLIMITS 9
++
++struct rlimit {
++	rlim_t rlim_cur;
++	rlim_t rlim_max;
++};
++
+ struct rusage {
+   	struct timeval ru_utime;	/* user time used */
+ 	struct timeval ru_stime;	/* system time used */
+ };
+ 
+ int	getrusage (int, struct rusage*);
++int	getrlimit (int, struct rlimit*);
++int	setrlimit (int, const struct rlimit*);
+ 
+ #endif
+-
+diff --git a/include/sys/termios.h b/include/sys/termios.h
+index edc81b3..08a83c6 100644
+--- a/include/sys/termios.h
++++ b/include/sys/termios.h
+@@ -114,8 +114,11 @@ struct termios {
+ #  define cfgetispeed(tp)	((tp)->c_ispeed)
+ #  define cfsetospeed(tp,s)	(((tp)->c_ospeed = (s)), 0)
+ #  define cfsetispeed(tp,s)	(((tp)->c_ispeed = (s)), 0)
+-#  define tcdrain(fd)		_ioctl (fd, _TCSBRK, 1)
+ # endif	/* _NO_MACROS */
+ 
+-#endif	/* _SYS_TERMIOS_H */
++int tcgetattr(int fd, struct termios *termios_p);
++int tcsetattr(int fd, int optional_actions, const struct termios *termios_p);
++int tcflush(int fd, int queue_selector);
++int tcdrain(int fd);
+ 
++#endif	/* _SYS_TERMIOS_H */
+diff --git a/src/posix/_isatty.c b/src/posix/_isatty.c
+index c4dcc1f..9650727 100644
+--- a/src/posix/_isatty.c
++++ b/src/posix/_isatty.c
+@@ -8,6 +8,9 @@
+ int
+ _isatty (int fd)
+ {
++  if (fd >= 0 && fd <= 2)
++    return 1;
++
+   struct stat buf;
+ 
+   if (fstat (fd, &buf) < 0) {
+diff --git a/src/syscalls/sysisatty.c b/src/syscalls/sysisatty.c
+index 697c54b..95813db 100644
+--- a/src/syscalls/sysisatty.c
++++ b/src/syscalls/sysisatty.c
+@@ -3,6 +3,8 @@
+ #include <reent.h>
+ #include <unistd.h>
+ 
++int _isatty(int fd);
++
+ int
+ isatty (int fd)
+ {

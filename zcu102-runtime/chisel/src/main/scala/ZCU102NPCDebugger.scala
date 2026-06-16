@@ -268,8 +268,9 @@ class ZCU102NPCDebugger extends Module {
 }
 
 object ElaborateZCU102NPCDebugger extends App {
-  (new chisel3.stage.ChiselStage).emitVerilog(
+  _root_.circt.stage.ChiselStage.emitSystemVerilogFile(
     new ZCU102NPCDebugger,
-    Array("--target-dir", "../zcu102-runtime/generated", "--output-file", "ZCU102NPCDebugger")
+    Array("--target-dir", "../zcu102-runtime/generated"),
+    Array("--disable-annotation-unknown")
   )
 }

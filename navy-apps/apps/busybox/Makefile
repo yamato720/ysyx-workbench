@@ -17,16 +17,22 @@ CFLAGS += -I$(WORK_DIR)/include/navy/ -D__GLIBC__ -fdata-sections -ffunction-sec
 comma = ,
 LDFLAGS := $(addprefix -Wl$(comma), $(LDFLAGS))
 export LDFLAGS
-export LINKAGE
 endif
 
 export CFLAGS
 export CROSS_COMPILE
 
+$(DST_DIR)/navy_argv.o: navy_argv.c
+	@mkdir -p $(dir $@) && echo + CC $<
+	@$(CC) -std=gnu11 $(CFLAGS) -c -o $@ $<
+
 # The busybox Makefile can not correctly handle the dependency when
 # $(LINKAGE) are updated. If it is the case, perform a fresh build.
-$(APP): force;
-	$(MAKE) -C $(REPO_PATH)
+$(APP): $(DST_DIR)/navy_argv.o force;
+	cp $(CONFIG_FILE) $(REPO_PATH)/.config
+	rm -f $(REPO_PATH)/busybox $(REPO_PATH)/busybox_unstripped
+	$(MAKE) -C $(REPO_PATH) silentoldconfig
+	$(MAKE) -C $(REPO_PATH) LINKAGE="$(LINKAGE) $(DST_DIR)/navy_argv.o"
 	cp $(REPO_PATH)/busybox $@
 
 force: ;
@@ -34,8 +40,10 @@ force: ;
 menuconfig:
 	$(MAKE) -C $(REPO_PATH) $@
 
-install:
-	$(MAKE) -C $(REPO_PATH) CONFIG_PREFIX=$(NAVY_HOME)/fsimg $@
+install: $(APP)
+	@echo + INSTALL "->" $(NAME)
+	@mkdir -p $(NAVY_HOME)/fsimg/bin
+	@cp $(APP) $(NAVY_HOME)/fsimg/bin/$(NAME)
 
 clean: clean-busybox
 

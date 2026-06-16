@@ -5,11 +5,11 @@
 关键文件：
 
 ```text
-ysyxSoC/src/CPU.scala       CPU BlackBox + AXI4 master wrapper
-ysyxSoC/src/SoC.scala       SoC 地址图、AXI/APB 互连、外设
-ysyxSoC/src/Top.scala       当前生成顶层
-ysyxSoC/Makefile            Verilog 生成流程
-ysyxSoC/spec/cpu-interface.md
+npc/chisel/ysyxSoC/src/CPU.scala       CPU BlackBox + AXI4 master wrapper
+npc/chisel/ysyxSoC/src/SoC.scala       SoC 地址图、AXI/APB 互连、外设
+npc/chisel/ysyxSoC/src/Top.scala       当前生成顶层
+npc/chisel/ysyxSoC/Makefile            Verilog 生成流程
+npc/chisel/ysyxSoC/spec/cpu-interface.md
 ```
 
 当前 `ysyxSoCTop` 是生成/仿真友好的顶层，不是板级顶层：
@@ -49,7 +49,7 @@ ysyx CPU or ysyxSoC subsystem
 
 ### 3.1 轻量 CPU-only 接入
 
-第一版建议从 `ysyxSoC/src/CPU.scala` 里的 CPU AXI4 wrapper 出发，只接 CPU master：
+第一版建议从 `npc/chisel/ysyxSoC/src/CPU.scala` 里的 CPU AXI4 wrapper 出发，只接 CPU master：
 
 ```text
 CPU master AXI

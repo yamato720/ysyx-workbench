@@ -2,7 +2,6 @@ package scpu
 
 import chisel3._
 import chiseltest._
-import firrtl.Utils.True
 import org.scalatest.flatspec.AnyFlatSpec
 
 class CPUTest extends AnyFlatSpec with ChiselScalatestTester{

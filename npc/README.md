@@ -219,17 +219,19 @@ class insCacheL1(useBlackBox: Boolean = false,
 ```scala
 // 普通模式 - 内部 SyncReadMem
 object Elaborate extends App {
-  (new ChiselStage).emitVerilog(
+  _root_.circt.stage.ChiselStage.emitSystemVerilogFile(
     new CPU(Width = 64, Debug = true),
-    Array("--target-dir", "./generated")
+    Array("--target-dir", "./generated"),
+    Array("--disable-annotation-unknown")
   )
 }
 
 // DPI-C 模式 - 外部内存
 object ElaborateDPI extends App {
-  (new ChiselStage).emitVerilog(
+  _root_.circt.stage.ChiselStage.emitSystemVerilogFile(
     new CPU(Width = 64, Debug = true, useDPI = true),
-    Array("--target-dir", "./generated-dpi")
+    Array("--target-dir", "./generated-dpi"),
+    Array("--disable-annotation-unknown")
   )
 }
 ```
@@ -267,7 +269,7 @@ make run-chisel IMG=xxx.bin
 ```bash
 # Chisel 生成的 Verilog
 ls generated-dpi/
-# CPU_64_DPI.v  DPIMem.v
+# CPU.sv
 
 # 编译后的仿真器
 ls out/chisel-cpu/

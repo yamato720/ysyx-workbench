@@ -20,6 +20,22 @@ size_t serial_write(const void *buf, size_t offset, size_t len) {
   return len;
 }
 
+size_t serial_read(void *buf, size_t offset, size_t len) {
+  char *p = (char *)buf;
+  size_t n = 0;
+  while (n < len) {
+    char ch = io_read(AM_UART_RX).data;
+    if ((unsigned char)ch == 0xff) {
+      break;
+    }
+    p[n++] = ch;
+    if (ch == '\n') {
+      break;
+    }
+  }
+  return n;
+}
+
 size_t events_read(void *buf, size_t offset, size_t len) {
   return 0;
 }

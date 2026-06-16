@@ -6,21 +6,24 @@ SIM := ALU
 obj_dir := ./intermediate
 CHISEL_OUT := ./generated
 CHISEL_DPI_OUT := ./generated-dpi
+NPC_XLEN ?= 64
+NPC_ISA := $(if $(filter 32,$(NPC_XLEN)),riscv32,riscv64)
 
 # ============== Chisel Build ==============
 
 # Generate Verilog from Chisel (without DPI-C, for testing)
 chisel:
 	@echo "=== Generating Verilog from Chisel ==="
-	cd $(shell pwd) && sbt "root/runMain scpu.Elaborate"
+	@rm -rf $(CHISEL_OUT)
+	cd $(shell pwd) && sbt -Dnpc.xlen=$(NPC_XLEN) "root/runMain scpu.Elaborate"
 	@echo "Generated Verilog files in $(CHISEL_OUT)"
 
 # Generate Verilog from Chisel with DPI-C support (for Verilator simulation)
 chisel-dpi:
 	@echo "=== Generating DPI-C mode Verilog from Chisel ==="
-	cd $(shell pwd) && sbt "root/runMain scpu.ElaborateDPI"
+	@rm -rf $(CHISEL_DPI_OUT)
+	cd $(shell pwd) && sbt -Dnpc.xlen=$(NPC_XLEN) "root/runMain scpu.ElaborateDPI"
 	@echo "Generated DPI-C Verilog files in $(CHISEL_DPI_OUT)"
-	@cp ./chisel/src/main/resources/rtl/shell/*.v $(CHISEL_DPI_OUT)
 
 # Generate specific Chisel module
 chisel-module:
@@ -29,28 +32,28 @@ chisel-module:
 		exit 1; \
 	fi
 	@echo "=== Generating $(MODULE) from Chisel ==="
-	cd $(shell pwd) && sbt "root/runMain scpu.Elaborate$(MODULE)"
+	cd $(shell pwd) && sbt -Dnpc.xlen=$(NPC_XLEN) "root/runMain scpu.Elaborate$(MODULE)"
 
 # NEMU reference for DiffTest
 NEMU_HOME ?= $(shell pwd)/../nemu
-NEMU_REF_SO = $(NEMU_HOME)/build/riscv64-nemu-interpreter-so
+NEMU_REF_SO = $(NEMU_HOME)/build/$(NPC_ISA)-nemu-interpreter-so
 
 # Build Chisel CPU with DPI-C support for Verilator simulation (standalone executable)
 chisel-cpu: chisel-dpi
 	@echo "=== Building Chisel CPU with DPI-C (standalone) ==="
 	@mkdir -p $(obj_dir)/chisel-cpu
 	@mkdir -p ./out/chisel-cpu
-	verilator -Wall --cc --exe --build -j $(shell nproc) \
+	verilator -Wall --sv --cc --exe --build -j $(shell nproc) \
 		--trace \
 		--top-module CPU \
 		-Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-CASEINCOMPLETE -Wno-WIDTH \
-		-Wno-UNOPTFLAT -Wno-LATCH -Wno-DECLFILENAME \
-		-CFLAGS "-I$(shell pwd)/csrc -DNPC_STANDALONE" \
+		-Wno-UNOPTFLAT -Wno-LATCH -Wno-DECLFILENAME -Wno-PINCONNECTEMPTY \
+		-CFLAGS "-I$(shell pwd)/csrc -DNPC_STANDALONE -DNPC_XLEN=$(NPC_XLEN)" \
 		-LDFLAGS "-ldl" \
 		-Mdir $(obj_dir)/chisel-cpu \
 		-I$(CHISEL_DPI_OUT) \
-		$(CHISEL_DPI_OUT)/*.v ./csrc/npc_main.cpp ./csrc/npc_core.cpp ./csrc/pmem.cpp \
-	@mv $(obj_dir)/chisel-cpu/VCPU_64_DPI ./out/chisel-cpu/npc-exec 2>/dev/null || true
+		$(CHISEL_DPI_OUT)/CPU.sv ./csrc/npc_main.cpp ./csrc/npc_core.cpp ./csrc/pmem.cpp
+	@mv $(obj_dir)/chisel-cpu/VCPU ./out/chisel-cpu/npc-exec
 	@echo "Built: ./out/chisel-cpu/npc-exec"
 
 # Build NPC core as object files for NEMU integration
@@ -60,64 +63,71 @@ chisel-cpu-lib: chisel-dpi
 	@mkdir -p ./out/chisel-cpu-lib
 	@if [ "$(TRACE_NEMU)" = "0" ] || [ -z "$(TRACE_NEMU)" ]; then \
 		echo "Building without NEMU trace support"; \
-		verilator -Wall --cc -j $(shell nproc) \
+		verilator -Wall --sv --cc -j $(shell nproc) \
 			--trace \
 			--top-module CPU \
 			-Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-CASEINCOMPLETE -Wno-WIDTH \
-			-Wno-UNOPTFLAT -Wno-LATCH -Wno-DECLFILENAME \
-			-CFLAGS "-I$(shell pwd)/csrc -fPIC" \
+			-Wno-UNOPTFLAT -Wno-LATCH -Wno-DECLFILENAME -Wno-PINCONNECTEMPTY \
+			-CFLAGS "-I$(shell pwd)/csrc -fPIC -DNPC_XLEN=$(NPC_XLEN)" \
 			-Mdir $(obj_dir)/chisel-cpu-lib \
 			-I$(CHISEL_DPI_OUT) \
-			$(CHISEL_DPI_OUT)/*.v; \
+			$(CHISEL_DPI_OUT)/CPU.sv; \
 	else \
 		echo "Building with NEMU trace support"; \
-		verilator -Wall --cc -j $(shell nproc) \
+		verilator -Wall --sv --cc -j $(shell nproc) \
 			--trace \
 			--top-module CPU \
 			-Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-CASEINCOMPLETE -Wno-WIDTH \
-			-Wno-UNOPTFLAT -Wno-LATCH -Wno-DECLFILENAME \
-			-CFLAGS "-I$(shell pwd)/csrc -fPIC -DTRACE_NEMU" \
+			-Wno-UNOPTFLAT -Wno-LATCH -Wno-DECLFILENAME -Wno-PINCONNECTEMPTY \
+			-CFLAGS "-I$(shell pwd)/csrc -fPIC -DTRACE_NEMU -DNPC_XLEN=$(NPC_XLEN)" \
 			-Mdir $(obj_dir)/chisel-cpu-lib \
 			-I$(CHISEL_DPI_OUT) \
-			$(CHISEL_DPI_OUT)/*.v; \
+			$(CHISEL_DPI_OUT)/CPU.sv; \
 	fi
 	@echo "=== Compiling Verilator generated CPU sources ==="
 	@cd $(obj_dir)/chisel-cpu-lib && \
+	set -e; \
 	VERILATOR_ROOT=$$(dirname $$(dirname $$(which verilator)))/share/verilator && \
+	status=0; \
 	for f in VCPU*.cpp; do \
 		g++ -c -fPIC -I. -I$$VERILATOR_ROOT/include -I$$VERILATOR_ROOT/include/vltstd \
 			-std=c++14 -faligned-new "$$f" & \
 	done; \
-	wait
+	for job in $$(jobs -p); do wait $$job || status=1; done; \
+	exit $$status
 	@echo "=== Compiling NPC core objects ==="
 	@VERILATOR_ROOT=$$(dirname $$(dirname $$(which verilator)))/share/verilator && \
+	set -e; \
+	status=0; \
 	if [ "$(TRACE_NEMU)" = "0" ] || [ -z "$(TRACE_NEMU)" ]; then \
 		g++ -c -fPIC -I$(shell pwd)/csrc -I$(obj_dir)/chisel-cpu-lib \
 			-I$$VERILATOR_ROOT/include \
 			-I$$VERILATOR_ROOT/include/vltstd \
-			-std=c++14 \
+			-std=c++14 -DNPC_XLEN=$(NPC_XLEN) \
 			./csrc/npc_core.cpp -o $(obj_dir)/chisel-cpu-lib/npc_core.o & \
 		g++ -c -fPIC -I$(shell pwd)/csrc -I$(obj_dir)/chisel-cpu-lib \
 			-I$$VERILATOR_ROOT/include \
 			-I$$VERILATOR_ROOT/include/vltstd \
-			-std=c++14 \
+			-std=c++14 -DNPC_XLEN=$(NPC_XLEN) \
 			./csrc/pmem.cpp -o $(obj_dir)/chisel-cpu-lib/pmem.o & \
-		wait; \
 	else \
 		g++ -c -fPIC -I$(shell pwd)/csrc -I$(obj_dir)/chisel-cpu-lib \
 			-I$$VERILATOR_ROOT/include \
 			-I$$VERILATOR_ROOT/include/vltstd \
-			-std=c++14 -DTRACE_NEMU \
+			-std=c++14 -DTRACE_NEMU -DNPC_XLEN=$(NPC_XLEN) \
 			./csrc/npc_core.cpp -o $(obj_dir)/chisel-cpu-lib/npc_core.o & \
 		g++ -c -fPIC -I$(shell pwd)/csrc -I$(obj_dir)/chisel-cpu-lib \
 			-I$$VERILATOR_ROOT/include \
 			-I$$VERILATOR_ROOT/include/vltstd \
-			-std=c++14 -DTRACE_NEMU \
+			-std=c++14 -DTRACE_NEMU -DNPC_XLEN=$(NPC_XLEN) \
 			./csrc/pmem.cpp -o $(obj_dir)/chisel-cpu-lib/pmem.o & \
-		wait; \
-	fi
+	fi; \
+	for job in $$(jobs -p); do wait $$job || status=1; done; \
+	exit $$status
 	@echo "=== Compiling Verilator runtime objects ==="
 	@VERILATOR_ROOT=$$(dirname $$(dirname $$(which verilator)))/share/verilator; \
+	set -e; \
+	status=0; \
 	g++ -c -fPIC -I$$VERILATOR_ROOT/include -I$$VERILATOR_ROOT/include/vltstd \
 		-std=c++14 -faligned-new \
 		$$VERILATOR_ROOT/include/verilated.cpp -o $(obj_dir)/chisel-cpu-lib/verilated.o & \
@@ -130,7 +140,8 @@ chisel-cpu-lib: chisel-dpi
 	g++ -c -fPIC -I$$VERILATOR_ROOT/include -I$$VERILATOR_ROOT/include/vltstd \
 		-std=c++14 -faligned-new \
 		$$VERILATOR_ROOT/include/verilated_threads.cpp -o $(obj_dir)/chisel-cpu-lib/verilated_threads.o & \
-	wait
+	for job in $$(jobs -p); do wait $$job || status=1; done; \
+	exit $$status
 	@echo "Built NPC library objects in $(obj_dir)/chisel-cpu-lib/"
 
 # Run Chisel CPU simulation with image
@@ -150,7 +161,7 @@ run-difftest: chisel-cpu
 	fi
 	@if [ ! -f "$(NEMU_REF_SO)" ]; then \
 		echo "Error: NEMU reference not found at $(NEMU_REF_SO)"; \
-		echo "Please build NEMU with: make -C $(NEMU_HOME) ISA=riscv64 SHARE=1"; \
+		echo "Please build NEMU with: make -C $(NEMU_HOME) ISA=$(NPC_ISA) SHARE=1"; \
 		exit 1; \
 	fi
 	@echo "=== Running NPC with DiffTest (REF: NEMU) ==="

@@ -41,7 +41,15 @@ LIBS += -lpthread -latomic
 endif
 
 SHARE = $(if $(CONFIG_TARGET_SHARE),1,0)
+ifeq ($(ZCU102_RUNTIME_NEMU_REF),1)
+  ifeq ($(SHARE),1)
+    LIBS += $(if $(CONFIG_TARGET_NATIVE_ELF),-lreadline -ldl,)
+  else
+    LIBS += $(if $(CONFIG_TARGET_NATIVE_ELF),-lreadline -ldl -pie,)
+  endif
+else
 LIBS += $(if $(CONFIG_TARGET_NATIVE_ELF),-lreadline -ldl -pie,)
+endif
 
 ifdef mainargs
 ASFLAGS += -DBIN_PATH=\"$(mainargs)\"

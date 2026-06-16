@@ -1,9 +1,16 @@
 #include <unistd.h>
+#include <errno.h>
+#include <signal.h>
 #include <sys/stat.h>
 #include <sys/time.h>
+#include <sys/resource.h>
+#include <sys/wait.h>
 #include <assert.h>
+#include <string.h>
 #include <time.h>
 #include "syscall.h"
+
+int _stat(const char *fname, struct stat *buf);
 
 // helper macros
 #define _concat(x, y) x ## y
@@ -103,6 +110,142 @@ int _gettimeofday(struct timeval *tv, struct timezone *tz) {
   return _syscall_(SYS_gettimeofday, (intptr_t)tv, (intptr_t)tz, 0);
 }
 
+int getrlimit(int resource, struct rlimit *rlim) {
+  if (rlim == NULL || resource < 0 || resource >= RLIMIT_NLIMITS) {
+    return -1;
+  }
+  rlim->rlim_cur = RLIM_INFINITY;
+  rlim->rlim_max = RLIM_INFINITY;
+  return 0;
+}
+
+int setrlimit(int resource, const struct rlimit *rlim) {
+  if (rlim == NULL || resource < 0 || resource >= RLIMIT_NLIMITS) {
+    return -1;
+  }
+  return 0;
+}
+
+int sigaction(int signum, const struct sigaction *act, struct sigaction *oldact) {
+  (void)signum;
+  if (oldact != NULL) {
+    oldact->sa_handler = SIG_DFL;
+    sigemptyset(&oldact->sa_mask);
+    oldact->sa_flags = 0;
+  }
+  (void)act;
+  return 0;
+}
+
+int sigprocmask(int how, const sigset_t *set, sigset_t *oldset) {
+  (void)how;
+  (void)set;
+  if (oldset != NULL) {
+    sigemptyset(oldset);
+  }
+  return 0;
+}
+
+int sigsuspend(const sigset_t *sigmask) {
+  (void)sigmask;
+  errno = EINTR;
+  return -1;
+}
+
+pid_t waitpid(pid_t pid, int *status, int options) {
+  (void)pid;
+  (void)options;
+  if (status != NULL) {
+    *status = 0;
+  }
+  errno = ECHILD;
+  return -1;
+}
+
+uid_t getuid(void) {
+  return 0;
+}
+
+uid_t geteuid(void) {
+  return 0;
+}
+
+gid_t getgid(void) {
+  return 0;
+}
+
+gid_t getegid(void) {
+  return 0;
+}
+
+pid_t getppid(void) {
+  return 0;
+}
+
+int getgroups(int gidsetsize, gid_t grouplist[]) {
+  if (gidsetsize > 0 && grouplist != NULL) {
+    grouplist[0] = 0;
+    return 1;
+  }
+  return 0;
+}
+
+static mode_t current_umask = 022;
+
+mode_t umask(mode_t cmask) {
+  mode_t old = current_umask;
+  current_umask = cmask & 0777;
+  return old;
+}
+
+int chdir(const char *path) {
+  (void)path;
+  return 0;
+}
+
+int lstat(const char *path, struct stat *buf) {
+  return _stat(path, buf);
+}
+
+long sysconf(int name) {
+  switch (name) {
+    case _SC_CLK_TCK:
+      return 100;
+    case _SC_PAGESIZE:
+      return 4096;
+    case _SC_OPEN_MAX:
+      return 16;
+    case _SC_NGROUPS_MAX:
+      return 1;
+    default:
+      errno = EINVAL;
+      return -1;
+  }
+}
+
+int getdents(int fd, void *dp, int count) {
+  (void)fd;
+  (void)dp;
+  (void)count;
+  return 0;
+}
+
+double __strtod_nan(const char *s, char **endptr, char fmt) {
+  (void)fmt;
+  if (endptr != NULL) {
+    *endptr = (char *)s;
+  }
+  return 0.0 / 0.0;
+}
+
+float __strtof_nan(const char *s, char **endptr, char fmt) {
+  (void)fmt;
+  if (endptr != NULL) {
+    *endptr = (char *)s;
+  }
+  return 0.0f / 0.0f;
+}
+
 int _execve(const char *fname, char * const argv[], char *const envp[]) {
   _exit(SYS_execve);
   return 0;
@@ -112,11 +255,27 @@ int _execve(const char *fname, char * const argv[], char *const envp[]) {
 // But to pass linking, they are defined as dummy functions.
 
 int _fstat(int fd, struct stat *buf) {
+  if (buf == NULL) {
+    errno = EINVAL;
+    return -1;
+  }
+  memset(buf, 0, sizeof(*buf));
+  if (fd >= 0 && fd <= 2) {
+    buf->st_mode = S_IFCHR | S_IRUSR | S_IWUSR;
+    return 0;
+  }
+  buf->st_mode = S_IFREG | S_IRUSR | S_IWUSR | S_IXUSR;
   return -1;
 }
 
 int _stat(const char *fname, struct stat *buf) {
-  assert(0);
+  (void)fname;
+  if (buf == NULL) {
+    errno = EINVAL;
+    return -1;
+  }
+  memset(buf, 0, sizeof(*buf));
+  buf->st_mode = S_IFREG | S_IRUSR | S_IWUSR | S_IXUSR;
   return -1;
 }
 
@@ -126,47 +285,53 @@ int _kill(int pid, int sig) {
 }
 
 pid_t _getpid() {
-  _exit(-SYS_getpid);
   return 1;
 }
 
 pid_t _fork() {
-  assert(0);
+  errno = ENOSYS;
   return -1;
 }
 
 pid_t vfork() {
-  assert(0);
+  errno = ENOSYS;
   return -1;
 }
 
 int _link(const char *d, const char *n) {
-  assert(0);
+  (void)d;
+  (void)n;
+  errno = ENOSYS;
   return -1;
 }
 
 int _unlink(const char *n) {
-  assert(0);
+  (void)n;
+  errno = ENOSYS;
   return -1;
 }
 
 pid_t _wait(int *status) {
-  assert(0);
+  (void)status;
+  errno = ECHILD;
   return -1;
 }
 
 clock_t _times(void *buf) {
-  assert(0);
+  (void)buf;
+  errno = ENOSYS;
   return 0;
 }
 
 int pipe(int pipefd[2]) {
-  assert(0);
+  (void)pipefd;
+  errno = ENOSYS;
   return -1;
 }
 
 int dup(int oldfd) {
-  assert(0);
+  (void)oldfd;
+  errno = ENOSYS;
   return -1;
 }
 
@@ -175,17 +340,21 @@ int dup2(int oldfd, int newfd) {
 }
 
 unsigned int sleep(unsigned int seconds) {
-  assert(0);
-  return -1;
+  return seconds;
 }
 
 ssize_t readlink(const char *pathname, char *buf, size_t bufsiz) {
-  assert(0);
+  (void)pathname;
+  (void)buf;
+  (void)bufsiz;
+  errno = ENOSYS;
   return -1;
 }
 
 int symlink(const char *target, const char *linkpath) {
-  assert(0);
+  (void)target;
+  (void)linkpath;
+  errno = ENOSYS;
   return -1;
 }
 

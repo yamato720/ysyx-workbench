@@ -9,6 +9,7 @@ AM_SRCS := riscv/npc/start.S \
            platform/dummy/mpe.c
 
 NPC_HOME ?= $(AM_HOME)/../npc
+NPC_XLEN ?= 64
 
 CFLAGS    += -fdata-sections -ffunction-sections
 LDSCRIPTS += $(AM_HOME)/scripts/linker.ld
@@ -29,7 +30,7 @@ image: image-dep
 
 # Default: use Chisel CPU
 run: insert-arg
-	$(MAKE) -C $(NPC_HOME) run-chisel IMG=$(IMAGE).bin
+	$(MAKE) -C $(NPC_HOME) run-chisel NPC_XLEN=$(NPC_XLEN) IMG=$(IMAGE).bin
 
 # Alternative: use original Verilog CPU
 run-verilog: insert-arg
@@ -40,12 +41,12 @@ NEMU_HOME ?= $(AM_HOME)/../nemu
 NEMUFLAGS += -l $(shell dirname $(IMAGE).elf)/nemu-log.txt
 
 run-nemu: insert-arg
-	$(MAKE) -C $(NEMU_HOME) ISA=riscv64 run ARGS="$(NEMUFLAGS)" IMG=$(IMAGE).bin
+	$(MAKE) -C $(NEMU_HOME) ISA=$(ISA) run ARGS="$(NEMUFLAGS)" IMG=$(IMAGE).bin
 
 run-nemu-bat: insert-arg
-	$(MAKE) -C $(NEMU_HOME) ISA=riscv64 run-bat ARGS="$(NEMUFLAGS)" IMG=$(IMAGE).bin
+	$(MAKE) -C $(NEMU_HOME) ISA=$(ISA) run-bat ARGS="$(NEMUFLAGS)" IMG=$(IMAGE).bin
 
 gdb-nemu: insert-arg
-	$(MAKE) -C $(NEMU_HOME) ISA=riscv64 gdb ARGS="$(NEMUFLAGS)" IMG=$(IMAGE).bin
+	$(MAKE) -C $(NEMU_HOME) ISA=$(ISA) gdb ARGS="$(NEMUFLAGS)" IMG=$(IMAGE).bin
 
 .PHONY: insert-arg run-verilog run-nemu run-nemu-bat gdb-nemu

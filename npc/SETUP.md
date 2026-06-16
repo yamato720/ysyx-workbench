@@ -215,7 +215,7 @@ make -j$(nproc)
 
 ```bash
 cd $NPC_HOME
-make chisel-dpi        # Chisel 编译，生成 generated-dpi/*.v（第一次会下载 Chisel 依赖，需要网络）
+make chisel-dpi        # Chisel 编译，生成 generated-dpi/CPU.sv（第一次会下载 Chisel 依赖，需要网络）
 make chisel-cpu-lib    # Verilator 编译，生成 intermediate/chisel-cpu-lib/*.o
 ```
 

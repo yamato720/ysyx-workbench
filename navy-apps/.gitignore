@@ -6,6 +6,7 @@
 !.gitignore
 !*.[cSh]
 !*.cpp
+!libs/*.patch
 !scripts/**/*.mk
 build/
 repo/

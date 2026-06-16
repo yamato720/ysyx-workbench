@@ -7,9 +7,8 @@
 #include <verilated_vcd_c.h>
 
 // Include generated CPU header
-// Verilator class name is based on filename: CPU_64_DPI.v -> VCPU_64_DPI
-#include "VCPU_64_DPI.h"
-typedef VCPU_64_DPI TopModule;
+#include "VCPU.h"
+typedef VCPU TopModule;
 
 
 TopModule *cpu = new TopModule;

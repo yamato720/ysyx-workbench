@@ -2,7 +2,6 @@ package scpu
 
 import chisel3._
 import chiseltest._
-import firrtl.Utils.True
 import org.scalatest.flatspec.AnyFlatSpec
 
 class BRAMDirectTest extends AnyFlatSpec with ChiselScalatestTester {
@@ -51,4 +50,3 @@ class BRAMDirectTest extends AnyFlatSpec with ChiselScalatestTester {
     }
   }
 }
-

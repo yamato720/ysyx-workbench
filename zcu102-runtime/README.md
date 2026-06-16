@@ -86,20 +86,20 @@ trace dump -> PS ARM or host NEMU compare
 
 ## 4. `ysyxSoC` 带来的变化
 
-现在仓库里已经有 `ysyxSoC/`，这明显提高了可行性，但不能把它当成“直接能上 ZCU102 的 bitstream”。
+现在仓库里已经有 `npc/chisel/ysyxSoC/`，这明显提高了可行性，但不能把它当成“直接能上 ZCU102 的 bitstream”。
 
 ### 4.1 有利条件
 
-- `ysyxSoC/src/CPU.scala` 已经把 CPU 封成 AXI4 master。
-- `ysyxSoC/src/SoC.scala` 已有 AXI/APB 互连、UART、SPI、GPIO、PSRAM、SDRAM、VGA 等外设接入。
-- `ysyxSoC/spec/cpu-interface.md` 已定义 D 阶段之后的 AXI CPU 接口。
-- `ysyxSoC/Makefile` 已有 Chisel 到 `ysyxSoCFull.v` 的生成流程。
-- `ysyxSoC/ready-to-run/D-stage/` 提供了一个可参考的 ready-to-run 形态。
+- `npc/chisel/ysyxSoC/src/CPU.scala` 已经把 CPU 封成 AXI4 master。
+- `npc/chisel/ysyxSoC/src/SoC.scala` 已有 AXI/APB 互连、UART、SPI、GPIO、PSRAM、SDRAM、VGA 等外设接入。
+- `npc/chisel/ysyxSoC/spec/cpu-interface.md` 已定义 D 阶段之后的 AXI CPU 接口。
+- `npc/chisel/ysyxSoC/Makefile` 已有 Chisel 到 `ysyxSoCFull.v` 的生成流程。
+- `npc/chisel/ysyxSoC/ready-to-run/D-stage/` 提供了一个可参考的 ready-to-run 形态。
 
 ### 4.2 需要改造的地方
 
 - 当前 `ysyxSoCTop` 把 `externalPins` 直接接成 `DontCare`，不能作为 ZCU102 板级顶层。
-- `ysyxSoC/src/device/MROM.scala` 里的 `MROMHelper` 使用 DPI-C，不可综合，必须替换成 BRAM/ROM 初始化或 AXI 可访问存储。
+- `npc/chisel/ysyxSoC/src/device/MROM.scala` 里的 `MROMHelper` 使用 DPI-C，不可综合，必须替换成 BRAM/ROM 初始化或 AXI 可访问存储。
 - 现有 PSRAM/SDRAM/flash blackbox 更像教学板或仿真环境接口，不等价于 ZCU102 板上实际 DDR/flash 连接。
 - ZCU102 的主内存可以走两条路线：PS DDR 经 PS-PL AXI 访问，或 PL DDR4 经 MIG 访问；两者都不能直接复用现有离散 SDRAM 控制器。
 - `ysyx_00000000` 是 BlackBox，Vivado 工程必须加入真实 CPU Verilog。
@@ -149,7 +149,7 @@ trace dump -> PS ARM or host NEMU compare
 
 ### 阶段 0：生成可综合 RTL
 
-- 跑通 `ysyxSoC/Makefile verilog`。
+- 跑通 `npc/chisel/ysyxSoC/Makefile verilog`。
 - 确认生成的 Verilog 不包含 DPI-C。
 - 明确真实 CPU Verilog 文件来源。
 - 建立 `ZCU102RuntimeTop`，不要直接使用 `ysyxSoCTop`。

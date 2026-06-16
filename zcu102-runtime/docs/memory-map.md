@@ -100,7 +100,7 @@ ZCU102 也有连接到 PL 的 DDR4 component。使用它时，PL 侧需要实例
 
 ## 4. 与 `ysyxSoC` 现有地址图关系
 
-`ysyxSoC/src/SoC.scala` 当前包含：
+`npc/chisel/ysyxSoC/src/SoC.scala` 当前包含：
 
 ```text
 0x0f00_0000  SRAM

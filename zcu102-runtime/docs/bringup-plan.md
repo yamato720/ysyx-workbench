@@ -6,7 +6,7 @@
 - ZCU102 board files 已安装。
 - 能通过 JTAG 连接板卡。
 - 能运行官方 BIST 或 hello world。
-- `ysyxSoC/Makefile verilog` 能生成 RTL。
+- `npc/chisel/ysyxSoC/Makefile verilog` 能生成 RTL。
 - 真实 CPU Verilog 已加入 Vivado sources。
 
 ## 1. RTL 净化检查

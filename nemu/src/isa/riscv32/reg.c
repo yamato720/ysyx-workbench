@@ -106,7 +106,7 @@ void check_reg(int idx, bool *success) {
 
 
 // Format one register slot into buf (up to buflen bytes).
-// Layout: "  %8s: 0x%016lx  %-22s" or "  %8s: not implemented"
+// Layout: "  %8s: " FMT_WORD "  %-22s" or "  %8s: not implemented"
 // Total slot width = 2+8+2+18+2+22+1(when register update) = 55 chars (fixed for alignment).
 #define SLOT_WIDTH 55
 static void fmt_reg_slot(char *buf, int buflen,
@@ -117,10 +117,10 @@ static void fmt_reg_slot(char *buf, int buflen,
   } else {
     char status[32];
     if (changed)
-      snprintf(status, sizeof(status), "new: 0x%016lx", cur);
+      snprintf(status, sizeof(status), "new: " FMT_WORD, cur);
     else
       snprintf(status, sizeof(status), "no update");
-    snprintf(buf, buflen, "  %8s: 0x%016lx  %s", name, stored, status);
+    snprintf(buf, buflen, "  %8s: " FMT_WORD "  %s", name, stored, status);
   }
 }
 

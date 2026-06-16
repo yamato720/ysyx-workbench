@@ -22,7 +22,7 @@
 #define Mr vaddr_read
 #define Mw vaddr_write
 
-#define MAX_NEGION 0x8000000000000000ULL
+#define MAX_NEGION 0x80000000u
 
 enum {
   TYPE_I, TYPE_U, TYPE_S, TYPE_R, TYPE_B, TYPE_J,
@@ -71,7 +71,7 @@ static int decode_exec(Decode *s) {
   INSTPAT_START();
 
   
-  // ============== RV64I Base Integer Instruction Set ==============
+  // ============== RV32I Base Integer Instruction Set ==============
   
   // R-Type: Integer Computational Instructions
   INSTPAT("0000000 ????? ????? 000 ????? 01100 11", add   , R, R(rd) = src1 + src2);
@@ -149,13 +149,12 @@ static int decode_exec(Decode *s) {
   INSTPAT("0000000 ????? ????? 101 ????? 00110 11", srliw , I, R(rd) = (sword_t)(int32_t)((uint32_t)src1 >> (imm & 0x1f)));
   INSTPAT("0100000 ????? ????? 101 ????? 00110 11", sraiw , I, R(rd) = (sword_t)(int32_t)((int32_t)src1 >> (imm & 0x1f)));
 
-  // ============== RV64M: Multiply/Divide Extension ==============
+  // ============== RV32M: Multiply/Divide Extension ==============
   
-  // 64-bit Multiply/Divide
   INSTPAT("0000001 ????? ????? 000 ????? 01100 11", mul   , R, R(rd) = src1 * src2);
-  INSTPAT("0000001 ????? ????? 001 ????? 01100 11", mulh  , R, R(rd) = (sword_t)(((__int128_t)(sword_t)src1 * (__int128_t)(sword_t)src2) >> 64));
-  INSTPAT("0000001 ????? ????? 010 ????? 01100 11", mulhsu, R, R(rd) = (sword_t)(((__int128_t)(sword_t)src1 * (__uint128_t)(word_t)src2) >> 64));
-  INSTPAT("0000001 ????? ????? 011 ????? 01100 11", mulhu , R, R(rd) = (word_t)(((__uint128_t)(word_t)src1 * (__uint128_t)(word_t)src2) >> 64));
+  INSTPAT("0000001 ????? ????? 001 ????? 01100 11", mulh  , R, R(rd) = (word_t)(((int64_t)(sword_t)src1 * (int64_t)(sword_t)src2) >> 32));
+  INSTPAT("0000001 ????? ????? 010 ????? 01100 11", mulhsu, R, R(rd) = (word_t)(((int64_t)(sword_t)src1 * (int64_t)(uint32_t)src2) >> 32));
+  INSTPAT("0000001 ????? ????? 011 ????? 01100 11", mulhu , R, R(rd) = (word_t)(((uint64_t)(word_t)src1 * (uint64_t)(word_t)src2) >> 32));
   INSTPAT("0000001 ????? ????? 100 ????? 01100 11", div   , R, { if(src2 == 0) R(rd) = (sword_t)-1; else if((sword_t)src1 == (sword_t)MAX_NEGION && (sword_t)src2 == -1) R(rd) = (sword_t)MAX_NEGION; else R(rd) = (sword_t)src1 / (sword_t)src2; });
   INSTPAT("0000001 ????? ????? 101 ????? 01100 11", divu  , R, { if(src2 == 0) R(rd) = (word_t)-1; else R(rd) = (word_t)src1 / (word_t)src2; });
   INSTPAT("0000001 ????? ????? 110 ????? 01100 11", rem   , R, { if(src2 == 0) R(rd) = src1; else if((sword_t)src1 == (sword_t)MAX_NEGION && (sword_t)src2 == -1) R(rd) = 0; else R(rd) = (sword_t)src1 % (sword_t)src2; });
@@ -175,14 +174,14 @@ static int decode_exec(Decode *s) {
   (addr) == 0x305 ? cpu.mtvec   : \
   (addr) == 0x341 ? cpu.mepc    : \
   (addr) == 0x342 ? cpu.mcause  : \
-  ({ panic("Unknown CSR 0x%lx", (word_t)(addr)); (word_t)0; }) )
+  ({ panic("Unknown CSR " FMT_WORD, (word_t)(addr)); (word_t)0; }) )
 #define csr_write(addr, val) do { \
   switch((addr)) { \
     case 0x300: cpu.mstatus = (val); break; \
     case 0x305: cpu.mtvec   = (val); break; \
     case 0x341: cpu.mepc    = (val); break; \
     case 0x342: cpu.mcause  = (val); break; \
-    default: panic("Unknown CSR 0x%lx", (word_t)(addr)); \
+    default: panic("Unknown CSR " FMT_WORD, (word_t)(addr)); \
   } \
 } while(0)
 

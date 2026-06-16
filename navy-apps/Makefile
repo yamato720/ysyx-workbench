@@ -142,8 +142,10 @@ $(ARCHIVE): $(LINKAGE)
 ## 6. Miscellaneous
 
 ### Pull newlib from github if it does not exist
+LIBC_PATCH = $(NAVY_HOME)/libs/libc.patch
 ifeq ($(wildcard $(NAVY_HOME)/libs/libc/Makefile),)
   $(shell cd $(NAVY_HOME)/libs && git clone git@github.com:NJU-ProjectN/newlib-navy.git libc)
+  $(shell cd $(NAVY_HOME)/libs/libc && git apply $(LIBC_PATCH))
 endif
 
 ### Build order control
