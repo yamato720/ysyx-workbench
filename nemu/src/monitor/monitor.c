@@ -22,7 +22,6 @@ void init_log(const char *log_file);
 void init_mem();
 void init_difftest(char *ref_so_file, long img_size, int port);
 void init_device();
-void init_sdb();
 void init_disasm();
 void check_npc_flag();
 
@@ -39,8 +38,6 @@ static void welcome() {
 
 #ifndef CONFIG_TARGET_AM
 #include <getopt.h>
-
-void sdb_set_batch_mode();
 
 static char *log_file = NULL;
 static char *diff_so_file = NULL;
@@ -82,12 +79,16 @@ static int parse_args(int argc, char *argv[]) {
   int o;
   while ( (o = getopt_long(argc, argv, "-bhl:d:p:e:", table, NULL)) != -1) {
     switch (o) {
-      case 'b': sdb_set_batch_mode(); break;
+      case 'b':
+        sdb_set_batch_mode();
+        break;
       case 'p': sscanf(optarg, "%d", &difftest_port); break;
       case 'l': log_file = optarg; break;
       case 'd': diff_so_file = optarg; break;
       case 'e': analyze_elf(optarg); break;
-      case 1: img_file = optarg; return 0;
+      case 1:
+        if (img_file == NULL) img_file = optarg;
+        break;
       default:
         printf("Usage: %s [OPTION...] IMAGE [args]\n\n", argv[0]);
         printf("\t-b,--batch              run with batch mode\n");
@@ -127,6 +128,10 @@ void init_monitor(int argc, char *argv[]) {
   printf("NPC mode enabled, initializing NPC...\n");
   extern void npc_init();
   npc_init();
+#ifdef NPC_FPGA_REMOTE
+  extern void npc_cleanup(void);
+  atexit(npc_cleanup);
+#endif
   printf("NPC initialized successfully\n");
   #endif
 
@@ -134,6 +139,11 @@ void init_monitor(int argc, char *argv[]) {
 
   /* Load the image to memory. This will overwrite the built-in image. */
   long img_size = load_img();
+
+  #ifdef NPC_FPGA_REMOTE
+  extern void npc_load_image(const void *image, size_t image_size);
+  npc_load_image(guest_to_host(RESET_VECTOR), (size_t)img_size);
+  #endif
 
   /* Initialize differential testing. */
   init_difftest(diff_so_file, img_size, difftest_port);

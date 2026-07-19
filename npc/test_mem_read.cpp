@@ -5,7 +5,7 @@ extern "C" {
 }
 
 int main() {
-    load_image("../am-kernels/tests/cpu-tests/build/add-riscv64-npc.bin");
+    load_image("../am-kernels/tests/cpu-tests/build/add-riscv64-nemu.bin");
     printf("Address 0x80000000-0x80000003:\n");
     for (int i = 0; i < 4; i++) {
         unsigned char byte = (unsigned char)pmem_read_a(0x80000000 + i);

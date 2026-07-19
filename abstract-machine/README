@@ -1,13 +1,39 @@
-AbstractMachine is a minimal, modularized, and machine-independent 
+AbstractMachine is a minimal, modularized, and machine-independent
 abstraction layer of the computer hardware:
 
-* physical memory and direct execution (The "Turing Machine");
+* physical memory and direct execution (the "Turing Machine");
 * basic model for input and output devices (I/O Extension);
 * interrupt/exception and processor context management (Context Extension);
 * virtual memory and protection (Virtual Memory Extension);
 * multiprocessing (Multiprocessing Extension).
 
+Config 驱动的 NPC/SoC/FPGA 运行
+--------------------------------
+
+NPC 相关测试统一从 `am-kernels/tests/cpu-tests` 启动：
+
+```bash
+make -C am-kernels/tests/cpu-tests run ALL=add config=NpcDpiConfig
+make -C am-kernels/tests/cpu-tests run-bat ALL="add div" config=YsyxSimulationConfig
+make -C am-kernels/tests/cpu-tests run ALL=add version=1
+make -C am-kernels/tests/cpu-tests run config=U55cYsyxSocFpgaConfig
+```
+
+终端 Config 固定 NPC/SoC 后端、XLEN 和板卡；调用者不再分别选择接口。`ARCH` 自动从 XLEN 推导，
+显式传入时只做一致性校验。`version` 是从 `1` 开始、不会因删除其他构造而重排的稳定构造序号。
+
+仿真 Config 缺失时自动原子构造；已有仿真构造在运行前由 NEMU Make 按 C/C++、头文件和
+menuconfig 配置依赖增量刷新。Chisel、Verilator glue 和 FPGA 构造只在 `rebuild=1` 时更新。FPGA
+Config 缺失资产时需添加 `build=1`；已有 FPGA 一直使用同一构造目录中冻结的 NEMU host、manifest 和
+bitstream/xclbin。资产 SHA、板卡、XRT 平台或协议 ABI 不兼容会硬失败。
+
+交互 `run` 使用板级 SDB；`run-bat` 批量执行。远端 SDB 支持 `si`、`c`、Ctrl-C、`info r`、`p`、
+`x` 和软 watchpoint。ZCU102 运行前需要加载构造目录中的 bitstream、设备树并提供 UIO/预留 DDR；
+U55C 需要安装匹配平台的 XRT，NEMU host 会加载构造目录中的平台限定 xclbin。
+
+没有传入 `NPC_CONSTRUCTION_DIR` 的其他 AM 工程仍走普通 NEMU 构建，不受 NPC 构造库影响。
+
 CONTACTS
 
-Bug reports and suggestions go to Yanyan Jiang (jyy@nju.edu.cn) and Zihao 
+Bug reports and suggestions go to Yanyan Jiang (jyy@nju.edu.cn) and Zihao
 Yu (yuzihao@ict.ac.cn).

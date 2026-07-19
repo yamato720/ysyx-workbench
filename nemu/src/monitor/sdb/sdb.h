@@ -28,6 +28,16 @@ enum {
 };
 #define NR_WP 32
 
+/* SDB 生命周期接口：供 monitor、执行引擎与 FPGA host 后端调用。 */
+void init_sdb(void);
+void sdb_mainloop(void);
+void sdb_set_batch_mode(void);
+bool sdb_is_batch_mode(void);
+
+/* 各基础子模块的初始化接口。 */
+void init_regex(void);
+void init_wp_pool(void);
+
 typedef struct watchpoint {
   bool busy;
   int NO;
@@ -52,7 +62,16 @@ void wp_display();
 bool is_pc_watchpoint_triggered();
 
 bool check_watchpoints();
+bool has_watchpoints();
 void update_other_regs();
+
+bool target_memory_read(vaddr_t address, int length, word_t *value);
+bool target_memory_read_buffer(vaddr_t address, void *destination, size_t length);
+
+/* 命令执行层依赖的基础服务；实现集中在 sdb-base.c。 */
+char *sdb_gets(void);
+vaddr_t hex2hex(char *hex, bool *success);
+int sdb_run_expression_test(char *args);
 
 void show_iringbuf();
 void show_mem_access();
@@ -83,9 +102,9 @@ void check_ftrace(uint64_t pc, uint32_t inst);
 void display_ftrace();
 
 
-#ifdef NPC
+#if defined(NPC) && defined(NPC_VCD_TRACE)
 extern void npc_start_trace();
 extern void npc_stop_trace();
-#endif /* NPC */
+#endif /* NPC && NPC_VCD_TRACE */
 
 #endif /* SDB_H */

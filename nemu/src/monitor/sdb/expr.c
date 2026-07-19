@@ -246,7 +246,12 @@ static bool make_token(char *e) {
                     printf("Invalid memory address: " FMT_WORD "\n", tokens[nr_token].member);
                     return false;
                   }
-                  tokens[nr_token-1].member = vaddr_read(tokens[nr_token].member, BYTE);
+                  if (!target_memory_read(tokens[nr_token].member, BYTE,
+                                          &tokens[nr_token-1].member)) {
+                    printf("Cannot read target memory at " FMT_WORD "\n",
+                           tokens[nr_token].member);
+                    return false;
+                  }
                   printf("get memory address value:" FMT_WORD "\n", tokens[nr_token-1].member);
                 }
                 tokens[nr_token-1].type = NUM;

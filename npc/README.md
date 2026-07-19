@@ -1,362 +1,125 @@
-# NPC - Chisel RISC-V CPU 仿真器
+# NPC Config 驱动的构造与运行
 
-本项目实现了一个基于 Chisel 的 RISC-V CPU，并通过 Verilator 进行仿真。通过与 Abstract Machine (AM) 构建系统的集成，可以直接运行 AM 程序。
+NPC 使用命名 Scala Config 固定硬件 ABI、仿真后端和 FPGA 实现策略。Make 不再接受结构参数覆盖，
+也不再维护四位快照；一个完整 Config 在 `constructions/<FQCN>/` 中只保留一份成功构造。
 
-## 目录结构
+## 常用命令
 
-```
-npc/
-├── chisel/                     # Chisel 源代码
-│   └── src/main/scala/
-│       ├── top.scala           # CPU 顶层模块
-│       ├── DPIMem.scala        # DPI-C 内存 BlackBox
-│       ├── DataManage.scala    # Cache 模块 (insCacheL1, dataCacheL1)
-│       └── Elaborate.scala     # Verilog 生成入口
-├── csrc/
-│   ├── main_chisel.cpp         # Verilator 仿真主程序
-│   └── pmem.cpp                # DPI-C 物理内存实现
-├── generated-dpi/              # Chisel 生成的 Verilog (DPI-C 模式)
-├── out/chisel-cpu/             # 编译输出的仿真器
-└── Makefile
-```
-
-## 核心实现原理
-
-### 1. Makefile 调用链
-
-当执行 `make ARCH=riscv64-npc ALL=add run` 时，调用链如下：
-
-```
-am-kernels/tests/cpu-tests/
-        │
-        ▼ make ARCH=riscv64-npc ALL=add run
-┌───────────────────────────────────────────────────────────┐
-│  abstract-machine/Makefile                                │
-│  - 解析 ARCH=riscv64-npc                                  │
-│  - include scripts/riscv64-npc.mk                         │
-└───────────────────────────────────────────────────────────┘
-        │
-        ▼
-┌───────────────────────────────────────────────────────────┐
-│  abstract-machine/scripts/riscv64-npc.mk                  │
-│  - include scripts/isa/riscv.mk      (RV64 ISA 配置)      │
-│  - include scripts/platform/npc.mk   (NPC 平台配置)       │
-│  - COMMON_CFLAGS := -march=rv64i_zicsr -mabi=lp64        │
-└───────────────────────────────────────────────────────────┘
-        │
-        ▼
-┌───────────────────────────────────────────────────────────┐
-│  abstract-machine/scripts/platform/npc.mk                 │
-│  - 定义 NPC_HOME 指向 npc 目录                            │
-│  - image: 编译生成 .bin 文件                              │
-│  - run: 调用 $(MAKE) -C $(NPC_HOME) run-chisel IMG=...   │
-└───────────────────────────────────────────────────────────┘
-        │
-        ▼
-┌───────────────────────────────────────────────────────────┐
-│  npc/Makefile                                             │
-│  - run-chisel: 依赖 chisel-cpu                           │
-│  - chisel-cpu: 依赖 chisel-dpi                           │
-│  - chisel-dpi: 调用 sbt 生成 Verilog                     │
-│  - verilator 编译 Verilog + C++ 生成仿真器               │
-└───────────────────────────────────────────────────────────┘
-        │
-        ▼
-┌───────────────────────────────────────────────────────────┐
-│  执行仿真: ./out/chisel-cpu/npc-exec <image.bin>         │
-└───────────────────────────────────────────────────────────┘
-```
-
-### 2. 关键 Makefile 片段
-
-#### `abstract-machine/scripts/riscv64-npc.mk`
-```makefile
-include $(AM_HOME)/scripts/isa/riscv.mk
-include $(AM_HOME)/scripts/platform/npc.mk
-
-CFLAGS  += -DISA_H=\"riscv/riscv.h\"
-# RV64I for Chisel CPU (with Zicsr for CSR instructions, soft-float ABI)
-COMMON_CFLAGS := -fno-pic -march=rv64i_zicsr -mabi=lp64 -mcmodel=medany -mstrict-align
-```
-
-#### `abstract-machine/scripts/platform/npc.mk`
-```makefile
-NPC_HOME ?= $(AM_HOME)/../npc
-
-# 编译生成 .bin 文件
-image: image-dep
-	@$(OBJCOPY) -S --set-section-flags .bss=alloc,contents -O binary $(IMAGE).elf $(IMAGE).bin
-
-# 运行 Chisel CPU 仿真
-run: insert-arg
-	$(MAKE) -C $(NPC_HOME) run-chisel IMG=$(IMAGE).bin
-```
-
-#### `npc/Makefile`
-```makefile
-# 生成 DPI-C 模式的 Verilog
-chisel-dpi:
-	cd $(shell pwd) && sbt "root/runMain scpu.ElaborateDPI"
-
-# 用 Verilator 编译仿真器
-chisel-cpu: chisel-dpi
-	verilator -Wall --cc --exe --build \
-		$(CHISEL_DPI_OUT)/*.v ./csrc/main_chisel.cpp ./csrc/pmem.cpp
-
-# 运行仿真
-run-chisel: chisel-cpu
-	cd ./out/chisel-cpu && ./npc-exec $(IMG)
-```
-
-### 3. DPI-C 内存接口
-
-Chisel CPU 通过 DPI-C (Direct Programming Interface for C) 与 C++ 物理内存交互：
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Chisel CPU                               │
-│  ┌─────────────┐              ┌─────────────┐              │
-│  │ insCacheL1  │              │ dataCacheL1 │              │
-│  │ (指令缓存)  │              │ (数据缓存)  │              │
-│  └──────┬──────┘              └──────┬──────┘              │
-│         │                            │                      │
-│         └──────────┬─────────────────┘                      │
-│                    ▼                                        │
-│           ┌───────────────┐                                │
-│           │   DPIMem      │  (BlackBox)                    │
-│           │   Verilog     │                                │
-│           └───────┬───────┘                                │
-└───────────────────┼─────────────────────────────────────────┘
-                    │ DPI-C 函数调用
-                    ▼
-┌───────────────────────────────────────────────────────────┐
-│                  pmem.cpp (C++)                           │
-│  ┌─────────────────────────────────────────────────────┐  │
-│  │  static uint8_t pmem[128MB];  // 物理内存           │  │
-│  │                                                     │  │
-│  │  // DPI-C 导出函数                                  │  │
-│  │  char pmem_read_a(int addr);   // 端口A 读          │  │
-│  │  void pmem_write_a(int addr, char data);            │  │
-│  │  char pmem_read_b(int addr);   // 端口B 读          │  │
-│  │  void pmem_write_b(int addr, char data);            │  │
-│  └─────────────────────────────────────────────────────┘  │
-└───────────────────────────────────────────────────────────┘
-```
-
-#### `DPIMem.scala` (Chisel BlackBox)
-```scala
-class DPIMem extends BlackBox with HasBlackBoxInline {
-  val io = IO(new Bundle {
-    val clk = Input(Clock())
-    val addr_a = Input(UInt(32.W))
-    val dout_a = Output(UInt(8.W))
-    // ... 双端口接口
-  })
-
-  setInline("DPIMem.v", """
-    module DPIMem(...);
-      import "DPI-C" function byte pmem_read_a(input int addr);
-      import "DPI-C" function void pmem_write_a(input int addr, input byte data);
-      // ...
-    endmodule
-  """)
-}
-```
-
-#### `pmem.cpp` (C++ 实现)
-```cpp
-#define PMEM_SIZE (128 * 1024 * 1024)  // 128MB
-#define PMEM_BASE 0x80000000
-
-static uint8_t pmem[PMEM_SIZE] = {};
-
-extern "C" {
-  // DPI-C 函数 - Verilog 可调用
-  char pmem_read_a(int addr) {
-    return pmem[addr - PMEM_BASE];
-  }
-  
-  void pmem_write_a(int addr, char data) {
-    pmem[addr - PMEM_BASE] = data;
-  }
-  
-  // 加载二进制镜像
-  int load_image(const char *filename) {
-    FILE *fp = fopen(filename, "rb");
-    fread(pmem, 1, size, fp);
-    // ...
-  }
-}
-```
-
-### 4. Cache 模块的 DPI-C 支持
-
-`insCacheL1` 和 `dataCacheL1` 支持三种模式：
-
-```scala
-class insCacheL1(useBlackBox: Boolean = false, 
-                 useDPI: Boolean = false, 
-                 initFile: Option[String] = None) extends Module {
-  
-  if (useDPI) {
-    // 使用 DPI-C 外部内存 (Verilator 仿真)
-    val dpiMem = Module(new DPIMem)
-    // 连接 DPI-C 接口...
-  } else if (useBlackBox) {
-    // 使用 FPGA BRAM BlackBox (综合)
-    val blackbox = Module(new bram_8_4096_mem_shell)
-    // ...
-  } else {
-    // 使用 Chisel SyncReadMem (功能仿真)
-    val bram = SyncReadMem(4096, UInt(8.W))
-    // ...
-  }
-}
-```
-
-### 5. Elaborate 入口
-
-```scala
-// 普通模式 - 内部 SyncReadMem
-object Elaborate extends App {
-  _root_.circt.stage.ChiselStage.emitSystemVerilogFile(
-    new CPU(Width = 64, Debug = true),
-    Array("--target-dir", "./generated"),
-    Array("--disable-annotation-unknown")
-  )
-}
-
-// DPI-C 模式 - 外部内存
-object ElaborateDPI extends App {
-  _root_.circt.stage.ChiselStage.emitSystemVerilogFile(
-    new CPU(Width = 64, Debug = true, useDPI = true),
-    Array("--target-dir", "./generated-dpi"),
-    Array("--disable-annotation-unknown")
-  )
-}
-```
-
-## 使用方法
-
-### 编译并运行测试
+查看、生成和管理构造：
 
 ```bash
-# 在 am-kernels/tests/cpu-tests 目录下
-make ARCH=riscv64-npc ALL=add run      # 运行 add 测试
-make ARCH=riscv64-npc ALL=dummy run    # 运行 dummy 测试
+make -C npc config-list
+make -C npc build config=NpcDpiConfig
+make -C npc build config=U55cYsyxSocFpgaConfig
+make -C npc build config=U55cYsyxSocFpgaConfig rebuild=1
 
-# 或者直接在 npc 目录下
-make run-chisel IMG=/path/to/image.bin
+make -C npc version
+make -C npc version config=NpcDpiConfig
+make -C npc version version=1
+make -C npc version delete=1
+make -C npc version delete=1 yes=1
 ```
 
-### 单独构建步骤
+CPU 测试的正式运行入口位于 `am-kernels/tests/cpu-tests`：
 
 ```bash
-cd npc/
-
-# 1. 生成 Verilog (DPI-C 模式)
-make chisel-dpi
-
-# 2. 编译 Verilator 仿真器
-make chisel-cpu
-
-# 3. 运行仿真
-make run-chisel IMG=xxx.bin
+make -C am-kernels/tests/cpu-tests run ALL=add config=NpcDpiConfig
+make -C am-kernels/tests/cpu-tests run-bat ALL="add div" config=YsyxSimulationConfig
+make -C am-kernels/tests/cpu-tests run ALL=add version=1
+make -C am-kernels/tests/cpu-tests run-bat ALL="add div" \
+  version=1,2
 ```
 
-### 查看生成的文件
+`run` 只接受一个 Config 或编号；`run-bat` 可对逗号分隔的多个编号和多个 `ALL` 用例执行矩阵。
+`config=` 与 `version=` 同时出现时必须指向同一 FQCN。`ARCH` 根据 Config 的 XLEN 推导，显式传入
+`ARCH` 只做一致性校验。两者都不传会报错并列出可运行 Config。
+
+## 构造策略
+
+| Config 能力 | 用途 | 缺失时 | 已有构造的更新方式 |
+| --- | --- | --- | --- |
+| `elaborate-only` | 只生成 RTL | `make -C npc build` 显式生成 | `rebuild=1` 原子重构 |
+| `verilator-npc` | NPC Verilator + NEMU host | 首次运行自动生成 | NEMU C/C++ 由 Make 增量刷新；硬件 ABI 用 `rebuild=1` |
+| `verilator-soc` | ysyxSoC Verilator + NEMU host | 首次运行自动生成 | NEMU C/C++ 由 Make 增量刷新；硬件 ABI 用 `rebuild=1` |
+| `fpga-npc` | 裸 NPC 板卡构造 | 运行需 `build=1` | 仅 `rebuild=1` 重新实现 |
+| `fpga-soc` | ysyxSoC 板卡构造 | 运行需 `build=1` | 仅 `rebuild=1` 重新实现 |
+
+FPGA 的 `build=1` 只允许首次构造；`rebuild=1` 强制在临时目录完成实现、校验后原子替换，并隐含
+`build=1`。已有 FPGA 构造不会因源码、Config 或工具变化自动重建；需要新硬件时必须显式传入
+`rebuild=1`。旧资产的 SHA-256、终端 FQCN、板卡、XRT 平台、host ABI 或 mailbox 协议不兼容时
+始终硬失败。
+
+仿真构造在每次运行前执行一次 NEMU 的普通 Make。C/C++ 和头文件由 `.d` 依赖判断，menuconfig
+配置文本变化时会使 NEMU 对象整体重编译。Chisel、生成 RTL、Verilator 对象、`npc/csrc` glue 与 FPGA
+文件不做自动失效检测，修改它们后使用 `rebuild=1`。
+
+## 构造目录
+
+```text
+constructions/
+  scpu.NpcDpiConfig/
+    construction.env
+    profile.env
+    abi/{rtl,verilator,nemu,softfloat,glue}/
+    logs/
+  scpu.fpga.u55c.U55cYsyxSocFpgaConfig/
+    construction.env
+    profile.env
+    abi/{nemu,protocol}/
+    fpga/{rtl,ip,synth,link,artifacts}/
+    logs/
+```
+
+首次成功构造分配从 `1` 开始、单调递增且不重排的版本序号。同一个 Config 重构时保留版本序号和
+`CREATED_AT`，更新 `UPDATED_AT`、`REBUILD_COUNT` 和 Config 固定的 ABI。内部时间 ID 仅用于并发安全和
+迁移排序，不是 Make 接口。构造在
+`.staging-*` 完成；失败日志进入 `.failed/`，旧目录保持不变。
+
+批次日志保存在工作区 `log/constructions/<版本序号>/<测试>/`，每项包含原始输出、状态和
+`summary.env`。每次 `run`/`run-bat` 另生成会话汇总，展示 Config、能力、板卡、cycles、commits、
+CPI、IPC、MIPS 与结果。
+
+## Config 层级
+
+| 层级 | 目录 | 职责 | 是否可选 |
+| --- | --- | --- | --- |
+| L1 | `chisel/configs/npc/` | NPC ISA、流水线、旁路、算术、内存和 AXI ABI | 必需 |
+| L2 | `chisel/configs/ysyx/` | Rocket/ysyxSoC CDE 图与运行平台 | SoC 才需要 |
+| L3 | `chisel/configs/fpga/common/` | NPC/SoC 接入 FPGA 的公共 CDE 键 | FPGA 才需要 |
+| L4 | `chisel/configs/fpga/{u55c,zcu102}/` | 板卡、频率、器件和 Vivado/Vitis 策略 | FPGA 必需且二选一 |
+
+Make 每次顶层启动都会由 Scala 重新扫描完整无参 Config，生成派生 TSV。组合片段和检查 Config
+不会成为 Make 入口。选中 Config 后，SBT/Mill 反射实例化并生成 `profile.env`；Make、NEMU 和 Tcl
+只消费该描述。新增终端 Config 不需要手工登记 CSV。
+
+CDE 的 `++` 从右向左建立基础，左侧值优先。例如板卡 SoC Config 把板卡 NPC 放在
+`YsyxSocFpgaConfig` 左侧，就能替换 SoC 默认核心，同时保留 Rocket、外设和平台设置。
+
+完整类和可复制特性见 [Config 文档](chisel/configs/README.md)。FPGA shell、产物拆分与资产格式见
+[FPGA 文档](fpga/README.md)。
+
+## 数据通路
+
+`make build/run` 先刷新 Config 目录，再由 SBT 或 Mill 生成规范化 profile。NPC 入口通过
+`NpcConfigResolver` 得到 `NpcConstructionConfig`；SoC/FPGA 入口通过 `CdeConfigResolver` 得到 CDE
+`Config`，并从 `NpcCoreConfigKey` 取得完成的 L1 `NpcConfig`。Chisel elaboration 生成按模块拆分的
+SystemVerilog，Verilator 或 Vivado/Vitis 消费同一份 RTL 与 profile。运行时 AM 只编译测试镜像；仿真
+Config 会先用 Make 刷新构造目录中的 NEMU host，FPGA Config 则始终使用冻结的 host、xclbin 或
+ZCU102 环境清单。
+
+## 验证
 
 ```bash
-# Chisel 生成的 Verilog
-ls generated-dpi/
-# CPU.sv
+cd npc
+sbt "root/test" "fpga/test"
+cd chisel/ysyxSoC && mill -i ysyxsoc.compile
 
-# 编译后的仿真器
-ls out/chisel-cpu/
-# npc-exec
+cd npc
+scripts/construction-regression.sh "$PWD"
+fpga/tests/config-regression.sh "$PWD"
+fpga/tests/release-regression.sh "$PWD"
+fpga/tests/run-fpga-rtl-test.sh "$PWD"
 ```
 
-## 架构支持
-
-| ARCH | 描述 | CPU |
-|------|------|-----|
-| `riscv64-npc` | 64位 RISC-V NPC | Chisel CPU (RV64I) |
-| `minirv-npc` | 32位 mini RISC-V NPC | 原 Verilog CPU |
-| `minirv-nemu` + `run-npc` | 通过 NEMU 配置运行 NPC | Chisel CPU |
-| `riscv64-nemu` | 64位 RISC-V NEMU | NEMU 模拟器 |
-
-## AXI4-Lite 相关文档
-
-当前 NPC 的 AXI4-Lite 说明分成三类，建议按下面顺序阅读：
-
-1. `../docs/NPC_AXI4_LITE_TOP_INTEGRATION.md`
-   面向当前实现的总览，重点讲 top 接线、Crossbar 地址分发、Chisel 语法
-2. `AXI4_LITE_CHANGE_ANALYSIS.md`
-   重点讲接入 AXI4-Lite 后结构发生了什么变化
-3. `AXI4_LITE_MIGRATION.md`
-   重点讲迁移设计思路，以及为什么这样改
-
-## DiffTest 支持
-
-DiffTest 可以让 NPC 与 NEMU 进行对比验证，每执行一条指令就比较两者的状态。
-
-### 构建 NEMU 参考实现
-
-```bash
-# 编译 NEMU 为动态库 (.so)
-cd ../nemu
-make ISA=riscv64 SHARE=1
-# 生成 build/riscv64-nemu-interpreter-so
-```
-
-### 使用 DiffTest 运行
-
-```bash
-# 方式1: 直接在 npc 目录运行
-make run-difftest IMG=/path/to/image.bin
-
-# 方式2: 手动指定参考实现
-./out/chisel-cpu/npc-exec -d ../nemu/build/riscv64-nemu-interpreter-so image.bin
-```
-
-### 命令行选项
-
-```
-Usage: npc-exec [OPTIONS] <image.bin>
-Options:
-  -d, --diff=REF_SO    启用 DiffTest，指定 NEMU .so 文件
-  -b, --batch          批处理模式 (无交互)
-  -h, --help           显示帮助信息
-```
-
-### DiffTest 工作原理
-
-```
-┌──────────────────┐                    ┌──────────────────┐
-│       NPC        │                    │       NEMU       │
-│   (Chisel CPU)   │                    │    (Reference)   │
-│                  │                    │                  │
-│   执行一条指令   │                    │   执行一条指令   │
-│        │         │                    │        │         │
-│        ▼         │                    │        ▼         │
-│   ┌─────────┐    │    比较状态        │   ┌─────────┐    │
-│   │ PC, GPR │◄───┼────────────────────┼──►│ PC, GPR │    │
-│   └─────────┘    │                    │   └─────────┘    │
-└──────────────────┘                    └──────────────────┘
-         │                                       ▲
-         │          dlopen/dlsym                 │
-         └───────────────────────────────────────┘
-                  riscv64-nemu-interpreter-so
-```
-
-## 调试
-
-仿真器会生成波形文件：
-```bash
-cd out/chisel-cpu/
-./npc-exec image.bin
-# 生成 wave.vcd
-
-# 用 GTKWave 查看波形
-gtkwave wave.vcd
-```
+回归使用 dry-run 或 RTL 仿真，不会启动完整 Vivado/Vitis 实现。真实 U55C/ZCU102 资产只有在时序
+收敛和实体板验收后才可进入 Release。

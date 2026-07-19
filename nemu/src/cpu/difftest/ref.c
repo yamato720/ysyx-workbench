@@ -35,6 +35,15 @@ __EXPORT void difftest_memcpy(paddr_t addr, void *buf, size_t n, bool direction)
 }
 
 __EXPORT void difftest_regcpy(void *dut, bool direction) {
+#ifdef CONFIG_ISA_riscv
+  if (direction == DIFFTEST_TO_REF) {
+    riscv_difftest_unpack((const riscv_difftest_state_t *)dut);
+  } else if (direction == DIFFTEST_TO_DUT) {
+    riscv_difftest_pack((riscv_difftest_state_t *)dut);
+  } else {
+    panic("Unknown difftest direction %d", direction);
+  }
+#else
   if (direction == DIFFTEST_TO_REF) {
     memcpy(&cpu, dut, DIFFTEST_REG_SIZE);
     cpu.gpr[0] = 0;
@@ -43,6 +52,7 @@ __EXPORT void difftest_regcpy(void *dut, bool direction) {
   } else {
     panic("Unknown difftest direction %d", direction);
   }
+#endif
 }
 
 __EXPORT void difftest_exec(uint64_t n) {

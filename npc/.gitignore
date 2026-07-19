@@ -5,6 +5,9 @@
 # Ignore build artifact and generated directories
 target/
 generated-dpi/
+generated-ip/
+generated/
+generated-pipeline-dpi/
 intermediate/
 out/
 .idea/
@@ -18,5 +21,22 @@ out/
 !*.cpp
 !*.scala
 !*.sbt
+!*.env
 !.gitignore
 !*.md
+!*.tcl
+!*.sv
+!*.sh
+!scripts/performance-summary.sh
+
+# Tool-generated trees can contain whitelisted RTL, Tcl, and Markdown files.
+# Keep these exclusions after the file-type whitelist above.
+/.Xil/
+/.gen/
+/.ipcache/
+/.metals/
+/_x/
+/fpga/build/
+/constructions/
+/project/metals.sbt
+/project/project/

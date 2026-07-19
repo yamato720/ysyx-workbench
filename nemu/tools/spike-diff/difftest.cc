@@ -36,11 +36,6 @@ static debug_module_config_t difftest_dm_config = {
   .support_impebreak = true
 };
 
-struct diff_context_t {
-  word_t gpr[MUXDEF(CONFIG_RVE, 16, 32)];
-  word_t pc;
-};
-
 static sim_t* s = NULL;
 static processor_t *p = NULL;
 static state_t *state = NULL;
@@ -55,19 +50,31 @@ void sim_t::diff_step(uint64_t n) {
 }
 
 void sim_t::diff_get_regs(void* diff_context) {
-  struct diff_context_t* ctx = (struct diff_context_t*)diff_context;
+  riscv_difftest_state_t* ctx = (riscv_difftest_state_t*)diff_context;
+  memset(ctx, 0, sizeof(*ctx));
   for (int i = 0; i < NR_GPR; i++) {
     ctx->gpr[i] = state->XPR[i];
   }
   ctx->pc = state->pc;
+  for (int i = 0; i < 32; i++) {
+    ctx->fpr[i] = state->FPR[i];
+  }
+  ctx->fcsr = (state->frm << 5) | (state->fflags & 0x1f);
+  ctx->mstatus = state->mstatus;
 }
 
 void sim_t::diff_set_regs(void* diff_context) {
-  struct diff_context_t* ctx = (struct diff_context_t*)diff_context;
+  riscv_difftest_state_t* ctx = (riscv_difftest_state_t*)diff_context;
   for (int i = 0; i < NR_GPR; i++) {
     state->XPR.write(i, (sword_t)ctx->gpr[i]);
   }
   state->pc = ctx->pc;
+  for (int i = 0; i < 32; i++) {
+    state->FPR.write(i, ctx->fpr[i]);
+  }
+  state->fflags = ctx->fcsr & 0x1f;
+  state->frm = (ctx->fcsr >> 5) & 0x7;
+  state->mstatus = ctx->mstatus;
 }
 
 void sim_t::diff_memcpy(reg_t dest, void* src, size_t n) {
@@ -101,7 +108,7 @@ __EXPORT void difftest_exec(uint64_t n) {
 
 __EXPORT void difftest_init(int port) {
   difftest_htif_args.push_back("");
-  const char *isa = "RV" MUXDEF(CONFIG_RV64, "64", "32") MUXDEF(CONFIG_RVE, "E", "I") "MAFDC";
+  const char *isa = "RV" MUXDEF(CONFIG_RV64, "64", "32") MUXDEF(CONFIG_RVE, "E", "I") "MAF";
   cfg_t cfg(/*default_initrd_bounds=*/std::make_pair((reg_t)0, (reg_t)0),
             /*default_bootargs=*/nullptr,
             /*default_isa=*/isa,

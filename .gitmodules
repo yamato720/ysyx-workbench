@@ -5,7 +5,7 @@
 [submodule "am-kernels"]
 	path = am-kernels
 	url = git@github.com:yamato720/am-kernels.git
-	branch = master
+	branch = fpga-sdb
 [submodule "fceux-am"]
 	path = fceux-am
 	url = git@github.com:yamato720/fceux-am.git
@@ -17,4 +17,4 @@
 [submodule "ysyxSoC"]
 	path = npc/chisel/ysyxSoC
 	url = git@github.com:yamato720/ysyxSoC.git
-	branch = ysyx6
+	branch = fpga-sdb

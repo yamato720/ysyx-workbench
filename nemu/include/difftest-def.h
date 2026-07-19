@@ -30,7 +30,15 @@ enum { DIFFTEST_TO_DUT, DIFFTEST_TO_REF };
 #elif defined(CONFIG_ISA_riscv)
 #define RISCV_GPR_TYPE MUXDEF(CONFIG_RV64, uint64_t, uint32_t)
 #define RISCV_GPR_NUM  MUXDEF(CONFIG_RVE , 16, 32)
-#define DIFFTEST_REG_SIZE (sizeof(RISCV_GPR_TYPE) * (RISCV_GPR_NUM + 1)) // GPRs + pc
+typedef struct {
+  uint64_t gpr[32];
+  uint64_t pc;
+  uint64_t fpr[32];
+  uint32_t fcsr;
+  uint32_t reserved;
+  uint64_t mstatus;
+} riscv_difftest_state_t;
+#define DIFFTEST_REG_SIZE sizeof(riscv_difftest_state_t)
 #elif defined(CONFIG_ISA_loongarch32r)
 # define DIFFTEST_REG_SIZE (sizeof(uint32_t) * 33) // GPRs + pc
 #else

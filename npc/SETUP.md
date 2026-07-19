@@ -211,21 +211,21 @@ make -j$(nproc)
 # 产物：build/riscv64-nemu-interpreter-so
 ```
 
-### 7.2 编译 NPC（Chisel → Verilog → Verilator 对象文件）
+### 7.2 生成统一 NPC 构造
 
 ```bash
 cd $NPC_HOME
-make chisel-dpi        # Chisel 编译，生成 generated-dpi/CPU.sv（第一次会下载 Chisel 依赖，需要网络）
-make chisel-cpu-lib    # Verilator 编译，生成 intermediate/chisel-cpu-lib/*.o
+make config-list
+make build config=NpcDpiConfig
 ```
 
-正常完成后无报错，`intermediate/chisel-cpu-lib/` 下有 `.o` 文件。
+正常完成后，`constructions/scpu.NpcDpiConfig/` 包含 RTL、Verilator ABI 和 NEMU host。
 
-### 7.3 通过 NEMU 运行 NPC（difftest 模式）
+### 7.3 通过统一入口运行 NPC
 
 ```bash
-cd $NEMU_HOME
-make USENPC=1 run ISA=riscv64 IMG=<path-to-elf>
+cd $YSYX_HOME
+make -C am-kernels/tests/cpu-tests run ALL=add config=NpcDpiConfig
 ```
 
 ---
@@ -260,7 +260,7 @@ export JAVA_HOME=$(dirname $(dirname $(readlink -f $(which java))))
 java -version
 ```
 
-### make chisel-cpu-lib 报 `g++: fatal error: verilated.h: No such file`
+### `make build config=NpcDpiConfig` 报 `g++: fatal error: verilated.h: No such file`
 
 verilator 未在 PATH 中或 VERILATOR_ROOT 推断失败。检查：
 

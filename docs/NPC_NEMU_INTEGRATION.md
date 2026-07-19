@@ -1,70 +1,32 @@
-# NPC Integration with NEMU
+# NPC 与 NEMU 的统一构造集成
 
-## 当前实现说明
+NPC/ysyxSoC 不作为运行时动态库临时拼接。每个可运行 Scala Config 会在
+`npc/constructions/<FQCN>/` 冻结一套相互匹配的 RTL、Verilator 对象、glue、SoftFloat 和 NEMU
+host；FPGA Config 还冻结 host、协议清单与板卡资产。
 
-### 问题
-NEMU 需要在 NPC 模式下调用 NPC (Chisel CPU) 来执行指令，但它们是两个独立的程序。
+## 构造链
 
-### 解决方案选项
+1. Make 通过 Scala 自动目录解析 `config=` 或从 `1` 开始的 `version=`。
+2. SBT/Mill 反射实例化完整 Config，生成规范化 `profile.env`。
+3. NPC 或 ysyxSoC elaborator 生成按模块拆分的 RTL。
+4. 仿真 Config 使用 Verilator 生成对象，并与对应 NEMU 配置链接为构造专用 host。
+5. FPGA Config 生成 Vivado/Vitis 资产，再链接板卡后端 NEMU host。
+6. 构造成功后从 staging 原子替换；AM 运行只编译测试镜像并启动保存的 host。
 
-#### 选项 1: 共享库方式 (推荐)
-将 NPC 编译成共享库 (.so)，NEMU 动态加载并调用：
+这种方式保证生成代码、Verilator 头文件、NEMU 配置、SoftFloat 和 FPGA 协议不会跨构造混用。
+`construction.env` 记录稳定版本序号、终端 Config、ABI、板卡和构造时间；资产本身的完整性由
+`artifact-manifest.env` 与 `SHA256SUMS` 校验。
 
-1. 修改 NPC Makefile，编译成共享库：
-```makefile
-chisel-cpu-lib: chisel-dpi
-	verilator ... -shared -fPIC ...
-	# 生成 libnpc.so
+## 使用
+
+```bash
+make -C npc build config=NpcDpiConfig
+make -C am-kernels/tests/cpu-tests run-bat ALL="add div" config=NpcDpiConfig
+
+make -C npc build config=YsyxSimulationConfig
+make -C am-kernels/tests/cpu-tests run ALL=add config=YsyxSimulationConfig
 ```
 
-2. NEMU 使用 dlopen/dlsym 加载 NPC：
-```c
-#ifdef NPC
-void* npc_handle = dlopen("libnpc.so", RTLD_LAZY);
-void (*npc_single_run)() = dlsym(npc_handle, "npc_single_run");
-#endif
-```
-
-#### 选项 2: 独立运行 (当前方案)
-NEMU 和 NPC 分别独立运行：
-- `make ARCH=riscv64-nemu` → 使用 NEMU 软件模拟
-- `make ARCH=riscv64-npc` → 使用 NPC 硬件仿真
-
-**这是当前实现的方案，两者不需要直接调用。**
-
-#### 选项 3: DiffTest 集成
-如果需要对比测试，应该：
-1. NPC 集成 DiffTest，加载 NEMU-so 作为参考
-2. NPC 每执行一条指令，调用 NEMU-so 对比状态
-
-## 当前代码的作用
-
-`cpu-exec.c` 中的 NPC 分支代码主要是**占位符**，表示"在 NPC 模式下，不使用 NEMU 的软件模拟"。
-
-实际执行流程：
-- 编译时如果定义了 NPC 宏，NEMU 的 `exec_once` 会调用 NPC 接口
-- 但这需要 NPC 被编译到同一个可执行文件中，或作为库链接
-
-## 推荐做法
-
-**保持当前的独立运行方式**，不需要复杂的集成：
-
-1. 软件仿真：`make ARCH=riscv64-nemu ALL=add run-npc-bat`
-   - 使用 NEMU（定义 NPC 宏，但可以有不同的行为）
-
-2. 硬件仿真：`make ARCH=riscv64-npc ALL=add run`
-   - 使用 NPC (Verilator)
-
-3. DiffTest：在 NPC 中实现，对比 NEMU-so
-
-## 如果必须集成
-
-需要做的事情：
-1. 在 NPC 的 `main_chisel.cpp` 中添加全局变量和导出函数
-2. 将 NPC 编译成库
-3. 修改 NEMU Makefile，链接 NPC 库
-4. 处理 Verilator 的依赖和初始化
-
-这会非常复杂，不建议这样做。
-
-
+仿真构造缺失时自动原子构造；已有构造运行前只用 NEMU Make 刷新其 C/C++、头文件和 menuconfig
+依赖。Chisel、RTL、Verilator 对象和 glue 变更需要 `rebuild=1`。失败时旧构造保持可用，失败日志写入
+`npc/constructions/.failed/`。FPGA 不做自动重建，只有 `rebuild=1` 才重新实现。

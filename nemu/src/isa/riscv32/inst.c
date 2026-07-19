@@ -17,6 +17,8 @@
 #include <cpu/cpu.h>
 #include <cpu/ifetch.h>
 #include <cpu/decode.h>
+#include "csr.h"
+#include "fpu.h"
 
 #define R(i) gpr(i)
 #define Mr vaddr_read
@@ -58,6 +60,13 @@ static void decode_operand(Decode *s, int *rd, word_t *src1, word_t *src2, word_
 
 static int decode_exec(Decode *s) {
   s->dnpc = s->snpc;
+
+  // F opcodes are decoded in one shared helper so RV32 and RV64 use exactly
+  // the same SoftFloat, FCSR, FS, and NaN-boxing semantics.
+  if (riscv_f_exec(s)) {
+    R(0) = 0;
+    return 0;
+  }
 
 #define INSTPAT_INST(s) ((s)->isa.inst)
 #define INSTPAT_MATCH(s, name, type, ... /* execute body */ ) { \
@@ -169,28 +178,12 @@ static int decode_exec(Decode *s) {
   
 
   // ============== Zicsr: Control and Status Register Instructions =============
-#define csr_read(addr) ( \
-  (addr) == 0x300 ? cpu.mstatus : \
-  (addr) == 0x305 ? cpu.mtvec   : \
-  (addr) == 0x341 ? cpu.mepc    : \
-  (addr) == 0x342 ? cpu.mcause  : \
-  ({ panic("Unknown CSR " FMT_WORD, (word_t)(addr)); (word_t)0; }) )
-#define csr_write(addr, val) do { \
-  switch((addr)) { \
-    case 0x300: cpu.mstatus = (val); break; \
-    case 0x305: cpu.mtvec   = (val); break; \
-    case 0x341: cpu.mepc    = (val); break; \
-    case 0x342: cpu.mcause  = (val); break; \
-    default: panic("Unknown CSR " FMT_WORD, (word_t)(addr)); \
-  } \
-} while(0)
-
-  INSTPAT("??????? ????? ????? 001 ????? 11100 11", csrrw ,  I, { word_t old = csr_read(imm); csr_write(imm, src1); R(rd) = old; });
-  INSTPAT("??????? ????? ????? 010 ????? 11100 11", csrrs  , I, { word_t old = csr_read(imm); R(rd) = old; csr_write(imm, old | src1); });
-  INSTPAT("??????? ????? ????? 011 ????? 11100 11", csrrc  , I, { word_t old = csr_read(imm); R(rd) = old; csr_write(imm, old & ~src1); });
-  INSTPAT("??????? ????? ????? 101 ????? 11100 11", csrrwi , I, { word_t zimm = BITS(s->isa.inst, 19, 15); word_t old = csr_read(imm); csr_write(imm, zimm); R(rd) = old; });
-  INSTPAT("??????? ????? ????? 110 ????? 11100 11", csrrsi , I, { word_t zimm = BITS(s->isa.inst, 19, 15); word_t old = csr_read(imm); R(rd) = old; csr_write(imm, old | zimm); });
-  INSTPAT("??????? ????? ????? 111 ????? 11100 11", csrrci , I, { word_t zimm = BITS(s->isa.inst, 19, 15); word_t old = csr_read(imm); R(rd) = old; csr_write(imm, old & ~zimm); });
+  INSTPAT("??????? ????? ????? 001 ????? 11100 11", csrrw ,  I, { if (!riscv_csr_access_ok(imm)) INV(s->pc); else { word_t old = riscv_csr_read(imm); riscv_csr_write(imm, src1); R(rd) = old; } });
+  INSTPAT("??????? ????? ????? 010 ????? 11100 11", csrrs  , I, { if (!riscv_csr_access_ok(imm)) INV(s->pc); else { word_t old = riscv_csr_read(imm); R(rd) = old; riscv_csr_write(imm, old | src1); } });
+  INSTPAT("??????? ????? ????? 011 ????? 11100 11", csrrc  , I, { if (!riscv_csr_access_ok(imm)) INV(s->pc); else { word_t old = riscv_csr_read(imm); R(rd) = old; riscv_csr_write(imm, old & ~src1); } });
+  INSTPAT("??????? ????? ????? 101 ????? 11100 11", csrrwi , I, { if (!riscv_csr_access_ok(imm)) INV(s->pc); else { word_t zimm = BITS(s->isa.inst, 19, 15); word_t old = riscv_csr_read(imm); riscv_csr_write(imm, zimm); R(rd) = old; } });
+  INSTPAT("??????? ????? ????? 110 ????? 11100 11", csrrsi , I, { if (!riscv_csr_access_ok(imm)) INV(s->pc); else { word_t zimm = BITS(s->isa.inst, 19, 15); word_t old = riscv_csr_read(imm); R(rd) = old; riscv_csr_write(imm, old | zimm); } });
+  INSTPAT("??????? ????? ????? 111 ????? 11100 11", csrrci , I, { if (!riscv_csr_access_ok(imm)) INV(s->pc); else { word_t zimm = BITS(s->isa.inst, 19, 15); word_t old = riscv_csr_read(imm); R(rd) = old; riscv_csr_write(imm, old & ~zimm); } });
 
 
 

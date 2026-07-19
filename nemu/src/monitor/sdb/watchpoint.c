@@ -91,8 +91,8 @@ WP* new_wp(vaddr_t addr, int type, int flag, word_t setval) {
         printf("But Register watchpoint don't care data type\n");
         return wp;
       }
-      wp->old_value = vaddr_read(addr, type);
-      wp->new_value = vaddr_read(addr, type);
+      if (!target_memory_read(addr, type, &wp->old_value)) return NULL;
+      wp->new_value = wp->old_value;
     }
     
     return wp;
@@ -122,7 +122,11 @@ WP* new_wp(vaddr_t addr, int type, int flag, word_t setval) {
   {
     wp->old_value = isa_reg_idx2val(addr);
   }else {
-    wp->old_value = vaddr_read(addr, type);
+    if (!target_memory_read(addr, type, &wp->old_value)) {
+      printf("Cannot read target memory at " FMT_WORD "\n", addr);
+      wp->busy = false;
+      return NULL;
+    }
   }
   wp->new_value = wp->old_value;
   wp->next = NULL;
@@ -172,6 +176,8 @@ bool is_pc_watchpoint_triggered() {
   }
   return false;
 }
+
+bool has_watchpoints() { return head != NULL; }
 
 
 void free_wp_byNO(int no) {
@@ -245,7 +251,10 @@ bool check_watchpoints() {
     {
       wp->new_value = isa_reg_idx2val(wp->addr);
     } else {
-      wp->new_value = vaddr_read(wp->addr, wp->type);
+      if (!target_memory_read(wp->addr, wp->type, &wp->new_value)) {
+        printf("Cannot read target memory at " FMT_WORD "\n", wp->addr);
+        return true;
+      }
     }
     if(wp->set_flag) {
       if(wp->new_value == wp->set_value) {
