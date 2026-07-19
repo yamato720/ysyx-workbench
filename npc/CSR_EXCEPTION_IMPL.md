@@ -166,7 +166,7 @@ mret（NEMU）      → dnpc = cpu.mepc = pc_of_ecall + 4
 
 #### A. CSR 寄存器文件（`CSRs` 类，已实现于 `DataManage.scala`）✅
 
-`CSRs` 模块已在 `npc/chisel/src/main/scala/DataManage.scala` 中实现，接口如下：
+`CSRs` 模块位于 `npc/chisel/rv-core/main/scala/backend/csr/CsrFile.scala`，接口如下：
 
 ```scala
 class CSRs(Width: Int = 64) extends Module {
@@ -341,12 +341,8 @@ cd am-kernels/tests/am-tests
 make ARCH=riscv64-nemu run mainargs=y
 # 期望：打印 'y' 后继续执行（不是无限循环——因为 mepc 已 +4）
 
-# 2. Chisel CSR 接入完成后，用 NPC 运行
-cd am-kernels/tests/am-tests
-make ARCH=riscv64-npc run mainargs=y
-
-# 3. NPC difftest 模式（需先 make -C npc chisel-dpi 并补全 npc/cte.c）
-make ARCH=riscv64-nemu run-npc mainargs=y
+# 2. Config 驱动模式；首次运行自动生成 Verilator/NEMU 构造
+make -C am-kernels/tests/cpu-tests run ALL=add config=NpcDpiConfig
 ```
 
 ### 2.4 注意事项

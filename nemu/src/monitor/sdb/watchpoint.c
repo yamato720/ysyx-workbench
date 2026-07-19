@@ -59,7 +59,8 @@ static void show_wp_info(WP* wp) {
     } else {
       sprintf(type, "UNK");
     }
-    printf("%d\t0x%08lx\t%s\t\t0x%016lx\t0x%016lx\t0x%016lx\t%s\n", wp->NO, wp->addr, type, wp->old_value, wp->new_value, wp->set_value, wp->set_flag ? "Yes" : "No");
+    printf("%d\t" FMT_WORD "\t%s\t\t" FMT_WORD "\t" FMT_WORD "\t" FMT_WORD "\t%s\n",
+        wp->NO, wp->addr, type, wp->old_value, wp->new_value, wp->set_value, wp->set_flag ? "Yes" : "No");
 }
 
 WP* new_wp(vaddr_t addr, int type, int flag, word_t setval) {
@@ -78,7 +79,7 @@ WP* new_wp(vaddr_t addr, int type, int flag, word_t setval) {
     }
     else if(flag == 5)// -FV=EXPR
     {
-      printf("Set value = 0x%lx -> 0x%lx\n", wp->set_value, setval);
+      printf("Set value = " FMT_WORD " -> " FMT_WORD "\n", wp->set_value, setval);
       printf("Set flag = %s -> Yes\n", wp->set_flag ? "Yes" : "No");
       wp->set_value = setval;
       wp->set_flag = 1;
@@ -90,8 +91,8 @@ WP* new_wp(vaddr_t addr, int type, int flag, word_t setval) {
         printf("But Register watchpoint don't care data type\n");
         return wp;
       }
-      wp->old_value = vaddr_read(addr, type);
-      wp->new_value = vaddr_read(addr, type);
+      if (!target_memory_read(addr, type, &wp->old_value)) return NULL;
+      wp->new_value = wp->old_value;
     }
     
     return wp;
@@ -121,7 +122,11 @@ WP* new_wp(vaddr_t addr, int type, int flag, word_t setval) {
   {
     wp->old_value = isa_reg_idx2val(addr);
   }else {
-    wp->old_value = vaddr_read(addr, type);
+    if (!target_memory_read(addr, type, &wp->old_value)) {
+      printf("Cannot read target memory at " FMT_WORD "\n", addr);
+      wp->busy = false;
+      return NULL;
+    }
   }
   wp->new_value = wp->old_value;
   wp->next = NULL;
@@ -171,6 +176,8 @@ bool is_pc_watchpoint_triggered() {
   }
   return false;
 }
+
+bool has_watchpoints() { return head != NULL; }
 
 
 void free_wp_byNO(int no) {
@@ -230,7 +237,8 @@ void wp_display() {
     } else {
       sprintf(type, "UNK");
     }
-    printf("%d\t0x%08lx\t%s\t\t0x%016lx\t0x%016lx\t0x%016lx\t%s\n", wp->NO, wp->addr, type, wp->old_value, wp->new_value, wp->set_value, wp->set_flag ? "Yes" : "No");
+    printf("%d\t" FMT_WORD "\t%s\t\t" FMT_WORD "\t" FMT_WORD "\t" FMT_WORD "\t%s\n",
+        wp->NO, wp->addr, type, wp->old_value, wp->new_value, wp->set_value, wp->set_flag ? "Yes" : "No");
     wp = wp->next;
   }
 }
@@ -243,14 +251,19 @@ bool check_watchpoints() {
     {
       wp->new_value = isa_reg_idx2val(wp->addr);
     } else {
-      wp->new_value = vaddr_read(wp->addr, wp->type);
+      if (!target_memory_read(wp->addr, wp->type, &wp->new_value)) {
+        printf("Cannot read target memory at " FMT_WORD "\n", wp->addr);
+        return true;
+      }
     }
     if(wp->set_flag) {
       if(wp->new_value == wp->set_value) {
         if(wp->addr < 32 + 15){
-          printf("Watchpoint %d triggered at register %s: value match set value 0x%016lx\n", wp->NO, isa_reg_idx2str(wp->addr), wp->set_value);
+          printf("Watchpoint %d triggered at register %s: value match set value " FMT_WORD "\n",
+              wp->NO, isa_reg_idx2str(wp->addr), wp->set_value);
         }else {
-          printf("Watchpoint %d triggered at address 0x%08lx: value match set value 0x%016lx\n", wp->NO, wp->addr, wp->set_value);
+          printf("Watchpoint %d triggered at address " FMT_WORD ": value match set value " FMT_WORD "\n",
+              wp->NO, wp->addr, wp->set_value);
         }
         char type[8] = "";
         if(wp->addr < 32 + 15)
@@ -278,9 +291,11 @@ bool check_watchpoints() {
     } else {
       if(wp->new_value != wp->old_value) {
         if(wp->addr < 32 + 15){
-          printf("Watchpoint %d triggered at register %s: value changed from 0x%016lx to 0x%016lx\n", wp->NO, isa_reg_idx2str(wp->addr), wp->old_value, wp->new_value);
+          printf("Watchpoint %d triggered at register %s: value changed from " FMT_WORD " to " FMT_WORD "\n",
+              wp->NO, isa_reg_idx2str(wp->addr), wp->old_value, wp->new_value);
         } else {
-          printf("Watchpoint %d triggered at address 0x%08lx: value changed from 0x%016lx to 0x%016lx\n", wp->NO, wp->addr, wp->old_value, wp->new_value);
+          printf("Watchpoint %d triggered at address " FMT_WORD ": value changed from " FMT_WORD " to " FMT_WORD "\n",
+              wp->NO, wp->addr, wp->old_value, wp->new_value);
         }
         char type[8] = "";
         if(wp->addr < 32 + 15)
@@ -313,4 +328,3 @@ bool check_watchpoints() {
 }
 
 /* TODO: Implement the functionality of watchpoint */
-

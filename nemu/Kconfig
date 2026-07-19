@@ -68,6 +68,28 @@ config TARGET_AM
   bool "Application on Abstract-Machine (DON'T CHOOSE)"
 endchoice
 
+choice
+  prompt "NPC execution backend"
+  default FPGA_BACKEND_NONE
+  depends on TARGET_NATIVE_ELF
+
+config FPGA_BACKEND_NONE
+  bool "Local Verilator model"
+
+config FPGA_BACKEND_ZCU102
+  bool "ZCU102 PS Linux (AXI-Lite/UIO)"
+
+config FPGA_BACKEND_U55C
+  bool "Alveo U55C host (XRT/HBM)"
+endchoice
+
+config FPGA_BACKEND
+  string
+  default "none" if FPGA_BACKEND_NONE
+  default "zcu102" if FPGA_BACKEND_ZCU102
+  default "u55c" if FPGA_BACKEND_U55C
+  default "none"
+
 menu "Build Options"
 choice
   prompt "Compiler"
@@ -131,6 +153,15 @@ config TRACE
   bool "Enable tracer"
   default y
 
+config NPC_VCD_TRACE
+  depends on TRACE && FPGA_BACKEND_NONE
+  bool "Enable VCD tracing for NEMU-driven NPC simulations"
+  default n
+  help
+    Build the NEMU-integrated NPC/SoC Verilator model with waveform support.
+    This is independent from NEMU's text trace options and adds SDB `start`
+    and `stop` commands for producing clip_wave.vcd.
+
 config TRACE_START
   depends on TRACE
   int "When tracing is enabled (unit: number of instructions)"
@@ -170,7 +201,7 @@ config DTRACE
     simulation performance.
 
 config WATCHPOINT
-  depends on TRACE && TARGET_NATIVE_ELF
+  depends on TARGET_NATIVE_ELF
   bool "Enable watchpoint checking per instruction"
   default y
   help

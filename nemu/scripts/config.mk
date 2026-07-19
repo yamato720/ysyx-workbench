@@ -16,21 +16,26 @@
 COLOR_RED := $(shell echo "\033[1;31m")
 COLOR_END := $(shell echo "\033[0m")
 
-ifeq ($(wildcard .config),)
+NEMU_CONFIG_BOOTSTRAP_GOALS := menuconfig savedefconfig $(filter %defconfig,$(MAKECMDGOALS))
+ifeq ($(wildcard $(NEMU_CONFIG_FILE)),)
+ifeq ($(strip $(NEMU_CONFIG_BOOTSTRAP_GOALS)),)
 $(warning $(COLOR_RED)Warning: .config does not exist!$(COLOR_END))
 $(warning $(COLOR_RED)To build the project, first run 'make menuconfig'.$(COLOR_END))
+endif
 endif
 
 Q            := @
 KCONFIG_PATH := $(NEMU_HOME)/tools/kconfig
 FIXDEP_PATH  := $(NEMU_HOME)/tools/fixdep
 Kconfig      := $(NEMU_HOME)/Kconfig
-rm-distclean += include/generated include/config .config .config.old
+rm-distclean += $(NEMU_CONFIG_ROOT)/include/generated $(NEMU_CONFIG_ROOT)/include/config \
+	$(NEMU_CONFIG_FILE) $(NEMU_CONFIG_FILE).old
 silent := -s
 
 CONF   := $(KCONFIG_PATH)/build/conf
 MCONF  := $(KCONFIG_PATH)/build/mconf
 FIXDEP := $(FIXDEP_PATH)/build/fixdep
+KCONFIG_LOCK := $(KCONFIG_PATH)/build/.conf.lock
 
 $(CONF):
 	$(Q)$(MAKE) $(silent) -C $(KCONFIG_PATH) NAME=conf
@@ -42,15 +47,17 @@ $(FIXDEP):
 	$(Q)$(MAKE) $(silent) -C $(FIXDEP_PATH)
 
 menuconfig: $(MCONF) $(CONF) $(FIXDEP)
-	$(Q)$(MCONF) $(Kconfig)
-	$(Q)$(CONF) $(silent) --syncconfig $(Kconfig)
+	@mkdir -p "$(NEMU_CONFIG_ROOT)/include/config" "$(NEMU_CONFIG_ROOT)/include/generated"
+	$(Q)flock "$(KCONFIG_LOCK)" $(MCONF) $(Kconfig)
+	$(Q)flock "$(KCONFIG_LOCK)" $(CONF) $(silent) --syncconfig $(Kconfig)
 
 savedefconfig: $(CONF)
-	$(Q)$< $(silent) --$@=configs/defconfig $(Kconfig)
+	$(Q)flock "$(KCONFIG_LOCK)" $< $(silent) --$@=configs/defconfig $(Kconfig)
 
 %defconfig: $(CONF) $(FIXDEP)
-	$(Q)$< $(silent) --defconfig=configs/$@ $(Kconfig)
-	$(Q)$< $(silent) --syncconfig $(Kconfig)
+	@mkdir -p "$(NEMU_CONFIG_ROOT)/include/config" "$(NEMU_CONFIG_ROOT)/include/generated"
+	$(Q)flock "$(KCONFIG_LOCK)" $< $(silent) --defconfig=configs/$@ $(Kconfig)
+	$(Q)flock "$(KCONFIG_LOCK)" $< $(silent) --syncconfig $(Kconfig)
 
 .PHONY: menuconfig savedefconfig defconfig
 

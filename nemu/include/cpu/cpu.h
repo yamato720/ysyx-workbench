@@ -24,6 +24,16 @@ void quit();
 void set_nemu_state(int state, vaddr_t pc, int halt_ret);
 void invalid_inst(vaddr_t thispc);
 
+#ifdef NPC
+void npc_print_performance(void);
+#endif
+
+#ifdef NPC_SOC
+void npc_soc_print_cpi(void);
+void npc_soc_print_ipc(void);
+void npc_soc_print_performance(void);
+#endif
+
 #define NEMUTRAP(thispc, code) set_nemu_state(NEMU_END, thispc, code)
 #define INV(thispc) invalid_inst(thispc)
 

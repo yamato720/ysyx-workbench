@@ -46,7 +46,7 @@ void record_read_access(word_t addr, int len, word_t data) {
     IFDEF(CONFIG_ISA64, case 8: final_data = data; break);
     default: final_data = data; break;
   }
-  sprintf(mem_access_str[mem_access_str_idx], "[R] 0x%08lx len=%d data=0x%08lx(%ld)", addr, len, final_data, final_data);
+  sprintf(mem_access_str[mem_access_str_idx], "[R] " FMT_WORD " len=%d data=" FMT_WORD, addr, len, final_data);
   mem_traggered = true;
 }
 
@@ -61,7 +61,7 @@ void record_device_access(paddr_t addr, int len, word_t data, bool is_write, con
     default: final_data = data; break;
   }
 
-  sprintf(device_access_str[device_access_str_idx], "[MMIO %s] dev=%-10s addr=0x%08x len=%d data=0x%08lx(%ld)", type, dev_name, addr, len, final_data, final_data);
+  sprintf(device_access_str[device_access_str_idx], "[MMIO %s] dev=%-10s addr=" FMT_PADDR " len=%d data=" FMT_WORD, type, dev_name, addr, len, final_data);
   device_traggered = true;
 }
 
@@ -74,7 +74,7 @@ void record_write_access(word_t addr, int len, word_t data) {
     IFDEF(CONFIG_ISA64, case 8: final_data = data; break);
     default: final_data = data; break;
   }
-  sprintf(mem_access_str[mem_access_str_idx], "[W] 0x%08lx len=%d data=0x%08lx(%ld)", addr, len, final_data, final_data);
+  sprintf(mem_access_str[mem_access_str_idx], "[W] " FMT_WORD " len=%d data=" FMT_WORD, addr, len, final_data);
   mem_traggered = true;
 }
 

@@ -217,7 +217,7 @@ static bool make_token(char *e) {
                 if(tokens[nr_token-1].type == '-') {
                   // this is a negative number
                   tokens[nr_token-1].member = -str2num(substr_start, substr_len);
-                  printf("get negative num:%ld\n", tokens[nr_token-1].member);
+                  printf("get negative num:" FMT_WORD "\n", tokens[nr_token-1].member);
                   tokens[nr_token-1].type = NUM;
                   tokens[nr_token-1].otherwise = false;
                   break;
@@ -225,7 +225,7 @@ static bool make_token(char *e) {
               }
               tokens[nr_token].type = NUM;
               tokens[nr_token].member = str2num(substr_start, substr_len);
-              printf("get num:%ld\n", tokens[nr_token].member);
+              printf("get num:" FMT_WORD "\n", tokens[nr_token].member);
               nr_token ++;
               break;
           }
@@ -238,16 +238,21 @@ static bool make_token(char *e) {
                 if(tokens[nr_token-1].type == '-') {
                   // this is a negative hex number
                   tokens[nr_token-1].member = -tokens[nr_token-1].member;
-                  printf("get negative hex num:%ld\n", tokens[nr_token-1].member);
+                  printf("get negative hex num:" FMT_WORD "\n", tokens[nr_token-1].member);
                 }
                 else if(tokens[nr_token-1].type == '*') {
                   // get memory address value
                   if(tokens[nr_token].member < str2hexnum("80000000", 8) || tokens[nr_token].member > str2hexnum("87FFFFFF", 8)) {
-                    printf("Invalid memory address: 0x%lx\n", tokens[nr_token].member);
+                    printf("Invalid memory address: " FMT_WORD "\n", tokens[nr_token].member);
                     return false;
                   }
-                  tokens[nr_token-1].member = vaddr_read(tokens[nr_token].member, BYTE);
-                  printf("get memory address value:%ld\n", tokens[nr_token-1].member);
+                  if (!target_memory_read(tokens[nr_token].member, BYTE,
+                                          &tokens[nr_token-1].member)) {
+                    printf("Cannot read target memory at " FMT_WORD "\n",
+                           tokens[nr_token].member);
+                    return false;
+                  }
+                  printf("get memory address value:" FMT_WORD "\n", tokens[nr_token-1].member);
                 }
                 tokens[nr_token-1].type = NUM;
                 tokens[nr_token-1].otherwise = false;
@@ -255,7 +260,7 @@ static bool make_token(char *e) {
               break;
             } else
             {
-              printf("get wrong hex num format: %ld%s\n",tokens[nr_token-1].member, substr_start);
+              printf("get wrong hex num format: " FMT_WORD "%s\n", tokens[nr_token-1].member, substr_start);
               return false;
               break;
             }
@@ -276,7 +281,7 @@ static bool make_token(char *e) {
               return false;
             }
             tokens[nr_token].type = NUM;
-            printf("get reg val:%ld\n", tokens[nr_token].member);
+            printf("get reg val:" FMT_WORD "\n", tokens[nr_token].member);
             nr_token ++;
             break;
           }
@@ -401,7 +406,7 @@ word_t eval(int p, int q, bool *success, int deepth) {
       case AND: res = (val1 && val2); break;
       default: 
         *success = false;
-        printf("Invalid operator, for char is %c, num is %ld\n", (char)op, op);
+        printf("Invalid operator, for char is %c, num is " FMT_WORD "\n", (char)op, op);
         printf("from p=%d to q=%d\n", p, q);
         printf("deepth is %d\n", deepth);
         return 0;

@@ -31,7 +31,11 @@ override ARGS += $(ARGS_DIFF)
 IMG ?=
 NEMU_EXEC := $(BINARY) $(ARGS) $(IMG)
 
-run-env: $(BINARY) $(DIFF_REF_SO)
+record-object-dir: $(BINARY)
+	@mkdir -p "$(BUILD_DIR)"
+	@printf '%s\n' "$(OBJ_DIR)" > "$(BUILD_DIR)/.last-object-dir"
+
+run-env: $(BINARY) record-object-dir $(DIFF_REF_SO)
 
 run: run-env
 	$(call git_commit, "run NEMU")
@@ -41,24 +45,9 @@ run-bat: run-env
 	$(call git_commit, "run-bat NEMU")
 	$(NEMU_EXEC) -b
 
-run-npc: run-env
-	$(call git_commit, "run-npc NEMU")
-	$(NEMU_EXEC)
-
-run-npc-bat: run-env
-	$(call git_commit, "run-npc NEMU")
-	$(NEMU_EXEC) -b
-
 gdb: run-env
 	$(call git_commit, "gdb NEMU")
 	gdb -s $(BINARY) --args $(NEMU_EXEC)
-
-gdb-npc: run-env
-	$(call git_commit, "gdb-npc NEMU")
-	gdb -s $(BINARY) --args $(NEMU_EXEC)
-
-run-npc-update: run-env
-	$(MAKE) -C $(NPC_HOME) chisel-cpu-lib 
 
 clean-tools = $(dir $(shell find ./tools -maxdepth 2 -mindepth 2 -name "Makefile"))
 $(clean-tools):
@@ -66,4 +55,4 @@ $(clean-tools):
 clean-tools: $(clean-tools)
 clean-all: clean distclean clean-tools
 
-.PHONY: run gdb run-env clean-tools clean-all $(clean-tools) run-bat run-npc run-npc-bat run-npc-update
+.PHONY: run gdb run-env record-object-dir clean-tools clean-all $(clean-tools) run-bat

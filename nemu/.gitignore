@@ -9,5 +9,14 @@
 !README.md
 !Kconfig
 !src/isa/riscv64
+!configs/riscv32-nemu-interpreter-defconfig
+!configs/riscv64-nemu-interpreter-defconfig
+!configs/riscv32-fpga-zcu102-defconfig
+!configs/riscv32-fpga-u55c-defconfig
+!configs/riscv64-fpga-zcu102-defconfig
+!configs/riscv64-fpga-u55c-defconfig
 include/config
 include/generated
+
+# SoftFloat and interpreter builds contain generated C headers.
+/build/

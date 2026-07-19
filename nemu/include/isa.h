@@ -18,6 +18,7 @@
 
 // Located at src/isa/$(GUEST_ISA)/include/isa-def.h
 #include <isa-def.h>
+#include <difftest-def.h>
 
 // The macro `__GUEST_ISA__` is defined in $(CFLAGS).
 // It will be expanded as "x86" or "mips32" ...
@@ -34,6 +35,8 @@ void isa_reg_display();
 word_t isa_reg_str2val(const char *name, bool *success, int *idx);
 word_t isa_reg_idx2val(int idx);
 const char* isa_reg_idx2str(int idx);
+void stored_gpr();
+void update_other_regs();
 
 // exec
 struct Decode;
@@ -54,7 +57,13 @@ vaddr_t isa_raise_intr(word_t NO, vaddr_t epc);
 word_t isa_query_intr();
 
 // difftest
+#if defined(CONFIG_ISA_riscv)
+bool isa_difftest_checkregs(riscv_difftest_state_t *ref_r, vaddr_t pc);
+void riscv_difftest_pack(riscv_difftest_state_t *state);
+void riscv_difftest_unpack(const riscv_difftest_state_t *state);
+#else
 bool isa_difftest_checkregs(CPU_state *ref_r, vaddr_t pc);
+#endif
 void isa_difftest_attach();
 
 #endif

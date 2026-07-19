@@ -23,6 +23,25 @@ static inline uint8_t* guest_to_host_impl(uint32_t paddr) {
 static inline uint32_t host_to_guest_impl(uint8_t *haddr) {
     return (uint32_t)(haddr - pmem) + PMEM_BASE;
 }
+
+static inline bool is_pmem_addr(uint32_t addr) {
+    return addr >= PMEM_BASE && addr < PMEM_BASE + PMEM_SIZE;
+}
+
+static inline bool is_mmio_addr(uint32_t addr) {
+    return addr >= 0xa0000000u && addr < 0xa2000000u;
+}
+
+static inline uint64_t mmio_read(uint64_t, int) {
+    return 0;
+}
+
+static inline void mmio_write(uint64_t, int, uint64_t) {
+}
+
+static inline void assert_fail_msg() {
+    fprintf(stderr, "[NPC-PMEM] invalid memory access\n");
+}
 #else
 // NEMU integration mode: use NEMU's memory interface
 extern "C" {

@@ -47,70 +47,47 @@ undefined reference to 'npc_stop_trace'
 
 ### 真实原因
 
-`nemu/src/monitor/sdb/sdb.h` 中 `extern void npc_start_trace();` 等声明**没有 `#ifdef NPC` 保护**，导致不带 `USENPC=1` 的构建也会引用这些符号，但此时没有链接 `npc_core.o`，产生 undefined reference。
+`nemu/src/monitor/sdb/sdb.h` 中 VCD 接口声明没有同时受 NPC 和 VCD 构建选项保护，导致不带波形运行时的构建也会引用这些符号，但此时没有链接 `npc_core.o`，产生 undefined reference。
 
 同时发现 `npc_core.cpp` 中有一处 `printf("traced!\n")` 缺少分号，导致该文件根本编译不过。
 
 ### 解决
 
 1. 修复 `npc_core.cpp` 中缺失的分号。
-2. `sdb.h` 中用 `#ifdef NPC` 包裹所有 `npc_*` extern 声明。
-3. `sdb.c` 中 `cmd_start` / `cmd_stop` 里对 `npc_start_trace()` / `npc_stop_trace()` 的调用也加 `#ifdef NPC` 保护。
+2. `sdb.h` 中只在 `NPC && NPC_VCD_TRACE` 下声明 VCD 接口。
+3. `sdb.c` 中只在 `NPC && NPC_VCD_TRACE` 下注册 `start` / `stop` 命令。
 
 ---
 
-## Bug 3：batch 模式下不生成 VCD 波形文件
+## 当前 VCD 行为
 
 ### 现象
 
-`run-npc-bat` 运行结束后，`wave.vcd` 为空或不存在。
+Config 驱动的默认 NPC 构造不生成 VCD，默认构建不包含 Verilator VCD 运行时。
 
 ### 原因
 
-`trace_enabled` 全局变量默认为 `false`。  
-`npc_start_trace()` 只在交互式 SDB 命令（`cmd_start`）中被调用，batch 模式（`-b`）下 SDB 不进入交互循环，因此 `trace_enabled` 永远不会被设为 `true`。
+NEMU 的文本追踪和 NPC 波形追踪是不同功能。历史实现曾把两者混在一起，并让 batch 模式自动打开波形，既增加了默认构建开销，也不利于按需截取波形。
 
 ### 解决
 
-在 `npc_core.cpp` 的 `npc_init()` 中，当 `TRACE_NEMU` 宏定义时，自动将 `trace_enabled` 设为 `true`：
+在 NEMU 的 `Testing and Debugging` 菜单启用 `CONFIG_NPC_VCD_TRACE`（它依赖 `CONFIG_TRACE`）后，AM 会将选项传给 NPC/SoC 集成构建：
 
-```cpp
-extern "C" void npc_init() {
-    Verilated::traceEverOn(true);
-    init_npc();
-#if defined(TRACE_NEMU)
-    trace_enabled = true;  // batch 模式下自动开启
-#endif
-}
+```text
+CONFIG_NPC_VCD_TRACE=y
+  -> Verilator --trace + verilated_vcd_c.o
+  -> SDB registers start / stop
+  -> start opens clip_wave.vcd; stop closes it
 ```
+
+关闭该选项时，不传 `--trace`，不编译或链接 VCD 运行时，且 SDB 中没有这些命令。Config 构造库不会根据
+menuconfig 自动重建 Verilator；需要波形支持时应新增固定该能力的终端 Config，并以 `rebuild=1` 构造。
+独立的 `chisel-cpu` 调试模拟器保留自己的波形支持，不受这个 NEMU 配置控制。Batch 模式不会自动打开
+波形；请在交互式 SDB 中用 `start` 和 `stop` 选择波形区间。
 
 ---
 
-## Bug 4：`TRACE_NEMU` 宏未传递给 `npc_core.cpp` 编译
-
-### 现象
-
-即使执行 `make chisel-cpu-lib TRACE_NEMU=1`，`npc_core.cpp` 编译时也没有 `-DTRACE_NEMU`，导致 VCD 相关代码未编译进去。
-
-### 原因
-
-`npc/Makefile` 的 `chisel-cpu-lib` target 中，`-DTRACE_NEMU` 只传给了 Verilator 的 `-CFLAGS`（用于 `VCPU*.cpp`），而单独的 `g++` 编译 `npc_core.cpp` 的步骤没有加 `-DTRACE_NEMU`。
-
-### 解决
-
-将 `npc_core.cpp` 和 `pmem.cpp` 的编译改为 `if/else` 分支：
-
-```makefile
-if [ "$(TRACE_NEMU)" = "0" ] || [ -z "$(TRACE_NEMU)" ]; then
-    g++ ... ./csrc/npc_core.cpp ...
-else
-    g++ ... -DTRACE_NEMU ./csrc/npc_core.cpp ...
-fi
-```
-
----
-
-## Bug 5：`run-npc-bat` 触发 `Fatal glibc error: malloc.c:4512 assertion failed`
+## Bug 5：旧 NPC batch 入口触发 `Fatal glibc error: malloc.c:4512 assertion failed`
 
 ### 现象
 
@@ -125,7 +102,7 @@ NEMU 二进制文件启动即崩溃，在 `npc_init()` 调用处（打印"NPC mo
 
 #### 误导 1：以为是 make jobserver 导致链接损坏
 
-观察到崩溃在 `run-npc-bat` 中调用 `$(MAKE) -C $(NEMU_HOME)` 时发生，恰好在 Verilator 多线程编译（`-j$(nproc)`）之后，因此怀疑是 **make jobserver** 的 file descriptor 被 Verilator 子进程耗尽，导致后续 `ld`/`g++` 链接时内存损坏。
+观察到崩溃在旧 batch 流程调用 `$(MAKE) -C $(NEMU_HOME)` 时发生，恰好在 Verilator 多线程编译（`-j$(nproc)`）之后，因此怀疑是 **make jobserver** 的 file descriptor 被 Verilator 子进程耗尽，导致后续 `ld`/`g++` 链接时内存损坏。
 
 为此尝试了：
 - `$(MAKE) -j1 -C $(NEMU_HOME)` → 仍然崩溃
@@ -175,7 +152,7 @@ NEMU 二进制文件启动即崩溃，在 `npc_init()` 调用处（打印"NPC mo
 1. 用 `strings` 检查 `verilated.o`：
 
    ```bash
-   strings intermediate/chisel-cpu-lib/verilated.o | grep "verilator"
+   strings constructions/scpu.NpcDpiConfig/abi/verilator/verilated.o | grep "verilator"
    → /home/pyx/Software/oss-cad-suite/share/verilator/include/verilated.cpp
    ```
 
@@ -230,9 +207,9 @@ NPC flag triggered.
 | 目标 | 状态 |
 |------|------|
 | `run-bat`（纯 NEMU） | ✅ PASS |
-| `run-npc-bat`（NEMU + NPC difftest） | ✅ PASS（difftest 报告 CPU 寄存器不一致为 NPC CPU 逻辑问题，非构建问题） |
-| `run-npc-update` 重新编译 NPC + 重链 NEMU | ✅ 正常 |
-| VCD 在 batch 模式自动生成 | ✅ `trace_enabled` 自动设为 `true` |
+| `run-bat config=NpcDpiConfig`（NEMU + NPC） | ✅ PASS（difftest 报告 CPU 寄存器不一致为 NPC CPU 逻辑问题，非构建问题） |
+| NEMU host 按 C/C++ 依赖增量更新；NPC 层显式 `rebuild=1` | ✅ 正常 |
+| VCD 按 `CONFIG_NPC_VCD_TRACE` 构建并由 SDB 截取 | ✅ `clip_wave.vcd` |
 
 ---
 

@@ -7,4 +7,12 @@ config RV64
 config RVE
   bool "Use E extension"
   default n
+
+config RISCV_F
+  depends on !RVE
+  bool "Single-precision floating-point extension (F)"
+  default y
+  help
+    Enable the scalar IEEE-754 binary32 RISC-V F extension. NEMU builds a
+    private RISC-V-specialized Berkeley SoftFloat archive for this target.
 endmenu
