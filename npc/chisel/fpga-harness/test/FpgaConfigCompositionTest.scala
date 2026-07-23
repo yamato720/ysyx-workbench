@@ -1,5 +1,6 @@
 package scpu.fpga
 
+import scpu.CdeConfigResolver
 import org.chipsalliance.cde.config.Parameters
 import org.scalatest.flatspec.AnyFlatSpec
 import scpu.ExternalAxiConfig

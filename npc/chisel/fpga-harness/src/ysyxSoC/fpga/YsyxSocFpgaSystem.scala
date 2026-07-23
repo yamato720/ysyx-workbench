@@ -3,7 +3,7 @@ package ysyx.fpga
 import chisel3._
 import freechips.rocketchip.diplomacy.LazyModule
 import org.chipsalliance.cde.config.Parameters
-import _root_.scpu.fpga.{FpgaFallbackMailbox, FpgaSystemIO}
+import _root_.scpu.fpga.{FpgaConfigParameters, FpgaCoreComponents, FpgaFallbackMailbox, FpgaSystemIO}
 import _root_.ysyx.{ChipLinkParam, YsyxPlatformParameters, ysyxSoCASIC}
 
 /** Board-neutral ysyxSoC system: CPU, SoC interconnect, AXI memory, and mailbox. */
@@ -14,7 +14,9 @@ class YsyxSocFpgaSystem(implicit val parameters: Parameters) extends Module {
   require(YsyxPlatformParameters.fpgaBoard.nonEmpty, "YsyxSocFpgaSystem requires a board-specific FPGA Config")
 
   val io = IO(new FpgaSystemIO(32, 32, ChipLinkParam.idBits))
-  val soc = LazyModule(new ysyxSoCASIC)
+  val soc = LazyModule(new ysyxSoCASIC(
+    FpgaCoreComponents.forBoard(FpgaConfigParameters.platform.board)
+  ))
   val mailbox = Module(new FpgaFallbackMailbox(32))
   val msoc = withReset(reset.asBool || mailbox.io.coreReset) { Module(soc.module) }
   val memory = soc.fpgaMemory.head

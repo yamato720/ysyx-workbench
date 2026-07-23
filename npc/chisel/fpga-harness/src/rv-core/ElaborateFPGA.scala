@@ -1,8 +1,8 @@
 package scpu
 
 import org.chipsalliance.cde.config.Parameters
-import scpu.FpgaConstruction
-import scpu.fpga.{CdeConfigResolver, FpgaBoard, FpgaConfigParameters, FpgaElaborationManifest}
+import scpu.{CdeConfigResolver, FpgaConstruction}
+import scpu.fpga.{FpgaBoard, FpgaConfigParameters, FpgaElaborationManifest}
 import scpu.fpga.u55c.U55cNpcFpgaShell
 import scpu.fpga.zcu102.Zcu102NpcFpgaShell
 

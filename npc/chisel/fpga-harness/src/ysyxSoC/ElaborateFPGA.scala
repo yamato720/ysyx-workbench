@@ -1,8 +1,8 @@
 package ysyx
 
 import org.chipsalliance.cde.config.Parameters
-import _root_.scpu.FpgaConstruction
-import _root_.scpu.fpga.{CdeConfigResolver, FpgaBoard, FpgaConfigParameters, FpgaElaborationManifest}
+import _root_.scpu.{CdeConfigResolver, FpgaConstruction}
+import _root_.scpu.fpga.{FpgaBoard, FpgaConfigParameters, FpgaElaborationManifest}
 import _root_.scpu.ComputeBackend
 import ysyx.fpga.u55c.U55cYsyxFpgaShell
 import ysyx.fpga.zcu102.Zcu102YsyxFpgaShell
