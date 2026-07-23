@@ -108,7 +108,8 @@ object ArithmeticEndpointImplementation {
 
 final case class ArithmeticEndpointSpec(
   implementation: ArithmeticEndpointImplementation,
-  moduleName: String = ""
+  moduleName: String = "",
+  endpointName: String = ""
 ) {
   require(implementation != ArithmeticEndpointImplementation.External || moduleName.nonEmpty,
     "外部算术端点必须提供模块名")
@@ -155,17 +156,72 @@ private final class ExternalArithmeticAdapter(
   })
 }
 
-private final class ExternalArithmeticEndpoint(
+trait ExternalEndpointWiring { self: ArithmeticOperatorEndpoint =>
+  protected final def wireExternal(width: Int, tagWidth: Int, timing: ArithmeticIpTiming, moduleName: String): Unit = {
+    val adapter = Module(new ExternalArithmeticAdapter(moduleName, width, tagWidth, timing.latency))
+    adapter.io.clock := clock
+    adapter.io.reset := reset.asBool
+    io <> adapter.io.arithmetic
+  }
+}
+
+/** 保留旧生成模块名的整数乘法 wrapper。 */
+final class IntegerMultiplierOperator(
   width: Int,
   tagWidth: Int,
   timing: ArithmeticIpTiming,
-  moduleName: String
-) extends ArithmeticOperatorEndpoint(width, tagWidth) {
-  private val adapter = Module(new ExternalArithmeticAdapter(moduleName, width, tagWidth, timing.latency))
-  adapter.io.clock := clock
-  adapter.io.reset := reset.asBool
-  io <> adapter.io.arithmetic
+  spec: ArithmeticEndpointSpec
+) extends ArithmeticOperatorEndpoint(width, tagWidth) with ExternalEndpointWiring {
+  spec.implementation match {
+    case ArithmeticEndpointImplementation.IntegerReference => io <> Module(new IntegerMultiplierModel(width, tagWidth, timing)).io
+    case ArithmeticEndpointImplementation.External => wireExternal(width, tagWidth, timing, spec.moduleName)
+    case other => throw new IllegalArgumentException(s"乘法 wrapper 不支持 $other")
+  }
 }
+
+/** 保留旧生成模块名的整数除法 wrapper。 */
+final class IntegerDividerOperator(
+  width: Int,
+  tagWidth: Int,
+  timing: ArithmeticIpTiming,
+  spec: ArithmeticEndpointSpec
+) extends ArithmeticOperatorEndpoint(width, tagWidth) with ExternalEndpointWiring {
+  spec.implementation match {
+    case ArithmeticEndpointImplementation.IntegerReference => io <> Module(new IntegerDividerModel(width, tagWidth, timing)).io
+    case ArithmeticEndpointImplementation.External => wireExternal(width, tagWidth, timing, spec.moduleName)
+    case other => throw new IllegalArgumentException(s"除法 wrapper 不支持 $other")
+  }
+}
+
+/** 浮点 wrapper 的公共实现，按 endpointName 保持旧的生成模块名。 */
+abstract class FloatingOperatorEndpoint(
+  width: Int,
+  tagWidth: Int,
+  timing: ArithmeticIpTiming,
+  spec: ArithmeticEndpointSpec
+) extends ArithmeticOperatorEndpoint(width, tagWidth) with ExternalEndpointWiring {
+  spec.implementation match {
+    case ArithmeticEndpointImplementation.SoftFloatDpi => io <> Module(new FloatingDpiOperator(width, tagWidth, timing)).io
+    case ArithmeticEndpointImplementation.FloatingDirect => io <> Module(new FloatingDirectOperator(width, tagWidth, timing)).io
+    case ArithmeticEndpointImplementation.External => wireExternal(width, tagWidth, timing, spec.moduleName)
+    case other => throw new IllegalArgumentException(s"浮点 wrapper 不支持 $other")
+  }
+}
+
+final class FloatingAddSubOperator(w: Int, t: Int, timing: ArithmeticIpTiming, spec: ArithmeticEndpointSpec)
+    extends FloatingOperatorEndpoint(w, t, timing, spec)
+final class FloatingMultiplierOperator(w: Int, t: Int, timing: ArithmeticIpTiming, spec: ArithmeticEndpointSpec)
+    extends FloatingOperatorEndpoint(w, t, timing, spec)
+final class FloatingDividerOperator(w: Int, t: Int, timing: ArithmeticIpTiming, spec: ArithmeticEndpointSpec)
+    extends FloatingOperatorEndpoint(w, t, timing, spec)
+final class FloatingFmaOperator(w: Int, t: Int, timing: ArithmeticIpTiming, spec: ArithmeticEndpointSpec)
+    extends FloatingOperatorEndpoint(w, t, timing, spec)
+final class FloatingSqrtOperator(w: Int, t: Int, timing: ArithmeticIpTiming, spec: ArithmeticEndpointSpec)
+    extends FloatingOperatorEndpoint(w, t, timing, spec)
+final class FloatingConvertOperator(w: Int, t: Int, timing: ArithmeticIpTiming, spec: ArithmeticEndpointSpec)
+    extends FloatingOperatorEndpoint(w, t, timing, spec)
+final class FloatingCompareOperator(w: Int, t: Int, timing: ArithmeticIpTiming, spec: ArithmeticEndpointSpec)
+    extends FloatingOperatorEndpoint(w, t, timing, spec)
 
 /** 本地仿真与通用 generated-ip 专家路径使用的公共 provider。 */
 object SimulationIpComponents extends ArithmeticIpProvider {
@@ -177,7 +233,34 @@ object SimulationIpComponents extends ArithmeticIpProvider {
     timing: ArithmeticIpTiming,
     spec: ArithmeticEndpointSpec
   ): ArithmeticOperatorEndpoint =
-    Module(new ExternalArithmeticEndpoint(width, tagWidth, timing, spec.moduleName))
+    spec.endpointName match {
+      case "IntegerMultiplierOperator" => Module(new IntegerMultiplierOperator(width, tagWidth, timing, spec))
+      case "IntegerDividerOperator" => Module(new IntegerDividerOperator(width, tagWidth, timing, spec))
+      case "FloatingAddSubOperator" => Module(new FloatingAddSubOperator(width, tagWidth, timing, spec))
+      case "FloatingMultiplierOperator" => Module(new FloatingMultiplierOperator(width, tagWidth, timing, spec))
+      case "FloatingDividerOperator" => Module(new FloatingDividerOperator(width, tagWidth, timing, spec))
+      case "FloatingFmaOperator" => Module(new FloatingFmaOperator(width, tagWidth, timing, spec))
+      case "FloatingSqrtOperator" => Module(new FloatingSqrtOperator(width, tagWidth, timing, spec))
+      case "FloatingConvertOperator" => Module(new FloatingConvertOperator(width, tagWidth, timing, spec))
+      case "FloatingCompareOperator" => Module(new FloatingCompareOperator(width, tagWidth, timing, spec))
+      case other => throw new IllegalArgumentException(s"未知算术 wrapper 名称：$other")
+    }
+
+  private def floating(
+    width: Int,
+    tagWidth: Int,
+    timing: ArithmeticIpTiming,
+    spec: ArithmeticEndpointSpec
+  ): ArithmeticOperatorEndpoint = spec.endpointName match {
+    case "FloatingAddSubOperator" => Module(new FloatingAddSubOperator(width, tagWidth, timing, spec))
+    case "FloatingMultiplierOperator" => Module(new FloatingMultiplierOperator(width, tagWidth, timing, spec))
+    case "FloatingDividerOperator" => Module(new FloatingDividerOperator(width, tagWidth, timing, spec))
+    case "FloatingFmaOperator" => Module(new FloatingFmaOperator(width, tagWidth, timing, spec))
+    case "FloatingSqrtOperator" => Module(new FloatingSqrtOperator(width, tagWidth, timing, spec))
+    case "FloatingConvertOperator" => Module(new FloatingConvertOperator(width, tagWidth, timing, spec))
+    case "FloatingCompareOperator" => Module(new FloatingCompareOperator(width, tagWidth, timing, spec))
+    case other => throw new IllegalArgumentException(s"未知浮点 wrapper 名称：$other")
+  }
 
   override def makeIntegerMultiplier(
     width: Int,
@@ -185,8 +268,8 @@ object SimulationIpComponents extends ArithmeticIpProvider {
     timing: ArithmeticIpTiming,
     spec: ArithmeticEndpointSpec
   ): ArithmeticOperatorEndpoint = spec.implementation match {
-    case ArithmeticEndpointImplementation.IntegerReference => Module(new IntegerMultiplierModel(width, tagWidth, timing))
-    case ArithmeticEndpointImplementation.External => external(width, tagWidth, timing, spec)
+    case ArithmeticEndpointImplementation.IntegerReference => Module(new IntegerMultiplierOperator(width, tagWidth, timing, spec))
+    case ArithmeticEndpointImplementation.External => external(width, tagWidth, timing, spec.copy(endpointName = "IntegerMultiplierOperator"))
     case other => throw new IllegalArgumentException(s"乘法端点不支持 $other")
   }
 
@@ -196,8 +279,8 @@ object SimulationIpComponents extends ArithmeticIpProvider {
     timing: ArithmeticIpTiming,
     spec: ArithmeticEndpointSpec
   ): ArithmeticOperatorEndpoint = spec.implementation match {
-    case ArithmeticEndpointImplementation.IntegerReference => Module(new IntegerDividerModel(width, tagWidth, timing))
-    case ArithmeticEndpointImplementation.External => external(width, tagWidth, timing, spec)
+    case ArithmeticEndpointImplementation.IntegerReference => Module(new IntegerDividerOperator(width, tagWidth, timing, spec))
+    case ArithmeticEndpointImplementation.External => external(width, tagWidth, timing, spec.copy(endpointName = "IntegerDividerOperator"))
     case other => throw new IllegalArgumentException(s"除法端点不支持 $other")
   }
 
@@ -207,8 +290,8 @@ object SimulationIpComponents extends ArithmeticIpProvider {
     timing: ArithmeticIpTiming,
     spec: ArithmeticEndpointSpec
   ): ArithmeticOperatorEndpoint = spec.implementation match {
-    case ArithmeticEndpointImplementation.SoftFloatDpi => Module(new FloatingDpiOperator(width, tagWidth, timing))
-    case ArithmeticEndpointImplementation.FloatingDirect => Module(new FloatingDirectOperator(width, tagWidth, timing))
+    case ArithmeticEndpointImplementation.SoftFloatDpi => floating(width, tagWidth, timing, spec)
+    case ArithmeticEndpointImplementation.FloatingDirect => floating(width, tagWidth, timing, spec)
     case ArithmeticEndpointImplementation.External => external(width, tagWidth, timing, spec)
     case other => throw new IllegalArgumentException(s"浮点端点不支持 $other")
   }
