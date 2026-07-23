@@ -1,47 +1,30 @@
 package scpu
 
+import org.chipsalliance.cde.config.Parameters
 import org.scalatest.flatspec.AnyFlatSpec
 
 class NpcConfigCompositionTest extends AnyFlatSpec {
-  private val fpgaSettings = NpcBuildSettings(
-    xlen = 32,
-    target = "NPC",
-    pipeline = false,
-    interlock = true,
-    idForwarding = false,
-    executeForwarding = false,
-    floatingPoint = false,
-    zicsr = true,
-    arithmeticBackend = ComputeBackend.FPGA,
-    arithmeticOutputFifoDepth = 4,
-    multiplyCycles = 3,
-    multiplyInitiationInterval = 1,
-    divCycles = 37,
-    divInitiationInterval = 1,
-    floatingAddSubCycles = 3,
-    floatingAddSubInitiationInterval = 1,
-    floatingMultiplyCycles = 4,
-    floatingMultiplyInitiationInterval = 1,
-    floatingDivideCycles = 29,
-    floatingDivideInitiationInterval = 1,
-    floatingFmaCycles = 4,
-    floatingFmaInitiationInterval = 1,
-    floatingSqrtCycles = 29,
-    floatingSqrtInitiationInterval = 1,
-    floatingConvertCycles = 7,
-    floatingConvertInitiationInterval = 1,
-    floatingCompareCycles = 3,
-    floatingCompareInitiationInterval = 1,
-    memoryBase = 0x80000000L,
-    memorySize = 0x10000000L
-  )
+  "Construction boundary" should "expose only NEMU-running terminal configurations" in {
+    assert(new StandaloneConfig().capability == "run")
+    assert(new PipelineCheckConfig().capability == "check-only")
+    assert(new SimulationConfig().capability == "run")
+    assert(new SimulationConfig().nemuConfig == NemuHostConfig.LocalPipelineTrace)
+    assert(!new FpgaConfig().isInstanceOf[MakeTerminalConfig])
+    assert(!new ExternalAxiConfig().isInstanceOf[MakeTerminalConfig])
+  }
 
-  "NpcConfigFragment ++" should "apply the right fragment first and keep left overrides" in {
+  "ConstructionConfig" should "directly provide its completed core through the CDE key" in {
+    val construction = new FpgaConfig
+    implicit val parameters: Parameters = construction
+
+    assert(parameters(NpcCoreConfigKey) == construction.config)
+  }
+
+  "ConfigFragment ++" should "apply the right fragment first and keep left overrides" in {
     val config = (
       new WithExternalAxiConfig(idWidth = 8) ++
-        new WithNpcXlenConfig(32) ++
-        new WithMExtensionConfig ++
-        new BaseNpcConfig
+        new Rv32IMZicsrConfig ++
+        new BaseConfig
     ).build
 
     assert(config.isa.xlen == 32)
@@ -51,41 +34,146 @@ class NpcConfigCompositionTest extends AnyFlatSpec {
     assert(config.axi.idWidth == 8)
   }
 
-  "NpcFpgaConfig" should "compose the named FPGA construction with elaboration settings" in {
-    val config = (
-      new NpcFpgaConfig ++
-        new WithNpcElaborationSettings(fpgaSettings)
-    ).build
+  "FpgaConfig" should "compose explicit architecture, performance, memory, and compute fragments" in {
+    val config = new FpgaConfig().config
 
     assert(config.isa.xlen == 32)
     assert(config.isa.M)
+    assert(config.isa.F)
+    assert(config.pipeline.enablePipeline)
+    assert(config.pipeline.forwarding.enableIdForwarding)
+    assert(config.pipeline.forwarding.enableExecuteForwarding)
+    assert(config.operators.mulDiv.implementation.backend == ComputeBackend.FPGA)
+    assert(config.memory.mainMemorySize == 0x08000000L)
     assert(config.debug.enableTopDebugIo)
     assert(config.debug.enableDispatchControl)
     assert(config.axi.useExternalMaster)
     assert(config.axi.dataWidth == 32)
+    assert(config.operators.routes.route(ArithmeticRouteOperation.Mul).target == OperatorRouteTarget.Model)
+    assert(config.operators.routes.route(ArithmeticRouteOperation.Fadd).target == OperatorRouteTarget.Model)
+    config.operators.routes.validate(config.isa)
+  }
+
+  "Operator route defaults" should "cover every enabled M/F operation and reject an unselected check route" in {
+    val model = new U55cRv64OperatorSimulationConfig().config
+    assert(model.isa.xlen == 64)
+    assert(model.operators.routes.profileValues(model.isa).size ==
+      ArithmeticRouteOperation.mOperations.size + ArithmeticRouteOperation.fOperations.size)
+
+    val unselected = (
+      new WithOperatorRoutesConfig(OperatorRouteConfig(Map(
+        ArithmeticRouteOperation.Mul -> OperatorRoute(
+          OperatorRouteTarget.Unselected, "unselected", 64, 1, 1)
+      ))) ++
+        new Rv64IMZicsrConfig
+    ).build
+    assertThrows[IllegalArgumentException](unselected.operators.routes.validate(unselected.isa))
   }
 
   it should "remain composable when an integration adds a later fragment" in {
     val config = (
-      new WithPipelineConfig ++
-        new NpcFpgaConfig ++
-        new WithNpcElaborationSettings(fpgaSettings)
+      new ScalarPerformConfig ++
+        new FpgaConfig
     ).build
 
     assert(config.isa.xlen == 32)
     assert(config.isa.M)
-    assert(config.pipeline.enablePipeline)
+    assert(!config.pipeline.enablePipeline)
+    assert(!config.pipeline.forwarding.enableIdForwarding)
+    assert(!config.pipeline.forwarding.enableExecuteForwarding)
     assert(config.debug.enableDispatchControl)
     assert(config.axi.useExternalMaster)
     assert(config.axi.dataWidth == 32)
   }
 
+  "Compute fragments" should "apply one IP implementation to both arithmetic domains" in {
+    val ip = IpComputeConfig(moduleName = "test_ip", outputFifoDepth = 8)
+    val config = (
+      new WithGenericIpComputeConfig(ip) ++
+        new WithDefaultArithmeticTimingConfig ++
+        new BaseConfig
+    ).build
+
+    assert(config.operators.mulDiv.implementation.backend == ComputeBackend.IP)
+    assert(config.operators.floating.implementation.backend == ComputeBackend.IP)
+    assert(config.operators.mulDiv.implementation.ip.outputFifoDepth == 8)
+    assert(config.operators.floating.implementation.ip.outputFifoDepth == 8)
+    assert(config.operators.mulDiv.multiplyTiming.responseFifoDepth == 8)
+    assert(config.operators.floating.divideTiming.responseFifoDepth == 8)
+  }
+
   "Zicsr fragments" should "make the extension explicit and preserve left precedence" in {
-    val disabled = (new WithoutZicsrConfig ++ new BaseNpcConfig).build
-    val enabled = (new WithZicsrConfig ++ new WithoutZicsrConfig ++ new BaseNpcConfig).build
+    val disabled = (new WithoutZicsrConfig ++ new Rv64IMFZicsrConfig).build
+    val enabled = (new WithZicsrConfig ++ new WithoutZicsrConfig ++ new Rv64IMFZicsrConfig).build
 
     assert(!disabled.isa.Zicsr)
     assert(!disabled.isa.F)
     assert(enabled.isa.Zicsr)
+  }
+
+  "NPC ISA presets" should "build RV32 variants from I and derive RV64 by overriding only XLEN" in {
+    val base = new Rv64IConfig().build
+    val rv32Full = new Rv32IMFZicsrConfig().build
+    val full = new Rv64IMFZicsrConfig().build
+
+    assert(base.isa.xlen == 64)
+    assert(!base.isa.M)
+    assert(!base.isa.F)
+    assert(!base.isa.Zicsr)
+    assert(full.isa.xlen == 64)
+    assert(full.isa.M)
+    assert(full.isa.F)
+    assert(full.isa.Zicsr)
+    assert(rv32Full.isa.M == full.isa.M)
+    assert(rv32Full.isa.F == full.isa.F)
+    assert(rv32Full.isa.Zicsr == full.isa.Zicsr)
+    assert(rv32Full.isa.xlen == 32)
+    assert(rv32Full.axi.dataWidth == 32)
+    assert(full.axi.dataWidth == 64)
+  }
+
+  "NPC performance presets" should "separate scalar, single-EX forwarding, and dual forwarding" in {
+    val scalar = new ScalarPerformConfig().build
+    val singleEx = new PipelineExFwdPerformConfig().build
+    val dual = new PipelineDualFwdPerformConfig().build
+
+    assert(!scalar.pipeline.enablePipeline)
+    assert(!scalar.pipeline.forwarding.enableIdForwarding)
+    assert(!scalar.pipeline.forwarding.enableExecuteForwarding)
+    assert(singleEx.pipeline.enablePipeline)
+    assert(!singleEx.pipeline.forwarding.enableIdForwarding)
+    assert(singleEx.pipeline.forwarding.enableExecuteForwarding)
+    assert(dual.pipeline.enablePipeline)
+    assert(dual.pipeline.forwarding.enableIdForwarding)
+    assert(dual.pipeline.forwarding.enableExecuteForwarding)
+  }
+
+  "NPC terminal configurations" should "select architecture and performance cores explicitly before adding an ABI" in {
+    val scalar = (
+      new Rv64IMFZicsrConfig ++
+        new ScalarPerformConfig
+    ).build
+    val pipelined = (
+      new Rv64IMFZicsrConfig ++
+        new PipelinePerformConfig
+    ).build
+    val dualForwarding = (
+      new Rv64IMFZicsrConfig ++
+        new PipelineDualFwdPerformConfig
+    ).build
+
+    Seq(scalar, pipelined, dualForwarding).foreach { config =>
+      assert(config.isa.xlen == 64)
+      assert(config.isa.M)
+      assert(config.isa.F)
+      assert(config.isa.Zicsr)
+      assert(!config.axi.useExternalMaster)
+    }
+    assert(!scalar.pipeline.enablePipeline)
+    assert(pipelined.pipeline.enablePipeline)
+    assert(!pipelined.pipeline.forwarding.enableIdForwarding)
+    assert(!pipelined.pipeline.forwarding.enableExecuteForwarding)
+    assert(dualForwarding.pipeline.forwarding.enableIdForwarding)
+    assert(dualForwarding.pipeline.forwarding.enableExecuteForwarding)
   }
 }

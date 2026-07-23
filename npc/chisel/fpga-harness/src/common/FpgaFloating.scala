@@ -6,7 +6,11 @@ import scpu._
 import scpu.protocol.ArithmeticAssistPort
 
 /** 只允许一个未完成请求；响应退休前冻结更年轻指令的发射。 */
-class FpgaFloatingFallbackOperator(width: Int, tagWidth: Int) extends Module {
+class FpgaFloatingFallbackOperator(
+  width: Int,
+  tagWidth: Int,
+  reason: OperatorFallbackReason = OperatorFallbackReason.FpoRiscvIncompatible
+) extends Module {
   val io = IO(new Bundle {
     val arithmetic = new ArithmeticOperatorIO(width, tagWidth)
     val assist = new ArithmeticAssistPort(width)
@@ -37,9 +41,12 @@ class FpgaFloatingFallbackOperator(width: Int, tagWidth: Int) extends Module {
   io.assist.request.bits.fcsr := request.fcsr
   io.assist.request.bits.operation := request.operation
   io.assist.request.bits.roundingMode := request.roundingMode
+  io.assist.request.bits.domain := ArithmeticRouteDomain.Floating.id.U
+  io.assist.request.bits.fallbackReason := reason.id.U
   when(io.assist.request.fire) { requestSent := true.B }
 
-  val matchingResponse = io.assist.response.bits.sequence === sequence
+  val matchingResponse = io.assist.response.bits.sequence === sequence &&
+    io.assist.response.bits.domain === ArithmeticRouteDomain.Floating.id.U
   io.arithmetic.resp.valid := pending && requestSent && io.assist.response.valid && matchingResponse
   io.arithmetic.resp.bits.result := io.assist.response.bits.result
   io.arithmetic.resp.bits.exceptionFlags := io.assist.response.bits.exceptionFlags
@@ -140,26 +147,82 @@ class FpgaFloatingDirectOperator(width: Int, tagWidth: Int, timing: ArithmeticIp
   * 可直接综合的比较、搬移和分类留在 PL；其余操作经中立的算术辅助端口交给运行时
   * 邮箱服务。ISA 映射和按序完成仍由 rv-core 的公共外壳承担。
   */
-class FpgaFloatingAlu(width: Int, config: FloatingAlu.Config)
+class FpgaFloatingAlu(width: Int, config: FloatingAlu.Config, routes: OperatorRouteConfig)
     extends FloatingAluBase(width, config) {
+  private val routeEnabled = routes.routes.nonEmpty
+  private val routeOperations = Seq(
+    ArithmeticRouteOperation.Fadd -> NpcAluOp.Floating.FADD.asUInt,
+    ArithmeticRouteOperation.Fsub -> NpcAluOp.Floating.FSUB.asUInt,
+    ArithmeticRouteOperation.Fmul -> NpcAluOp.Floating.FMUL.asUInt,
+    ArithmeticRouteOperation.Fdiv -> NpcAluOp.Floating.FDIV.asUInt,
+    ArithmeticRouteOperation.Fsqrt -> NpcAluOp.Floating.FSQRT.asUInt,
+    ArithmeticRouteOperation.Fmadd -> NpcAluOp.Floating.FMADD.asUInt,
+    ArithmeticRouteOperation.Fmsub -> NpcAluOp.Floating.FMSUB.asUInt,
+    ArithmeticRouteOperation.Fnmsub -> NpcAluOp.Floating.FNMSUB.asUInt,
+    ArithmeticRouteOperation.Fnmadd -> NpcAluOp.Floating.FNMADD.asUInt,
+    ArithmeticRouteOperation.Fsgnj -> NpcAluOp.Floating.FSGNJ.asUInt,
+    ArithmeticRouteOperation.Fsgnjn -> NpcAluOp.Floating.FSGNJN.asUInt,
+    ArithmeticRouteOperation.Fsgnjx -> NpcAluOp.Floating.FSGNJX.asUInt,
+    ArithmeticRouteOperation.Fmin -> NpcAluOp.Floating.FMIN.asUInt,
+    ArithmeticRouteOperation.Fmax -> NpcAluOp.Floating.FMAX.asUInt,
+    ArithmeticRouteOperation.Feq -> NpcAluOp.Floating.FEQ.asUInt,
+    ArithmeticRouteOperation.Flt -> NpcAluOp.Floating.FLT.asUInt,
+    ArithmeticRouteOperation.Fle -> NpcAluOp.Floating.FLE.asUInt,
+    ArithmeticRouteOperation.FcvtW -> NpcAluOp.Floating.FCVT_W.asUInt,
+    ArithmeticRouteOperation.FcvtWu -> NpcAluOp.Floating.FCVT_WU.asUInt,
+    ArithmeticRouteOperation.FcvtL -> NpcAluOp.Floating.FCVT_L.asUInt,
+    ArithmeticRouteOperation.FcvtLu -> NpcAluOp.Floating.FCVT_LU.asUInt,
+    ArithmeticRouteOperation.FcvtSW -> NpcAluOp.Floating.FCVT_S_W.asUInt,
+    ArithmeticRouteOperation.FcvtSWu -> NpcAluOp.Floating.FCVT_S_WU.asUInt,
+    ArithmeticRouteOperation.FcvtSL -> NpcAluOp.Floating.FCVT_S_L.asUInt,
+    ArithmeticRouteOperation.FcvtSLu -> NpcAluOp.Floating.FCVT_S_LU.asUInt,
+    ArithmeticRouteOperation.FmvXW -> NpcAluOp.Floating.FMV_X_W.asUInt,
+    ArithmeticRouteOperation.Fclass -> NpcAluOp.Floating.FCLASS.asUInt,
+    ArithmeticRouteOperation.FmvWX -> NpcAluOp.Floating.FMV_W_X.asUInt
+  )
+  private def selectedFor(target: OperatorRouteTarget): Bool = routeOperations.collect {
+    case (operation, code) if routes.route(operation).target == target => io.req.bits.aluOp === code
+  }.reduceOption(_ || _).getOrElse(false.B)
+  private val directSelected = if (routeEnabled) selectedFor(OperatorRouteTarget.DirectLogic)
+    else compareOrMoveSelected
+  private val fallbackSelected = if (routeEnabled) selectedFor(OperatorRouteTarget.HostFallback)
+    else !compareOrMoveSelected
+  private val fallbackReason = routeOperations.collectFirst {
+    case (operation, _) if routes.route(operation).target == OperatorRouteTarget.HostFallback =>
+      routes.route(operation).fallbackReason
+  }.getOrElse(OperatorFallbackReason.FpoRiscvIncompatible)
+
   private val direct = Module(new FpgaFloatingDirectOperator(
     width, config.tagWidth, config.compareTiming))
-  private val fallback = Module(new FpgaFloatingFallbackOperator(width, config.tagWidth))
+  private val fallback = if (!routeEnabled || routeOperations.exists {
+    case (operation, _) => routes.route(operation).target == OperatorRouteTarget.HostFallback
+  }) Some(Module(new FpgaFloatingFallbackOperator(width, config.tagWidth, fallbackReason))) else None
 
-  connectRequest(direct.io, compareOrMoveSelected)
-  connectRequest(fallback.io.arithmetic, !compareOrMoveSelected)
-  io.req.ready := Mux(compareOrMoveSelected, direct.io.req.ready, fallback.io.arithmetic.req.ready)
+  connectRequest(direct.io, directSelected)
+  fallback.foreach(endpoint => connectRequest(endpoint.io.arithmetic, fallbackSelected))
+  io.req.ready := MuxCase(false.B, Seq(
+    Some(directSelected -> direct.io.req.ready),
+    fallback.map(endpoint => fallbackSelected -> endpoint.io.arithmetic.req.ready)
+  ).flatten)
 
-  private val responses = Module(new RRArbiter(new ArithmeticResponse(width, config.tagWidth), 2))
+  private val responses = Module(new RRArbiter(new ArithmeticResponse(width, config.tagWidth), 1 + fallback.size))
   responses.io.in(0) <> direct.io.resp
-  responses.io.in(1) <> fallback.io.arithmetic.resp
+  fallback.foreach(endpoint => responses.io.in(1) <> endpoint.io.arithmetic.resp)
   io.resp <> responses.io.out
 
-  io.assist.request.valid := fallback.io.assist.request.valid
-  io.assist.request.bits := fallback.io.assist.request.bits
-  fallback.io.assist.request.ready := io.assist.request.ready
-  fallback.io.assist.response.valid := io.assist.response.valid
-  fallback.io.assist.response.bits := io.assist.response.bits
-  io.assist.response.ready := fallback.io.assist.response.ready
-  io.assist.busy := fallback.io.assist.busy
+  fallback match {
+    case Some(endpoint) =>
+      io.assist.request.valid := endpoint.io.assist.request.valid
+      io.assist.request.bits := endpoint.io.assist.request.bits
+      endpoint.io.assist.request.ready := io.assist.request.ready
+      endpoint.io.assist.response.valid := io.assist.response.valid
+      endpoint.io.assist.response.bits := io.assist.response.bits
+      io.assist.response.ready := endpoint.io.assist.response.ready
+      io.assist.busy := endpoint.io.assist.busy
+    case None =>
+      io.assist.request.valid := false.B
+      io.assist.request.bits := 0.U.asTypeOf(io.assist.request.bits)
+      io.assist.response.ready := true.B
+      io.assist.busy := false.B
+  }
 }

@@ -16,6 +16,7 @@
 #include <dlfcn.h>
 #include <capstone/capstone.h>
 #include <common.h>
+#include <stdlib.h>
 
 static size_t (*cs_disasm_dl)(csh handle, const uint8_t *code,
     size_t code_size, uint64_t address, size_t count, cs_insn **insn);
@@ -25,7 +26,11 @@ static csh handle;
 
 void init_disasm() {
   void *dl_handle;
-  dl_handle = dlopen("tools/capstone/repo/libcapstone.so.5", RTLD_LAZY);
+  const char *configured_library = getenv("NEMU_CAPSTONE_SO");
+  const char *library = configured_library != NULL && configured_library[0] != '\0'
+      ? configured_library : "tools/capstone/repo/libcapstone.so.5";
+  dl_handle = dlopen(library, RTLD_LAZY);
+  if (dl_handle == NULL) fprintf(stderr, "无法加载 Capstone：%s（%s）\n", library, dlerror());
   assert(dl_handle);
 
   cs_err (*cs_open_dl)(cs_arch arch, cs_mode mode, csh *handle) = NULL;

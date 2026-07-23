@@ -6,6 +6,7 @@
 #include <stdbool.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <poll.h>
 #include <unistd.h>
 
 static uint32_t uio_read32(void *opaque, uint32_t offset) {
@@ -28,6 +29,12 @@ static void uio_write32(void *opaque, uint32_t offset, uint32_t value) {
   }
   *(volatile uint32_t *)((uint8_t *)uio->control_mapping + offset) = value;
   atomic_thread_fence(memory_order_seq_cst);
+}
+
+static int uio_rearm_interrupt(struct nemu_fpga_zcu102_uio *uio) {
+  const uint32_t enable = 1;
+  const ssize_t written = write(uio->control_fd, &enable, sizeof(enable));
+  return written == (ssize_t)sizeof(enable) ? 0 : -1;
 }
 
 void nemu_fpga_zcu102_uio_close(struct nemu_fpga_zcu102_uio *uio) {
@@ -94,6 +101,7 @@ int nemu_fpga_zcu102_uio_open(struct nemu_fpga_zcu102_uio *uio,
     .write32 = uio_write32,
     .max_request_cycles = max_request_cycles,
   };
+  if (uio_rearm_interrupt(uio) != 0) goto failure;
   return 0;
 
 failure:
@@ -136,4 +144,25 @@ int nemu_fpga_zcu102_uio_read(struct nemu_fpga_zcu102_uio *uio,
   atomic_thread_fence(memory_order_acquire);
   memcpy(destination, uio->guest_memory + guest_offset, size);
   return uio->io_error == 0 ? 0 : -1;
+}
+
+int nemu_fpga_zcu102_uio_wait_interrupt(struct nemu_fpga_zcu102_uio *uio, int timeout_ms) {
+  if (uio == NULL || uio->control_fd < 0 || timeout_ms < 0) {
+    errno = EINVAL;
+    return -1;
+  }
+  struct pollfd descriptor = { .fd = uio->control_fd, .events = POLLIN };
+  const int ready = poll(&descriptor, 1, timeout_ms);
+  if (ready <= 0) return ready;
+  if ((descriptor.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
+    errno = EIO;
+    return -1;
+  }
+  uint32_t count = 0;
+  const ssize_t received = read(uio->control_fd, &count, sizeof(count));
+  if (received != (ssize_t)sizeof(count)) {
+    if (received >= 0) errno = EIO;
+    return -1;
+  }
+  return uio_rearm_interrupt(uio) == 0 ? 1 : -1;
 }

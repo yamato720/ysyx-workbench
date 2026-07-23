@@ -2,6 +2,7 @@ package scpu
 
 import chisel3._
 import chisel3.util._
+import scpu.ipdpishell.MemoryFaultDpi
 import scpu.protocol._
 
 /**
@@ -34,7 +35,8 @@ class NpcCore(
   val io = IO(new Bundle {
     val interrupt = Input(Bool())
     val master = new Axi4FullMasterIO(axiConfig.addrWidth, axiConfig.dataWidth, axiConfig.idWidth)
-    val arithmeticAssist = if (cfg.F && components.exposesArithmeticAssist(config)) {
+    val memoryFault = Output(new MemoryFault(axiConfig.addrWidth))
+    val arithmeticAssist = if (components.exposesArithmeticAssist(config)) {
       Some(new ArithmeticAssistPort(cfg.xlen))
     } else None
     val putch = if (axiConfig.useExternalMaster) Some(Decoupled(UInt(8.W))) else None
@@ -62,6 +64,28 @@ class NpcCore(
   frontend.io.axi <> memoryFabric.io.instruction
   backend.io.axi <> memoryFabric.io.data
   io.master <> memoryFabric.io.master
+
+  // 后端故障优先，因为它携带了已提交到 MEM 阶段的指令访问。
+  io.memoryFault.valid := backend.io.memoryFault.valid || frontend.io.memoryFault.valid
+  io.memoryFault.addr := Mux(backend.io.memoryFault.valid,
+    backend.io.memoryFault.addr, frontend.io.memoryFault.addr)
+  io.memoryFault.write := Mux(backend.io.memoryFault.valid,
+    backend.io.memoryFault.write, frontend.io.memoryFault.write)
+  io.memoryFault.len := Mux(backend.io.memoryFault.valid,
+    backend.io.memoryFault.len, frontend.io.memoryFault.len)
+  io.memoryFault.reason := Mux(backend.io.memoryFault.valid,
+    backend.io.memoryFault.reason, frontend.io.memoryFault.reason)
+
+  if (!axiConfig.useExternalMaster) {
+    val faultDpi = Module(new MemoryFaultDpi)
+    faultDpi.io.clk := clock
+    faultDpi.io.rst := reset.asBool
+    faultDpi.io.valid := io.memoryFault.valid
+    faultDpi.io.addr := io.memoryFault.addr
+    faultDpi.io.write := io.memoryFault.write
+    faultDpi.io.len := io.memoryFault.len
+    faultDpi.io.reason := io.memoryFault.reason
+  }
   (io.putch zip memoryFabric.io.putch).foreach { case (external, event) => external <> event }
   (io.arithmeticAssist zip backend.io.arithmeticAssist).foreach { case (external, assist) =>
     external.request.valid := assist.request.valid

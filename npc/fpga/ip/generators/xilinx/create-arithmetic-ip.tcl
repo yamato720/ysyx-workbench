@@ -1,12 +1,13 @@
 # 为 NPC FPGA 构建生成实际接入数据通路的 Vivado 2022.2 算术 IP。
-if {$argc != 8} {
-  puts stderr "usage: create-arithmetic-ip.tcl OUT ACTUAL_MANIFEST PART XLEN MUL_LAT MUL_II DIV_IP_LAT DIV_II"
+if {$argc != 9} {
+  puts stderr "usage: create-arithmetic-ip.tcl OUT ACTUAL_MANIFEST IP_LOG_DIR PART XLEN MUL_LAT MUL_II DIV_IP_LAT DIV_II"
   exit 2
 }
 
-lassign $argv out_dir actual_manifest part xlen mul_lat mul_ii div_ip_lat div_ii
+lassign $argv out_dir actual_manifest ip_log_dir part xlen mul_lat mul_ii div_ip_lat div_ii
 
 file mkdir $out_dir
+file mkdir $ip_log_dir
 create_project npc_arithmetic_ip [file join $out_dir project] -part $part -force
 set_property target_language Verilog [current_project]
 
@@ -16,7 +17,31 @@ proc set_if_supported {object property value} {
   }
 }
 
-proc create_integer_ip {name kind width latency} {
+proc write_ip_log_header {log name kind width latency} {
+  set stream [open $log w]
+  puts $stream "IP=$name"
+  puts $stream "KIND=$kind"
+  puts $stream "WIDTH=$width"
+  puts $stream "LATENCY=$latency"
+  puts $stream ""
+  close $stream
+}
+
+proc append_ip_log {log key value} {
+  set stream [open $log a]
+  puts $stream "$key=$value"
+  close $stream
+}
+
+proc append_ip_property {log ip property} {
+  if {[lsearch -exact [list_property $ip] $property] >= 0} {
+    append_ip_log $log $property [get_property $property $ip]
+  }
+}
+
+proc create_integer_ip {name kind width latency log_dir} {
+  set log [file join $log_dir "$name.log"]
+  write_ip_log_header $log $name $kind $width $latency
   if {$kind eq "multiply"} {
     create_ip -name mult_gen -vendor xilinx.com -library ip -module_name $name
     set ip [get_ips $name]
@@ -45,7 +70,16 @@ proc create_integer_ip {name kind width latency} {
     set_if_supported $ip CONFIG.OutTready true
     set_if_supported $ip CONFIG.ARESETN true
   }
+  append_ip_log $log ACTION generate_target_all
   generate_target all [get_ips $name]
+  append_ip_log $log GENERATE_TARGET completed
+  foreach property [list CONFIG.PipeStages CONFIG.PortAWidth CONFIG.PortBWidth \
+      CONFIG.PortAType CONFIG.PortBType CONFIG.OutputWidthLow CONFIG.OutputWidthHigh \
+      CONFIG.dividend_and_quotient_width CONFIG.divisor_width CONFIG.operand_sign \
+      CONFIG.remainder_type CONFIG.latency_configuration CONFIG.latency \
+      CONFIG.clocks_per_division CONFIG.FlowControl CONFIG.OutTready CONFIG.ARESETN] {
+    append_ip_property $log $ip $property
+  }
 }
 
 proc assert_property {ip property expected} {
@@ -56,8 +90,8 @@ proc assert_property {ip property expected} {
   }
 }
 
-create_integer_ip npc_int_multiplier_ip multiply $xlen $mul_lat
-create_integer_ip npc_int_divider_ip divide $xlen $div_ip_lat
+create_integer_ip npc_int_multiplier_ip multiply $xlen $mul_lat $ip_log_dir
+create_integer_ip npc_int_divider_ip divide $xlen $div_ip_lat $ip_log_dir
 
 assert_property [get_ips npc_int_multiplier_ip] CONFIG.PipeStages $mul_lat
 assert_property [get_ips npc_int_multiplier_ip] CONFIG.PortAWidth $xlen

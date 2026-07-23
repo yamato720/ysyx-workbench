@@ -16,7 +16,7 @@
 COLOR_RED := $(shell echo "\033[1;31m")
 COLOR_END := $(shell echo "\033[0m")
 
-NEMU_CONFIG_BOOTSTRAP_GOALS := menuconfig savedefconfig $(filter %defconfig,$(MAKECMDGOALS))
+NEMU_CONFIG_BOOTSTRAP_GOALS := menuconfig savedefconfig defconfig-file $(filter %defconfig,$(MAKECMDGOALS))
 ifeq ($(wildcard $(NEMU_CONFIG_FILE)),)
 ifeq ($(strip $(NEMU_CONFIG_BOOTSTRAP_GOALS)),)
 $(warning $(COLOR_RED)Warning: .config does not exist!$(COLOR_END))
@@ -59,7 +59,17 @@ savedefconfig: $(CONF)
 	$(Q)flock "$(KCONFIG_LOCK)" $< $(silent) --defconfig=configs/$@ $(Kconfig)
 	$(Q)flock "$(KCONFIG_LOCK)" $< $(silent) --syncconfig $(Kconfig)
 
-.PHONY: menuconfig savedefconfig defconfig
+# 保存构造会由 Scala host 预设渲染一个专属 defconfig。它不是仓库内的命名预设，
+# 因此不能走上面的 `%defconfig` 规则；显式入口也避免 Make 把绝对路径解析为目标名。
+defconfig-file: $(CONF) $(FIXDEP)
+	@test -n "$(NEMU_DEFCONFIG_FILE)" && test -f "$(NEMU_DEFCONFIG_FILE)" || { \
+		echo 'defconfig-file 需要 NEMU_DEFCONFIG_FILE=<生成的 defconfig>' >&2; exit 2; \
+	}
+	@mkdir -p "$(NEMU_CONFIG_ROOT)/include/config" "$(NEMU_CONFIG_ROOT)/include/generated"
+	$(Q)flock "$(KCONFIG_LOCK)" $< $(silent) --defconfig="$(NEMU_DEFCONFIG_FILE)" $(Kconfig)
+	$(Q)flock "$(KCONFIG_LOCK)" $< $(silent) --syncconfig $(Kconfig)
+
+.PHONY: menuconfig savedefconfig defconfig defconfig-file
 
 # Help text used by make help
 help:

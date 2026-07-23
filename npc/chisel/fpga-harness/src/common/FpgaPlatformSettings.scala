@@ -3,7 +3,7 @@ package scpu.fpga
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 
-import scpu.NpcConfig
+import scpu._
 
 sealed abstract class FpgaBoard(val name: String)
 
@@ -47,41 +47,52 @@ object FpgaPlatformSettings {
   private[fpga] def hex(value: Long): String = s"0x${java.lang.Long.toUnsignedString(value, 16)}"
 }
 
-/** Vivado/Vitis 消费的器件、平台和实现策略。 */
-final case class FpgaToolSettings(
-  fpgaType: String,
-  part: String,
-  platform: String,
-  boardPart: String,
-  vivadoVersion: String,
-  vitisVersion: String,
-  vitisTarget: String,
-  timingWnsMinNs: String,
-  implementationStrategy: String,
-  memoryKind: String,
-  plGicSpi: Int = 0,
-  floatingFallback: String = "host-mailbox"
-) {
-  require(Set("zynqmp", "alveo").contains(fpgaType), s"不支持的 FPGA 类型：$fpgaType")
-  require(implementationStrategy.matches("[A-Za-z0-9_]+"),
-    s"FPGA 实现策略含非法字符：$implementationStrategy")
-  require(floatingFallback == "host-mailbox",
-    s"不支持的 FPGA 浮点回退策略：$floatingFallback（当前仅支持 host-mailbox）")
-}
+/** 板卡唯一的算子能力表。FPO 数值路径刻意没有 VendorIp 路由。 */
+object FpgaOperatorRoutes {
+  import ArithmeticRouteOperation._
 
-/** 板卡实现流程的宿主并行度与策略搜索开关。
-  *
-  * `synthesisParallelJobs` 与 `implementationParallelJobs` 分别映射到 Vivado/Vitis 的
-  * `synth.jobs` 和 `impl.jobs`，表示宿主工具可并发执行的 worker jobs，不表示 FPGA 内 CPU 核数。
-  * 开启策略搜索时，Vitis 除默认 implementation run 外，还会为板卡的实现策略额外启动 run。
-  */
-final case class FpgaBuildSettings(
-  synthesisParallelJobs: Int,
-  implementationParallelJobs: Int,
-  implementationStrategySearch: Boolean = false
-) {
-  require(synthesisParallelJobs > 0 && implementationParallelJobs > 0,
-    "FPGA 构造并行任务数必须为正数")
+  private def route(
+    target: OperatorRouteTarget,
+    module: String,
+    width: Int,
+    timing: ArithmeticIpTiming,
+    reason: OperatorFallbackReason = OperatorFallbackReason.None
+  ): OperatorRoute = OperatorRoute(target, module, width, timing.latency, timing.initiationInterval, reason)
+
+  /** Xilinx 整数 IP 和可综合 binary32 直接逻辑的严格 RVF 路由。 */
+  def xilinx(width: Int, timing: OperatorIpTimingConfig): OperatorRouteConfig = {
+    val multiply = timing.timing(timing.multiplyCycles, timing.multiplyInitiationInterval)
+    val divide = timing.timing(timing.divCycles, timing.divInitiationInterval)
+    val addSub = timing.timing(timing.floatingAddSubCycles, timing.floatingAddSubInitiationInterval)
+    val floatingMultiply = timing.timing(timing.floatingMultiplyCycles, timing.floatingMultiplyInitiationInterval)
+    val floatingDivide = timing.timing(timing.floatingDivideCycles, timing.floatingDivideInitiationInterval)
+    val fma = timing.timing(timing.floatingFmaCycles, timing.floatingFmaInitiationInterval)
+    val sqrt = timing.timing(timing.floatingSqrtCycles, timing.floatingSqrtInitiationInterval)
+    val convert = timing.timing(timing.floatingConvertCycles, timing.floatingConvertInitiationInterval)
+    val compare = timing.timing(timing.floatingCompareCycles, timing.floatingCompareInitiationInterval)
+    val integer = ArithmeticRouteOperation.mOperations.map { operation =>
+      val selectedTiming = if (operation.isMultiply) multiply else divide
+      val module = if (operation.isMultiply) "npc_int_multiplier_adapter" else "npc_int_divider_adapter"
+      operation -> route(OperatorRouteTarget.VendorIp, module, width, selectedTiming)
+    }
+    val floating = ArithmeticRouteOperation.fOperations.map { operation =>
+      val selectedTiming = operation match {
+        case Fadd | Fsub => addSub
+        case Fmul => floatingMultiply
+        case Fdiv => floatingDivide
+        case Fsqrt => sqrt
+        case Fmadd | Fmsub | Fnmsub | Fnmadd => fma
+        case FcvtW | FcvtWu | FcvtL | FcvtLu | FcvtSW | FcvtSWu | FcvtSL | FcvtSLu => convert
+        case _ => compare
+      }
+      if (operation.isDirectFloating)
+        operation -> route(OperatorRouteTarget.DirectLogic, "fpga_f32_direct_logic", width, selectedTiming)
+      else
+        operation -> route(OperatorRouteTarget.HostFallback, "host-mailbox", width, selectedTiming,
+          OperatorFallbackReason.FpoRiscvIncompatible)
+    }
+    OperatorRouteConfig((integer ++ floating).toMap)
+  }
 }
 
 object FpgaElaborationManifest {
@@ -99,7 +110,7 @@ object FpgaElaborationManifest {
     args: Array[String],
     npcConfig: NpcConfig,
     platform: FpgaPlatformSettings,
-    tools: FpgaToolSettings,
+    toolchain: FpgaToolchainConfig,
     scalaConfig: String,
     target: String
   ): Unit = {
@@ -113,7 +124,8 @@ object FpgaElaborationManifest {
       "NPC_EX_FWD" -> bit(npcConfig.pipeline.forwarding.enableExecuteForwarding),
       "NPC_F" -> bit(npcConfig.isa.F),
       "NPC_ZICSR" -> bit(npcConfig.isa.Zicsr),
-      "FPGA_FLOATING_FALLBACK" -> tools.floatingFallback,
+      "FPGA_FLOATING_FALLBACK" -> toolchain.runtime.floatingFallback,
+      "FPGA_NOTIFICATION_MODE" -> toolchain.runtime.notificationMode,
       "NPC_ARITH_BACKEND" -> npcConfig.operators.mulDiv.implementation.backend.name,
       "NPC_ARITH_OUTPUT_FIFO" -> npcConfig.operators.mulDiv.implementation.ip.outputFifoDepth.toString,
       "NPC_MUL_CYCLES" -> npcConfig.operators.mulDiv.multiplyTiming.latency.toString,
@@ -134,7 +146,7 @@ object FpgaElaborationManifest {
       "NPC_FCVT_II" -> npcConfig.operators.floating.convertTiming.initiationInterval.toString,
       "NPC_FCMP_CYCLES" -> npcConfig.operators.floating.compareTiming.latency.toString,
       "NPC_FCMP_II" -> npcConfig.operators.floating.compareTiming.initiationInterval.toString
-    ) ++ platform.manifestValues(npcConfig)
+    ) ++ npcConfig.operators.routes.profileValues(npcConfig.isa) ++ platform.manifestValues(npcConfig)
 
     val directory = outputDirectory(args)
     Files.createDirectories(directory)

@@ -94,7 +94,7 @@ module FpgaDebugControlTb;
     reset = 0;
 
     read_register(32'hfc, value);
-    if (value !== 32'h4e50_4302) $fatal(1, "missing v2 protocol signature: %h", value);
+    if (value !== 32'h4e50_4303) $fatal(1, "missing v3 protocol signature: %h", value);
     read_register(32'h3c, value);
     if ((value & 7) !== 7) $fatal(1, "missing debug capabilities: %h", value);
 
@@ -188,7 +188,7 @@ module FpgaDebugControlTb;
     read_register(32'hb4, value);
     if (value !== 32'h8000_0004) $fatal(1, "ebreak last commit PC mismatch: %h", value);
 
-    $display("FPGA v2 debug control RTL tests passed");
+    $display("FPGA v3 debug control RTL tests passed");
     $finish;
   end
 endmodule

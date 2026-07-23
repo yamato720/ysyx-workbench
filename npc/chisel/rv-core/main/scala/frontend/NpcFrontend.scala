@@ -19,6 +19,7 @@ class NpcFrontend(config: NpcConfig) extends Module {
     val redirectTarget = Input(UInt(cfg.xlen.W))
     val dispatch = Decoupled(new DecodedDispatchPayload(cfg))
     val axi = new AxiLiteMasterIO(axiConfig.addrWidth, axiConfig.dataWidth)
+    val memoryFault = Output(new MemoryFault(axiConfig.addrWidth))
 
     val debug = Output(new NpcFrontendDebugBundle(cfg))
   })
@@ -38,6 +39,7 @@ class NpcFrontend(config: NpcConfig) extends Module {
   programCounter.io.writeEnable := pcWriteEnable
   instructionFetchUnit.io.pc := programCounter.io.pc(31, 0)
   instructionFetchUnit.io.axi <> io.axi
+  io.memoryFault := instructionFetchUnit.io.fault
 
   fetchDecodeReg.io.flush := io.redirectValid
   fetchDecodeReg.io.in.valid := instructionFetchUnit.io.responseValid && !io.redirectValid

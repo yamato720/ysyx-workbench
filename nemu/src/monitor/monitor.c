@@ -24,6 +24,9 @@ void init_difftest(char *ref_so_file, long img_size, int port);
 void init_device();
 void init_disasm();
 void check_npc_flag();
+#ifdef CONFIG_NPC_PERFORMANCE_HTML
+#include <pipeline-html.h>
+#endif
 
 static void welcome() {
   Log("Trace: %s", MUXDEF(CONFIG_TRACE, ANSI_FMT("ON", ANSI_FG_GREEN), ANSI_FMT("OFF", ANSI_FG_RED)));
@@ -151,7 +154,12 @@ void init_monitor(int argc, char *argv[]) {
   /* Initialize the simple debugger. */
   init_sdb();
 
-  IFDEF(CONFIG_ITRACE, init_disasm());
+#if defined(CONFIG_ITRACE) || defined(CONFIG_NPC_PERFORMANCE_HTML)
+  init_disasm();
+#endif
+#ifdef CONFIG_NPC_PERFORMANCE_HTML
+  npc_pipeline_html_init();
+#endif
 
   /* Display welcome message. */
   welcome();

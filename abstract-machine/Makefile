@@ -24,6 +24,15 @@ ifeq ($(wildcard $(AM_HOME)/am/include/am.h),)
   $(error $$AM_HOME must be an AbstractMachine repo)
 endif
 
+### Config-selected runs must infer ARCH before the generic ARCH validation and platform include.
+ifeq ($(strip $(NPC_CONSTRUCTION_DIR)),)
+  ifneq ($(strip $(filter run run-bat gdb,$(MAKECMDGOALS))),)
+    ifneq ($(strip $(config)$(version)),)
+      include $(AM_HOME)/scripts/config-construction.mk
+    endif
+  endif
+endif
+
 ### Check: environment variable `$ARCH` must be in the supported list
 ARCHS = $(basename $(notdir $(shell ls $(AM_HOME)/scripts/*.mk)))
 ifeq ($(filter $(ARCHS), $(ARCH)), )
@@ -47,13 +56,16 @@ endif
 
 ### Create the destination directory (`build/$ARCH`)
 WORK_DIR  = $(shell pwd)
-DST_DIR   = $(WORK_DIR)/build/$(ARCH)
+# Config 批量运行会为每个“版本 × 用例”传入独立目录。源文件仍从 WORK_DIR 读取，
+# 仅编译、链接和 NEMU 日志产物进入 AM_BUILD_ROOT，避免并行任务争用 build/。
+AM_BUILD_ROOT ?= $(WORK_DIR)/build
+DST_DIR   = $(AM_BUILD_ROOT)/$(ARCH)
 $(shell mkdir -p $(DST_DIR))
 
 ### Compilation targets (a binary image or archive)
-IMAGE_REL = build/$(NAME)-$(ARCH)
+IMAGE_REL = $(AM_BUILD_ROOT)/$(NAME)-$(ARCH)
 IMAGE     = $(abspath $(IMAGE_REL))
-ARCHIVE   = $(WORK_DIR)/build/$(NAME)-$(ARCH).a
+ARCHIVE   = $(AM_BUILD_ROOT)/$(NAME)-$(ARCH).a
 
 ### Collect the files to be linked: object files (`.o`) and libraries (`.a`)
 OBJS      = $(addprefix $(DST_DIR)/, $(addsuffix .o, $(basename $(SRCS))))

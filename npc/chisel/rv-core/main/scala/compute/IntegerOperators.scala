@@ -163,8 +163,8 @@ object IntegerDividerOperator {
   }
   val divideByZero = activeOperandB === 0.U
   val signedDivideOverflow = signedDivide && activeOperandA === activeSignedMin && activeOperandB === activeAllOnes
-  val unsignedQuotient = activeOperandA / activeOperandB
-  val unsignedRemainder = activeOperandA % activeOperandB
+  val unsignedQuotient = aMagnitude / bMagnitude
+  val unsignedRemainder = aMagnitude % bMagnitude
   val unsignedResult = Mux(isRemainder, unsignedRemainder, unsignedQuotient)
   val negateResult = signedDivide && Mux(isRemainder, aNegative, aNegative ^ bNegative)
   val signedResult = Mux(negateResult, negateActive(unsignedResult, wordOperation), unsignedResult)

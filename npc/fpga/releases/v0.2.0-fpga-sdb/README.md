@@ -17,8 +17,9 @@ make -C npc release-construction-check \
   RELEASE_CONSTRUCTION=U55cYsyxSocFpgaConfig
 
 git submodule status --recursive
-sbt "root/test" "fpga/test"
+sbt "root/test"
 cd npc/chisel/ysyxSoC && mill -i ysyxsoc.compile
+mill -i ysyxsocTest.test
 ```
 
 子模块从最深层开始提交和推送，顶层 release commit 固定所有 gitlink。`npc/build.sbt` 在 release
@@ -43,7 +44,7 @@ npc/fpga/common/scripts/artifact-manifest.sh verify \
   --platform xilinx_u55c_gen3x16_xdma_3_202210_1 \
   --config-fqcn scpu.fpga.u55c.U55cYsyxSocFpgaConfig \
   --host-abi nemu-construction-v1 \
-  --protocol-abi npc-fpga-mailbox-v2 \
+  --protocol-abi npc-fpga-mailbox-v3 \
   --release-tag v0.2.0-fpga-sdb --formal --require-timing
 ```
 

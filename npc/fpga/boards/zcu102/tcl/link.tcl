@@ -1,8 +1,8 @@
-if {$argc != 18} {
-  puts stderr "usage: link.tcl PROJECT PART BOARD_REPO BOARD_PART RTL_DIR BOARD_RTL_DIR IP_ADAPTER_RTL_DIR IP_DIR XLEN CLOCK_MHZ GUEST_MEMORY_BASE HOST_MEMORY_BASE CONTROL_BASE BIT XSA IMPL_JOBS IMPL_STRATEGY WNS_MIN_NS"
+if {$argc != 27} {
+  puts stderr "usage: link.tcl PROJECT PART BOARD_REPO BOARD_PART RTL_DIR BOARD_RTL_DIR IP_ADAPTER_RTL_DIR IP_DIR XLEN CLOCK_MHZ GUEST_MEMORY_BASE HOST_MEMORY_BASE CONTROL_BASE BIT XSA IMPL_JOBS IMPL_STRATEGY WNS_MIN_NS IMPLEMENTATION_REPORTS_TCL TIMING_MAX_PATHS TIMING_PATHS_PER_CLOCK REPORT_CONGESTION REPORT_CLOCK_UTILIZATION REPORT_CONTROL_SETS REPORT_HIGH_FANOUT_NETS REPORT_METHODOLOGY REPORT_QOR_SUGGESTIONS"
   exit 2
 }
-lassign $argv project_dir part board_repo board_part rtl_dir board_rtl_dir ip_adapter_rtl_dir ip_dir xlen clock_mhz guest_memory_base host_memory_base control_base bitstream xsa impl_jobs impl_strategy timing_wns_min
+lassign $argv project_dir part board_repo board_part rtl_dir board_rtl_dir ip_adapter_rtl_dir ip_dir xlen clock_mhz guest_memory_base host_memory_base control_base bitstream xsa impl_jobs impl_strategy timing_wns_min implementation_reports_tcl timing_max_paths timing_paths_per_clock report_congestion report_clock_utilization report_control_sets report_high_fanout_nets report_methodology report_qor_suggestions
 
 proc recursive_files {directory pattern} {
   set matches {}
@@ -150,7 +150,22 @@ if {[get_property PROGRESS [get_runs impl_1]] ne "100%"} {
   exit 1
 }
 open_run impl_1
-report_timing_summary -file [file rootname $bitstream].timing.rpt
+if {![file isfile $implementation_reports_tcl]} {
+  puts stderr "implementation reports Tcl not found: $implementation_reports_tcl"
+  exit 2
+}
+set npc_report_timing_max_paths $timing_max_paths
+set npc_report_timing_paths_per_clock $timing_paths_per_clock
+set npc_report_congestion $report_congestion
+set npc_report_clock_utilization $report_clock_utilization
+set npc_report_control_sets $report_control_sets
+set npc_report_high_fanout_nets $report_high_fanout_nets
+set npc_report_methodology $report_methodology
+set npc_report_qor_suggestions $report_qor_suggestions
+source $implementation_reports_tcl
+# 保留原有邻近 bitstream 的报告位置，供已有人工分析和脚本直接访问。
+file copy -force [file join $npc_implementation_report_dir timing-summary.rpt] \
+  [file rootname $bitstream].timing.rpt
 set timing_paths [get_timing_paths -delay_type max -max_paths 1]
 if {[llength $timing_paths] != 1} {
   puts stderr "ZCU102 implementation produced no setup timing path"

@@ -116,9 +116,8 @@ endif
 endif
 endif
 
-NPC_STANDALONE_SCALA_CONFIG := $(if $(NPC_SCALA_CONFIG),$(NPC_SCALA_CONFIG),scpu.NpcStandaloneConfig)
-NPC_DPI_SCALA_CONFIG := $(if $(NPC_SCALA_CONFIG),$(NPC_SCALA_CONFIG),scpu.NpcDpiConfig)
-SOC_STANDALONE_SCALA_CONFIG := $(if $(NPC_SCALA_CONFIG),$(NPC_SCALA_CONFIG),ysyx.YsyxStandaloneConfig)
+NPC_STANDALONE_SCALA_CONFIG := $(if $(NPC_SCALA_CONFIG),$(NPC_SCALA_CONFIG),scpu.StandaloneConfig)
+NPC_SIMULATION_SCALA_CONFIG := $(if $(NPC_SCALA_CONFIG),$(NPC_SCALA_CONFIG),scpu.SimulationConfig)
 SOC_SIMULATION_SCALA_CONFIG := $(if $(NPC_SCALA_CONFIG),$(NPC_SCALA_CONFIG),ysyx.YsyxSimulationConfig)
 NPC_BUILD_PROPS_WITH_CONFIG = -Dnpc.config=$(1)
 
@@ -152,6 +151,7 @@ NPC_VCD_CFLAGS := $(if $(filter 1,$(NPC_VCD_TRACE_ENABLED)),-DNPC_VCD_TRACE,)
 CHISEL_STAMP := $(obj_dir)/chisel/.complete
 CHISEL_DPI_STAMP := $(obj_dir)/chisel-dpi/.complete
 NPC_NEMU_STAMP := $(obj_dir)/chisel-cpu-lib.stamp
+CONSTRUCTION_PHASE_PREREQUISITES ?= 1
 
 FORCE:
 
@@ -202,7 +202,7 @@ $(CHISEL_DPI_STAMP): FORCE
 	mkdir -p "$(dir $@)"; \
 	echo '=== Generating NEMU Verilog from Chisel ==='; \
 	rm -rf "$(CHISEL_DPI_OUT)"; \
-	cd "$(CURDIR)" && NPC_SCALA_CONFIG="$(NPC_DPI_SCALA_CONFIG)" sbt $(call NPC_BUILD_PROPS_WITH_CONFIG,$(NPC_DPI_SCALA_CONFIG)) "root/runMain scpu.ElaborateDPI"; \
+	cd "$(CURDIR)" && NPC_SCALA_CONFIG="$(NPC_SIMULATION_SCALA_CONFIG)" sbt $(call NPC_BUILD_PROPS_WITH_CONFIG,$(NPC_SIMULATION_SCALA_CONFIG)) "root/runMain scpu.ElaborateDPI"; \
 	test -f "$(CHISEL_DPI_OUT)/CPU.sv"; touch "$@"
 
 chisel: $(CHISEL_STAMP)
@@ -244,7 +244,9 @@ chisel-cpu: chisel-dpi softfloat-lib
 	@echo "Built: ./out/chisel-cpu/npc-exec"
 
 # Build NPC core as object files for NEMU integration
-$(NPC_NEMU_STAMP): $(CHISEL_DPI_STAMP) $(SOFTFLOAT_LIB) FORCE
+NPC_NEMU_PREREQUISITES := $(if $(filter 1,$(CONSTRUCTION_PHASE_PREREQUISITES)),$(CHISEL_DPI_STAMP) $(SOFTFLOAT_LIB))
+
+$(NPC_NEMU_STAMP): $(NPC_NEMU_PREREQUISITES) FORCE
 	@set -e; \
 	mkdir -p "$(dir $@)"; \
 	echo "=== Building Chisel CPU library for NEMU (VCD=$(NPC_VCD_TRACE_ENABLED)) ==="; \
@@ -327,7 +329,9 @@ soc-sim-verilog: check-soc-xlen
 		NPC_FCVT_CYCLES=$(NPC_FCVT_CYCLES) NPC_FCVT_II=$(NPC_FCVT_II) \
 		NPC_FCMP_CYCLES=$(NPC_FCMP_CYCLES) NPC_FCMP_II=$(NPC_FCMP_II)
 
-soc-nemu-lib: soc-sim-verilog check-soc-xlen softfloat-lib
+SOC_NEMU_PREREQUISITES := $(if $(filter 1,$(CONSTRUCTION_PHASE_PREREQUISITES)),soc-sim-verilog check-soc-xlen softfloat-lib)
+
+soc-nemu-lib: $(SOC_NEMU_PREREQUISITES)
 	@$(MAKE) $(SOC_NEMU_STAMP)
 
 check-soc-xlen:
@@ -399,6 +403,12 @@ include ./fpga/build.mk
 CONSTRUCTION_MANAGER := $(CURDIR)/scripts/construction-manager.sh
 REBUILD_REQUEST := $(if $(filter 1,$(strip $(rebuild))),1,0)
 DELETE_CONFIRM := $(if $(filter 1,$(strip $(yes))),1,0)
+HOST_BUILD_ALL := $(if $(filter 1,$(strip $(all))),1,0)
+HOST_BUILD_JOBS := $(if $(strip $(jobs)),$(strip $(jobs)),1)
+
+ifneq ($(origin host_rebuild),undefined)
+  $(error host_rebuild 已删除，请使用 host-rebuild=1)
+endif
 
 config-list:
 	@$(CONSTRUCTION_MANAGER) catalog "$(CURDIR)"
@@ -407,19 +417,32 @@ build:
 	@test -n "$(strip $(config))" || { echo 'build 必须提供 config=<Config短名或FQCN>' >&2; exit 2; }
 	@$(CONSTRUCTION_MANAGER) build "$(CURDIR)" "$(strip $(config))" "$(REBUILD_REQUEST)"
 
+host-config-list:
+	@$(CONSTRUCTION_MANAGER) host-catalog "$(CURDIR)"
+
+host-build:
+	@$(CONSTRUCTION_MANAGER) host-build "$(CURDIR)" "$(strip $(config))" "$(HOST_BUILD_ALL)" "$(HOST_BUILD_JOBS)"
+
 version:
 	@if test -n "$(strip $(delete))"; then \
 		$(CONSTRUCTION_MANAGER) delete "$(CURDIR)" "$(strip $(delete))" "$(DELETE_CONFIRM)"; \
-	elif test -n "$(strip $(version))"; then \
-		$(CONSTRUCTION_MANAGER) list "$(CURDIR)" "$(strip $(version))"; \
-	elif test -n "$(strip $(config))"; then \
-		resolved=$$($(CONSTRUCTION_MANAGER) resolve "$(CURDIR)" "$(strip $(config))" ''); \
-		fqcn=$${resolved%%|*}; $(CONSTRUCTION_MANAGER) list "$(CURDIR)" "$$fqcn"; \
-	else \
+		elif test -n "$(strip $(version))"; then \
+			$(CONSTRUCTION_MANAGER) list "$(CURDIR)" "$(strip $(version))"; \
+		elif test -n "$(strip $(config))"; then \
+			$(CONSTRUCTION_MANAGER) list "$(CURDIR)" "$(strip $(config))"; \
+		else \
 		$(CONSTRUCTION_MANAGER) list "$(CURDIR)"; \
 	fi
 
-.PHONY: config-list build version
+.PHONY: config-list build host-config-list host-build version
+
+dpi-unit-test:
+	@mkdir -p "$(obj_dir)"; \
+	g++ -std=c++14 -I"$(CURDIR)/csrc" ./csrc/pmem.cpp ./csrc/pmem_dpi_test.cpp \
+		-o "$(obj_dir)/pmem-dpi-test"; \
+	"$(obj_dir)/pmem-dpi-test"
+
+.PHONY: dpi-unit-test
 
 
 

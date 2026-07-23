@@ -160,7 +160,25 @@ config NPC_VCD_TRACE
   help
     Build the NEMU-integrated NPC/SoC Verilator model with waveform support.
     This is independent from NEMU's text trace options and adds SDB `start`
-    and `stop` commands for producing clip_wave.vcd.
+    and `stop` commands for producing numbered wave-*.vcd files.
+
+config NPC_PERFORMANCE_HTML
+  depends on TARGET_NATIVE_ELF
+  bool "Generate detailed NPC performance HTML"
+  default n
+  help
+    Record committed instructions and write performance.html as the report
+    home page plus instructions.html for searchable per-instruction details.
+    Pipeline analysis is an optional child report.
+
+config NPC_PIPELINE_HTML
+  depends on NPC_PERFORMANCE_HTML && FPGA_BACKEND_NONE
+  bool "Generate committed-instruction pipeline HTML"
+  default n
+  help
+    Use the performance recorder's committed-instruction data to write a
+    self-contained pipeline.html timeline. This does not enable VCD or the
+    regular instruction trace.
 
 config TRACE_START
   depends on TRACE

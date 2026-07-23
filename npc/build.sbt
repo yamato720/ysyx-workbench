@@ -13,7 +13,10 @@ lazy val root = (project in file("./chisel"))
     Test / resourceDirectory := baseDirectory.value / "rv-core/test/resources",
     Compile / unmanagedSourceDirectories ++= Seq(
       baseDirectory.value / "configs/parameters",
+      baseDirectory.value / "configs/common",
+      baseDirectory.value / "configs/nemu",
       baseDirectory.value / "configs/npc",
+      baseDirectory.value / "ysyxSoC/rocket-chip/dependencies/cde/cde/src",
       (ThisBuild / baseDirectory).value / "chisel/ysyxSoC/rocket-chip/dependencies/hardfloat/hardfloat/src/main/scala"
     ),
     Compile / unmanagedResourceDirectories += baseDirectory.value / "configs/resources",
@@ -32,30 +35,5 @@ lazy val root = (project in file("./chisel"))
     addCompilerPlugin("org.chipsalliance" % "chisel-plugin" % chiselVersion cross CrossVersion.full)
   )
 
-// FPGA 是可选平台组件。普通 root 构建只带仿真/DPI 组件；板级生成显式运行 fpga 子项目。
-lazy val fpga = (project in file("./chisel-fpga"))
-  .dependsOn(root)
-  .settings(
-    name := "scpu-fpga",
-    Compile / unmanagedSourceDirectories ++= Seq(
-      (ThisBuild / baseDirectory).value / "chisel/configs/fpga",
-      (ThisBuild / baseDirectory).value / "chisel/fpga-harness/src/common",
-      (ThisBuild / baseDirectory).value / "chisel/fpga-harness/src/rv-core",
-      (ThisBuild / baseDirectory).value / "chisel/ysyxSoC/rocket-chip/dependencies/cde/cde/src"
-    ),
-    Compile / unmanagedSources / excludeFilter :=
-      new sbt.io.SimpleFileFilter(_.getName.endsWith("SocConfig.scala")),
-    Test / unmanagedSourceDirectories +=
-      (ThisBuild / baseDirectory).value / "chisel/fpga-harness/test",
-    libraryDependencies +=
-      "org.scalatest" %% "scalatest" % "3.2.19" % Test,
-    scalacOptions ++= Seq(
-      "-language:reflectiveCalls",
-      "-Ymacro-annotations",
-      "-Ytasty-reader",
-      "-deprecation",
-      "-feature",
-      "-Xcheckinit"
-    ),
-    addCompilerPlugin("org.chipsalliance" % "chisel-plugin" % chiselVersion cross CrossVersion.full)
-  )
+// FPGA 终端与 ysyxSoC 共用完整的 CDE 图，因此统一由 ysyxSoC 的 Mill 编译边界构造。
+// 普通 root 构建仍只带仿真/DPI 组件，不会引入 Rocket、Diplomacy 或板卡逻辑。

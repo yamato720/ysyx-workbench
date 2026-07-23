@@ -2,6 +2,7 @@ package scpu.fpga
 
 import chisel3._
 import chisel3.util._
+import scpu.ArithmeticOperation
 import scpu.protocol._
 
 /** 供 PS Linux 与 XRT 宿主访问的 AXI-Lite 寄存器邮箱。 */
@@ -29,6 +30,12 @@ class FpgaFallbackMailbox(width: Int) extends Module {
   val responseHigh = RegInit(0.U(32.W))
   val responseFlags = RegInit(0.U(5.W))
   val responseIllegal = RegInit(false.B)
+  val responseDomain = RegInit(0.U(ArithmeticAssistAbi.domainWidth.W))
+  val responseFallbackReason = RegInit(0.U(ArithmeticAssistAbi.fallbackReasonWidth.W))
+  val fallbackCount = RegInit(0.U(32.W))
+  val lastFallbackDomain = RegInit(0.U(ArithmeticAssistAbi.domainWidth.W))
+  val lastFallbackReason = RegInit(0.U(ArithmeticAssistAbi.fallbackReasonWidth.W))
+  val lastFallbackOperation = RegInit(0.U(ArithmeticOperation.width.W))
   val coreReset = RegInit(true.B)
   val commandSequence = RegInit(0.U(32.W))
   val putchPending = RegInit(false.B)
@@ -65,6 +72,10 @@ class FpgaFallbackMailbox(width: Int) extends Module {
     request := io.core.request.bits
     requestPending := true.B
     timeoutCycles := 0.U
+    when(!fallbackCount.andR) { fallbackCount := fallbackCount + 1.U }
+    lastFallbackDomain := io.core.request.bits.domain
+    lastFallbackReason := io.core.request.bits.fallbackReason
+    lastFallbackOperation := io.core.request.bits.operation
   }.elsewhen(requestPending && !timeoutCycles.andR) {
     timeoutCycles := timeoutCycles + 1.U
   }
@@ -75,6 +86,8 @@ class FpgaFallbackMailbox(width: Int) extends Module {
     (if (width == 64) Cat(responseHigh, responseLow) else responseLow)
   io.core.response.bits.exceptionFlags := responseFlags
   io.core.response.bits.illegal := responseIllegal
+  io.core.response.bits.domain := responseDomain
+  io.core.response.bits.fallbackReason := responseFallbackReason
   when(io.core.response.fire) {
     responsePending := false.B
     requestPending := false.B
@@ -127,6 +140,13 @@ class FpgaFallbackMailbox(width: Int) extends Module {
           responseIllegal := wData(8)
         }
       }
+      is("h74".U) {
+        when(wStrb(0)) {
+          responseDomain := wData(ArithmeticAssistAbi.domainWidth - 1, 0)
+          responseFallbackReason := wData(ArithmeticAssistAbi.fallbackReasonWidth + ArithmeticAssistAbi.domainWidth - 1,
+            ArithmeticAssistAbi.domainWidth)
+        }
+      }
       is("h70".U) {
         when(wData(1)) {
           fallbackProtocolError := false.B
@@ -160,6 +180,7 @@ class FpgaFallbackMailbox(width: Int) extends Module {
             fallbackProtocolError := false.B
             timeoutCycles := 0.U
             putchPending := false.B
+            fallbackCount := 0.U
           }
           when(wData(2)) { putchPending := false.B }
         }
@@ -195,6 +216,7 @@ class FpgaFallbackMailbox(width: Int) extends Module {
     "h10".U -> request.instruction,
     "h14".U -> Cat(0.U(24.W), request.roundingMode, request.operation),
     "h18".U -> Cat(0.U(24.W), request.fcsr),
+    "h1c".U -> Cat(0.U(24.W), request.fallbackReason, 0.U(2.W), request.domain),
     "h20".U -> low(request.operandA),
     "h24".U -> high(request.operandA),
     "h28".U -> low(request.operandB),
@@ -215,6 +237,9 @@ class FpgaFallbackMailbox(width: Int) extends Module {
     "h64".U -> responseLow,
     "h68".U -> responseHigh,
     "h6c".U -> Cat(0.U(23.W), responseIllegal, 0.U(3.W), responseFlags),
+    "h74".U -> Cat(0.U(24.W), responseFallbackReason, 0.U(2.W), responseDomain),
+    "h78".U -> fallbackCount,
+    "h7c".U -> Cat(0.U(21.W), lastFallbackOperation, lastFallbackReason, 0.U(2.W), lastFallbackDomain),
     "h80".U -> Cat(0.U(31.W), coreReset),
     "h84".U -> Cat(0.U(28.W), protocolError, putchPending, debug.stableHalted, debug.running),
     "h88".U -> Cat(2.U(8.W), 7.U(8.W), (width == 64).B, 0.U(7.W), width.U(8.W)),
@@ -246,7 +271,7 @@ class FpgaFallbackMailbox(width: Int) extends Module {
     "hf0".U -> memoryHostBaseLow,
     "hf4".U -> memoryHostBaseHigh,
     "hf8".U -> high(selectedCsr),
-    "hfc".U -> "h4e504302".U
+    "hfc".U -> "h4e504303".U
   ))
 
   when(io.axi.ar.fire) {
