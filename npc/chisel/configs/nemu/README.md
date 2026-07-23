@@ -4,6 +4,10 @@
 每个可运行终端通过 `NemuSimulationConstructionConfig` 或 `FpgaConstructionConfig` 显式提供一份
 配方，并将结果冻结到 `profile.env`、`abi/nemu/host.defconfig` 和 `abi/nemu/host.env`。
 
+底层后端枚举位于 `base/NemuBackend.scala`；终端只直接使用
+`core/NemuHostConfig.scala` 中完整、具名的 host 配方。`NemuConfigCatalog.scala` 只是
+`host-config-list` 的输出入口，不是终端 Config。本目录不定义硬件终端，因此没有 `Configs.scala`。
+
 | Base | 后端 | 用途 |
 | --- | --- | --- |
 | `NemuHostConfig.LocalBase` | local | 本地 Verilator 基础 host |

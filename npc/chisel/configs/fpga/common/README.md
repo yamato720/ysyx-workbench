@@ -8,8 +8,8 @@ CDE 设置层。L1 完整 NPC Config 已经自行将 `NpcCoreConfigKey` 放入 `
 
 | 类 | 作用 | 上层如何使用或覆盖 |
 | --- | --- | --- |
-| `NpcCoreConfigKey` | 已完成 L1 NPC 的 CDE 核心键 | 定义于 `npc/core/dependencies/ConfigBase.scala`，完整 L1 Config 自动提供 |
-| `WithNpcCoreConfig` | 将动态构造的裸 `NpcConfig` 写入 CDE 图 | 定义于 `npc/core/dependencies/ConfigBase.scala`；通常应优先使用完整 L1 Config |
+| `NpcCoreConfigKey` | 已完成 L1 NPC 的 CDE 核心键 | 定义于 `npc/base/ConfigBase.scala`，完整 L1 Config 自动提供 |
+| `WithNpcCoreConfig` | 将动态构造的裸 `NpcConfig` 写入 CDE 图 | 定义于 `npc/base/ConfigBase.scala`；通常应优先使用完整 L1 Config |
 | `WithFpgaPlatformConfig` | 固定平台地址与 IP 适配时序 | 由 L4 `...BoardConfig` 提供 |
 | `WithFpgaBoardConfig`、`WithFpgaClockMHzConfig` | 选择板卡并固定频率 | 由 L4 `...BoardConfig` 提供 |
 | `WithFpgaOperatorRoutesConfig` | 覆盖每个 M/F 操作的 `VendorIp`、`DirectLogic` 或 `HostFallback` 合同 | 由 L4 板卡能力表提供，左侧优先 |

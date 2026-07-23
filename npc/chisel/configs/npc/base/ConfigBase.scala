@@ -1,6 +1,6 @@
 package scpu
 
-import org.chipsalliance.cde.config.{Config => CDEConfig, Field, Parameters}
+import org.chipsalliance.cde.config.{Config => CDEConfig, Field}
 
 /** CDE 图中的已完成 NPC 核心。
   *
@@ -42,20 +42,6 @@ private final class ConfigComposition(
 /** 可复用的 NPC 组合成品；可继续置入更高层的 `++` 链。 */
 abstract class ConfigBundle(layers: ConfigFragment) extends ConfigFragment {
   override final private[scpu] def applyTo(base: NpcConfig): NpcConfig = layers.applyTo(base)
-}
-
-/** 将若干 L1 片段封装为可直接 `build`，也可直接叠加到 CDE 图的命名 NPC 构造。
-  *
-  * L1 只依赖 CDE 参数库；不依赖 Rocket、Diplomacy、ysyxSoC 或任何板卡实现。
-  * CDE 与 L1 片段的 `++` 都保持左侧优先。
-  */
-abstract class ConstructionConfig(
-  layers: ConfigFragment
-) extends CDEConfig((_, _, _) => {
-  case NpcCoreConfigKey => layers.build
-}) with ConfigFragment {
-  override final private[scpu] def applyTo(base: NpcConfig): NpcConfig = layers.applyTo(base)
-  final lazy val config: NpcConfig = build
 }
 
 /** NPC 参数的起点，不修改 `NpcConfig()` 的默认值。 */

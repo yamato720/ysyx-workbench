@@ -1,17 +1,5 @@
 package scpu
 
-import java.nio.charset.StandardCharsets
-import java.nio.file.{Files, Path}
-
-/** NEMU host 的固定后端。硬件终端直接选择其中之一，不由 Make 推断。 */
-sealed abstract class NemuBackend(val id: String, val kconfigSymbol: String)
-
-object NemuBackend {
-  case object LocalVerilator extends NemuBackend("local", "CONFIG_FPGA_BACKEND_NONE")
-  case object U55c extends NemuBackend("u55c", "CONFIG_FPGA_BACKEND_U55C")
-  case object Zcu102 extends NemuBackend("zcu102", "CONFIG_FPGA_BACKEND_ZCU102")
-}
-
 /** 由终端直接挂载的完整 NEMU host 配方。
   *
   * XLEN、F 扩展、NPC/SoC 模式、板卡地址和 mailbox ABI 仍来自硬件 profile，不能
@@ -120,32 +108,4 @@ object NemuHostConfig {
   /** 已登记 Base 使用稳定名称；局部 `copy(...)` 的自定义配方统一标记为 Custom。 */
   def presetName(config: NemuHostConfig): String =
     registeredPresets.find(_.config == config).map(_.name).getOrElse("Custom")
-}
-
-/** 为 Make 的 `host-config-list` 写出显式登记的 NEMU Base。 */
-object DescribeNemuConfigCatalog extends App {
-  require(args.length == 1, "用法：scpu.DescribeNemuConfigCatalog <output.tsv>")
-  val output = Path.of(args(0)).toAbsolutePath.normalize
-  val rows = NemuHostConfig.registeredPresets.map { preset =>
-    val settings = preset.config
-    val bit = (value: Boolean) => if (value) 1 else 0
-    val policy = Seq(
-      s"trace=${bit(settings.trace)}",
-      s"watchpoint=${bit(settings.watchpoint)}",
-      s"vcd=${bit(settings.vcd)}",
-      s"performance-html=${bit(settings.performanceHtml)}",
-      s"pipeline-html=${bit(settings.pipelineHtml)}",
-      s"software-difftest=${bit(settings.softwareDifftest)}",
-      s"devices=${bit(settings.devices)}",
-      s"opt=${settings.optimization}",
-      s"debug=${bit(settings.debug)}",
-      s"lto=${bit(settings.lto)}",
-      s"asan=${bit(settings.asan)}"
-    ).mkString(",")
-    s"${preset.name}\t${settings.backend.id}\t$policy"
-  }
-  Option(output.getParent).foreach(Files.createDirectories(_))
-  val content = ("# 此文件由 scpu.DescribeNemuConfigCatalog 自动生成；不要手工编辑。" +: rows)
-    .mkString("\n") + "\n"
-  Files.writeString(output, content, StandardCharsets.UTF_8)
 }

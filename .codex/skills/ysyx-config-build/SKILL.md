@@ -13,8 +13,8 @@ Read these sources before changing build behavior or Config composition:
 
 1. `npc/README.md` and `npc/chisel/configs/README.md` for the public interface and layer model.
 2. `npc/chisel/configs/parameters/ConfigCatalogGenerator.scala` for automatic terminal discovery.
-3. `npc/chisel/configs/npc/core/dependencies/ConfigBase.scala` for `NpcCoreConfigKey` and L1 composition.
-4. `npc/chisel/configs/common/HostConstructionConfigs.scala` for runtime-host traits.
+3. `npc/chisel/configs/npc/base/ConfigBase.scala` and `npc/chisel/configs/npc/core/ConstructionConfig.scala` for `NpcCoreConfigKey` and L1 composition.
+4. `npc/chisel/configs/common/core/HostConstructionConfigs.scala` for runtime-host traits.
 5. `npc/Makefile`, `npc/scripts/construction-manager.sh`, and `am-kernels/tests/cpu-tests/Makefile` for the actual lifecycle and user-facing commands.
 
 Do not hand-edit `npc/chisel/configs/resources/scpu-config-catalog.tsv` or infer public availability from class names. Make refreshes the catalog through Scala and only discovers complete, public, no-argument Configs with an explicit terminal marker.

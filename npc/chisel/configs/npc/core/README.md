@@ -7,8 +7,11 @@
 | --- | --- | --- | --- |
 | `ArchitectureCore.scala` | 核心架构 | 完整 XLEN 与 ISA 扩展组合 | `new Rv64IMFZicsrConfig` |
 | `PerformCore.scala` | 核心性能 | 完整流水线、互锁与前递组合 | `new PipelineDualFwdPerformConfig` |
+| `SimulationCore.scala` | 本地终端硬件 | 每个 NPC 运行终端对应一个完整、具名的硬件组合 | `new SimulationCoreConfig` |
 | `IntegrationCore.scala` | 集成接口 | 为 SoC、FPGA 与板卡准备的完整 L1 核 | `new ExternalAxiConfig`、`new FpgaConfig` |
+| `ConstructionConfig.scala` | L1 成品协议 | 把完整 core 发布到 CDE 图 | 终端和集成 core 继承 |
+| `CheckCore.scala` | 检查构造 | Scala/RTL 检查使用，不进入 Make 目录 | `new PipelineCheckConfig` |
 
-新增分支预测、乱序等性能能力时，先在 `dependencies/` 定义局部片段，再在
-`PerformCore.scala` 定义完整性能策略。终端构造直接并列选择架构与性能成品，避免中间组合层
-遮蔽实际 ISA 或流水线策略。
+新增分支预测、乱序等性能能力时，先在 `../base/` 定义局部片段，再在
+`PerformCore.scala` 定义完整性能策略，并在 `SimulationCore.scala` 形成终端可直接调用的完整组合。
+终端 `Configs.scala` 只挂载这个 core、运行宿主和 marker。

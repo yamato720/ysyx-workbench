@@ -148,32 +148,25 @@ class NpcConfigCompositionTest extends AnyFlatSpec {
     assert(dual.pipeline.forwarding.enableExecuteForwarding)
   }
 
-  "NPC terminal configurations" should "select architecture and performance cores explicitly before adding an ABI" in {
-    val scalar = (
-      new Rv64IMFZicsrConfig ++
-        new ScalarPerformConfig
-    ).build
-    val pipelined = (
-      new Rv64IMFZicsrConfig ++
-        new PipelinePerformConfig
-    ).build
-    val dualForwarding = (
-      new Rv64IMFZicsrConfig ++
-        new PipelineDualFwdPerformConfig
-    ).build
+  "NPC terminal configurations" should "wrap one complete core before adding the host ABI" in {
+    val terminalAndCore = Seq(
+      new StandaloneConfig().config -> new StandaloneCoreConfig().build,
+      new SimulationConfig().config -> new SimulationCoreConfig().build,
+      new PipelineSimulationConfig().config -> new PipelineSimulationCoreConfig().build,
+      new FullIsa64NoPipelineSimulationConfig().config ->
+        new FullIsa64NoPipelineSimulationCoreConfig().build,
+      new FullIsa64PipelineNoForwardingSimulationConfig().config ->
+        new FullIsa64PipelineNoForwardingSimulationCoreConfig().build,
+      new FullIsa64PipelineDualForwardingSimulationConfig().config ->
+        new FullIsa64PipelineDualForwardingSimulationCoreConfig().build,
+      new Zcu102Rv32OperatorSimulationConfig().config ->
+        new Zcu102Rv32OperatorSimulationCoreConfig().build,
+      new U55cRv32OperatorSimulationConfig().config ->
+        new U55cRv32OperatorSimulationCoreConfig().build,
+      new U55cRv64OperatorSimulationConfig().config ->
+        new U55cRv64OperatorSimulationCoreConfig().build
+    )
 
-    Seq(scalar, pipelined, dualForwarding).foreach { config =>
-      assert(config.isa.xlen == 64)
-      assert(config.isa.M)
-      assert(config.isa.F)
-      assert(config.isa.Zicsr)
-      assert(!config.axi.useExternalMaster)
-    }
-    assert(!scalar.pipeline.enablePipeline)
-    assert(pipelined.pipeline.enablePipeline)
-    assert(!pipelined.pipeline.forwarding.enableIdForwarding)
-    assert(!pipelined.pipeline.forwarding.enableExecuteForwarding)
-    assert(dualForwarding.pipeline.forwarding.enableIdForwarding)
-    assert(dualForwarding.pipeline.forwarding.enableExecuteForwarding)
+    terminalAndCore.foreach { case (terminal, core) => assert(terminal == core) }
   }
 }
