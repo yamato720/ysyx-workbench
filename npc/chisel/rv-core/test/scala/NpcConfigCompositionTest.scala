@@ -9,8 +9,8 @@ class NpcConfigCompositionTest extends AnyFlatSpec {
     assert(new PipelineCheckConfig().capability == "check-only")
     assert(new SimulationConfig().capability == "run")
     assert(new SimulationConfig().nemuConfig == NemuHostConfig.LocalPipelineTrace)
-    assert(!new FpgaConfig().isInstanceOf[MakeTerminalConfig])
-    assert(!new ExternalAxiConfig().isInstanceOf[MakeTerminalConfig])
+    assert(!new FpgaConfig().isInstanceOf[MakeTerminal])
+    assert(!new ExternalAxiConfig().isInstanceOf[MakeTerminal])
   }
 
   "ConstructionConfig" should "directly provide its completed core through the CDE key" in {

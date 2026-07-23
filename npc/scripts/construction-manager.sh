@@ -555,8 +555,8 @@ profile_for() {
   migrate_profile_mode "$output"
   # 缓存只避免运行已保存构造时反复启动 SBT/Mill，不参与硬件失效判断。实际
   # 硬件 ABI 仍只能通过 build/rebuild=1 更新。
-  # 自动目录只包含混入 MakeTerminalConfig 的完整终端，而该 trait 的 self type
-  # 强制它们都具有 NEMU 运行行为。旧缓存里的 generate-only/check-only profile
+  # 自动目录只包含挂载一个 core 终端 trait 的完整终端，这些 trait 已组合 NEMU
+  # 运行行为、scope 和 target。旧缓存里的 generate-only/check-only profile
   # 不能继续代表同名终端，必须从当前 Scala Config 重建。
   if [[ $refresh == 1 || ! -f $output || $cached_fingerprint != "$inputs_fingerprint" || $(value "$output" CONFIG_FQCN) != "$fqcn" || $(value "$output" PROFILE_FORMAT) != "$profile_format" || $(value "$output" PROTOCOL_ABI) != "$protocol_abi" || $(value "$output" CAPABILITY) != run ]]; then
     SCPU_CONFIG_CATALOG_READY=1 "$profile_tool" "$npc_root" "$fqcn" "$output"

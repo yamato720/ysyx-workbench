@@ -3,12 +3,30 @@ package scpu
 import org.scalatest.flatspec.AnyFlatSpec
 
 class NemuHostConfigTest extends AnyFlatSpec {
-  private final class InvalidLocalConstruction extends NemuSimulationConstructionConfig {
+  private final class InvalidLocalConstruction extends NpcTerminal {
     override protected val configuredNemu: NemuHostConfig = NemuHostConfig.U55cBase
   }
 
-  private final class InvalidFpgaConstruction extends FpgaConstructionConfig {
+  private final class InvalidFpgaConstruction extends FpgaNpcTerminal {
     override protected val configuredNemu: NemuHostConfig = NemuHostConfig.U55cBase
+    override protected val configuredFpga: FpgaToolchainConfig = FpgaToolchainConfig.Zcu102Base
+  }
+
+  private final class LocalNpcConstruction extends NpcTerminal {
+    override protected val configuredNemu: NemuHostConfig = NemuHostConfig.LocalBase
+  }
+
+  private final class LocalSocConstruction extends SocTerminal {
+    override protected val configuredNemu: NemuHostConfig = NemuHostConfig.LocalBase
+  }
+
+  private final class U55cNpcConstruction extends FpgaNpcTerminal {
+    override protected val configuredNemu: NemuHostConfig = NemuHostConfig.U55cBase
+    override protected val configuredFpga: FpgaToolchainConfig = FpgaToolchainConfig.U55cBase
+  }
+
+  private final class Zcu102SocConstruction extends FpgaSocTerminal {
+    override protected val configuredNemu: NemuHostConfig = NemuHostConfig.Zcu102Base
     override protected val configuredFpga: FpgaToolchainConfig = FpgaToolchainConfig.Zcu102Base
   }
 
@@ -59,6 +77,21 @@ class NemuHostConfigTest extends AnyFlatSpec {
   "Construction traits" should "enforce local and FPGA backend ownership" in {
     assertThrows[IllegalArgumentException](new InvalidLocalConstruction().nemuConfig)
     assertThrows[IllegalArgumentException](new InvalidFpgaConstruction().fpgaToolchainConfig)
+  }
+
+  it should "mount each complete terminal behavior with one trait" in {
+    val terminals = Seq(
+      new LocalNpcConstruction -> ("npc", "NPC", "local"),
+      new LocalSocConstruction -> ("soc", "SOC", "local"),
+      new U55cNpcConstruction -> ("fpga", "NPC", "u55c"),
+      new Zcu102SocConstruction -> ("fpga", "SOC", "zcu102")
+    )
+
+    terminals.foreach { case (terminal, (scope, target, backend)) =>
+      assert(terminal.constructionScope == scope)
+      assert(terminal.constructionTarget == target)
+      assert(terminal.nemuConfig.backend.id == backend)
+    }
   }
 
   "NEMU host catalog" should "use only explicitly registered case class Base values" in {

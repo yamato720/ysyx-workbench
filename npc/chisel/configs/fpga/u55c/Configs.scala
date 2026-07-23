@@ -1,7 +1,7 @@
 package scpu.fpga.u55c
 
 import org.chipsalliance.cde.config.{Config => CDEConfig}
-import _root_.scpu.{FpgaConfig, FpgaConstructionConfig, FpgaNpcTerminalConfig, FpgaSocTerminalConfig}
+import _root_.scpu.{FpgaConfig, FpgaNpcTerminal, FpgaSocTerminal}
 import _root_.scpu.{FpgaToolchainConfig, FullIsa64PipelineDualForwardingFpgaConfig, NemuHostConfig}
 import _root_.ysyx.YsyxElaborateConfig
 
@@ -16,7 +16,7 @@ import _root_.ysyx.YsyxElaborateConfig
 class U55cNpcFpgaConfig extends CDEConfig(
   new U55cBoardConfig ++
     new FpgaConfig
-) with FpgaConstructionConfig with FpgaNpcTerminalConfig {
+) with FpgaNpcTerminal {
   override protected val configuredNemu: NemuHostConfig = NemuHostConfig.U55cBase
   override protected val configuredFpga: FpgaToolchainConfig = FpgaToolchainConfig.U55cBase
 }
@@ -29,7 +29,7 @@ class U55cNpcFpgaConfig extends CDEConfig(
 class U55cFullIsa64NpcFpgaConfig extends CDEConfig(
   new U55cBoardConfig ++
     new FullIsa64PipelineDualForwardingFpgaConfig
-) with FpgaConstructionConfig with FpgaNpcTerminalConfig {
+) with FpgaNpcTerminal {
   override protected val configuredNemu: NemuHostConfig = NemuHostConfig.U55cBase
   override protected val configuredFpga: FpgaToolchainConfig = FpgaToolchainConfig.U55cBase
 }
@@ -42,7 +42,7 @@ class U55cFullIsa64NpcFpgaConfig extends CDEConfig(
 class U55cFullIsa64Npc250MHzFpgaConfig extends CDEConfig(
   new U55cBoardConfig(250) ++
     new FullIsa64PipelineDualForwardingFpgaConfig
-) with FpgaConstructionConfig with FpgaNpcTerminalConfig {
+) with FpgaNpcTerminal {
   override protected val configuredNemu: NemuHostConfig = NemuHostConfig.U55cBase
   override protected val configuredFpga: FpgaToolchainConfig = FpgaToolchainConfig.U55cBase
 }
@@ -57,7 +57,7 @@ class U55cYsyxSocFpgaConfig extends CDEConfig(
   new U55cBoardConfig ++
     new FpgaConfig ++
     new YsyxElaborateConfig
-) with FpgaConstructionConfig with FpgaSocTerminalConfig {
+) with FpgaSocTerminal {
   override protected val configuredNemu: NemuHostConfig = NemuHostConfig.U55cBase
   override protected val configuredFpga: FpgaToolchainConfig = FpgaToolchainConfig.U55cBase
 }

@@ -17,7 +17,7 @@ object ConstructionProfile {
 
   def values(
     entry: ConfigCatalog.Entry,
-    host: HostConstructionConfig,
+    host: HostConstruction,
     config: NpcConfig,
     extra: Seq[(String, String)] = Seq.empty
   ): Seq[(String, String)] = {

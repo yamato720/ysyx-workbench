@@ -26,7 +26,7 @@ class U55cYsyxSocFpgaConfig extends CDEConfig(
   new U55cBoardConfig ++
     new FpgaConfig ++
     new YsyxElaborateConfig
-) with _root_.scpu.FpgaConstructionConfig with _root_.scpu.FpgaSocTerminalConfig {
+) with _root_.scpu.FpgaSocTerminal {
   override protected val configuredNemu = _root_.scpu.NemuHostConfig.U55cBase
   override protected val configuredFpga = _root_.scpu.FpgaToolchainConfig.U55cBase
 }

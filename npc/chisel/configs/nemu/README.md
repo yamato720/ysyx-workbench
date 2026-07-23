@@ -1,8 +1,9 @@
 # NEMU Host 配方
 
 本目录定义普通 Scala `NemuHostConfig` 数据，不是独立硬件 Config，不能传给 `make config=`。
-每个可运行终端通过 `NemuSimulationConstructionConfig` 或 `FpgaConstructionConfig` 显式提供一份
-配方，并将结果冻结到 `profile.env`、`abi/nemu/host.defconfig` 和 `abi/nemu/host.env`。
+每个可运行终端通过唯一挂载的 `NpcTerminal`、`SocTerminal`、`FpgaNpcTerminal` 或
+`FpgaSocTerminal` 显式提供一份配方，并将结果冻结到 `profile.env`、`abi/nemu/host.defconfig` 和
+`abi/nemu/host.env`。
 
 底层后端枚举位于 `base/NemuBackend.scala`；终端只直接使用
 `core/NemuHostConfig.scala` 中完整、具名的 host 配方。`NemuConfigCatalog.scala` 只是

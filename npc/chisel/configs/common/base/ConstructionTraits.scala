@@ -1,7 +1,7 @@
 package scpu
 
 /** profile 与反射解析器共享的最小运行构造接口。 */
-trait HostConstructionConfig {
+trait HostConstruction {
   protected def configuredNemu: NemuHostConfig
 
   final val capability: String = "run"
@@ -10,7 +10,7 @@ trait HostConstructionConfig {
 }
 
 /** 本地 NPC/SoC 仿真终端；终端必须显式提供 local NEMU 配方。 */
-trait NemuSimulationConstructionConfig extends HostConstructionConfig {
+trait NemuSimulationConstruction extends HostConstruction {
   final override def nemuConfig: NemuHostConfig = {
     val config = configuredNemu
     require(config.backend == NemuBackend.LocalVerilator,
@@ -20,7 +20,7 @@ trait NemuSimulationConstructionConfig extends HostConstructionConfig {
 }
 
 /** FPGA 终端；终端必须同时显式提供 NEMU 与 FPGA 工具链配方。 */
-trait FpgaConstructionConfig extends HostConstructionConfig {
+trait FpgaConstruction extends HostConstruction {
   protected def configuredFpga: FpgaToolchainConfig
 
   final override def nemuConfig: NemuHostConfig = {
@@ -43,36 +43,7 @@ trait FpgaConstructionConfig extends HostConstructionConfig {
 }
 
 /** 自动目录用于识别可由 Make 直接选择、且必定经 NEMU 运行的完整终端。 */
-trait MakeTerminalConfig { self: HostConstructionConfig =>
+trait MakeTerminal { self: HostConstruction =>
   def constructionScope: String
   def constructionTarget: String
-}
-
-trait NpcTerminalConfig extends MakeTerminalConfig {
-  self: NemuSimulationConstructionConfig =>
-  final override val constructionScope: String = "npc"
-  final override val constructionTarget: String = "NPC"
-}
-
-trait SocTerminalConfig extends MakeTerminalConfig {
-  self: NemuSimulationConstructionConfig =>
-  final override val constructionScope: String = "soc"
-  final override val constructionTarget: String = "SOC"
-}
-
-trait FpgaNpcTerminalConfig extends MakeTerminalConfig {
-  self: FpgaConstructionConfig =>
-  final override val constructionScope: String = "fpga"
-  final override val constructionTarget: String = "NPC"
-}
-
-trait FpgaSocTerminalConfig extends MakeTerminalConfig {
-  self: FpgaConstructionConfig =>
-  final override val constructionScope: String = "fpga"
-  final override val constructionTarget: String = "SOC"
-}
-
-/** 仅供 Scala/RTL 检查的 Config；它不是 Make 构造或运行入口。 */
-trait CheckOnlyConstructionConfigBase {
-  final val capability: String = "check-only"
 }

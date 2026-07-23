@@ -19,7 +19,7 @@
 | `core/PerformCore.scala` | 完整流水线性能成品 | 是；`Npc...PerformConfig` 性能层成品 |
 | `core/SimulationCore.scala` | 与每个本地终端一一对应的完整硬件组合 | 是；终端直接选择一个具名 core |
 | `core/IntegrationCore.scala` | 供 SoC、FPGA 与板卡复用的完整 L1 集成核 | 是；只能放入更高层 CDE `++` 链 |
-| `core/CheckCore.scala` | Scala/RTL 检查构造 | 否；不混入终端 marker |
+| `core/CheckCore.scala` | Scala/RTL 检查构造 | 否；不挂载 Make 终端 trait |
 
 ## 可增加的特性
 
@@ -52,7 +52,7 @@
 
 新增局部片段后，稳定的架构/性能组合必须提升到 `core/`；供上层复用的完整集成核放入
 `core/IntegrationCore.scala`，本地运行硬件放入 `core/SimulationCore.scala`。终端不得重新展开
-`base/` 片段；只有 `Configs.scala` 中混入终端 marker 的运行类会进入 `make config-list`。
+`base/` 片段；只有 `Configs.scala` 中挂载一个 core 终端 trait 的运行类会进入 `make config-list`。
 
 ## 供上层使用的成品
 
@@ -62,4 +62,4 @@
 
 完整 core 并列选择 `core/ArchitectureCore.scala` 的架构成品和
 `core/PerformCore.scala` 的性能成品，再按目标补充存储、计算和接口。未来加入分支预测或乱序时，
-在 core 文件中仍能直观看到实际选择的 ISA 与性能策略；终端只表达“硬件 core + host + marker”。
+在 core 文件中仍能直观看到实际选择的 ISA 与性能策略；终端只表达“硬件 core + 一个终端 trait + 配方”。

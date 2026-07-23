@@ -1,7 +1,7 @@
 package scpu.fpga.zcu102
 
 import org.chipsalliance.cde.config.{Config => CDEConfig}
-import _root_.scpu.{FpgaConfig, FpgaConstructionConfig, FpgaNpcTerminalConfig, FpgaSocTerminalConfig}
+import _root_.scpu.{FpgaConfig, FpgaNpcTerminal, FpgaSocTerminal}
 import _root_.scpu.{FpgaToolchainConfig, NemuHostConfig}
 import _root_.ysyx.YsyxElaborateConfig
 
@@ -15,7 +15,7 @@ import _root_.ysyx.YsyxElaborateConfig
 class Zcu102NpcFpgaConfig extends CDEConfig(
   new Zcu102BoardConfig ++
     new FpgaConfig
-) with FpgaConstructionConfig with FpgaNpcTerminalConfig {
+) with FpgaNpcTerminal {
   override protected val configuredNemu: NemuHostConfig = NemuHostConfig.Zcu102Base
   override protected val configuredFpga: FpgaToolchainConfig = FpgaToolchainConfig.Zcu102Base
 }
@@ -29,7 +29,7 @@ class Zcu102YsyxSocFpgaConfig extends CDEConfig(
   new Zcu102BoardConfig ++
     new FpgaConfig ++
     new YsyxElaborateConfig
-) with FpgaConstructionConfig with FpgaSocTerminalConfig {
+) with FpgaSocTerminal {
   override protected val configuredNemu: NemuHostConfig = NemuHostConfig.Zcu102Base
   override protected val configuredFpga: FpgaToolchainConfig = FpgaToolchainConfig.Zcu102Base
 }

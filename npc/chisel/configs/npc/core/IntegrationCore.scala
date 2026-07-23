@@ -3,7 +3,7 @@ package scpu
 /**
   * 为 L2 SoC、L3 FPGA 和 L4 板卡复用而准备的完整 L1 NPC 核。
   *
-  * 这里的类固定核心硬件 ABI，但不选择运行宿主，也不混入 Make 终端 marker；它们只能作为
+  * 这里的类固定核心硬件 ABI，但不选择运行宿主，也不挂载 Make 终端 trait；它们只能作为
   * 更高层 CDE `++` 链中的 L1 覆盖项。可直接 `make config=` 的本地仿真终端位于上级
   * `Configs.scala`。
   */

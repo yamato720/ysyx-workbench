@@ -1,25 +1,29 @@
-# 公共 Config 与 Host 行为
+# 公共数据与终端 trait
 
 本目录放置不属于 NPC、SoC 或具体板卡层的共享描述，并遵守统一的 `base -> core -> terminal`
-依赖方向。`base/` 只保存跨目标的底层数据模型；`core/` 保存终端可直接挂载、名称能够表达完整
-运行含义的宿主行为和工具链配方。本目录本身不定义 Make 终端，因此没有 `Configs.scala`。
+依赖方向。`base/` 保存跨目标的底层数据模型和构造接口，不能由终端直接挂载；`core/` 保存终端可
+直接挂载、名称能够表达完整运行含义的 trait 和工具链配方。本目录本身不定义 Make 终端，因此没有
+`Configs.scala`。
 
 | 目录 | 职责 | 终端使用方式 |
 | --- | --- | --- |
 | `base/OperatorIpConfigs.scala` | 与具体 CPU/SoC/板卡无关的算子路由与时序数据 | 经各领域 `core/` 组合间接使用 |
 | `base/FpgaToolchainConfigModels.scala` | FPGA device/flow/report/runtime 底层字段模型 | 经 `FpgaToolchainConfig` 间接使用 |
+| `base/ConstructionTraits.scala` | Host、本地 NEMU、FPGA 与 Make 终端的底层接口和校验 | 不直接使用；只由 core trait 组合 |
 | `core/FpgaToolchainConfig.scala` | 可复制的完整 U55C/ZCU102 工具链配方 | 终端挂载 `U55cBase` 或 `Zcu102Base` |
-| `core/HostConstructionConfigs.scala` | 本地仿真、FPGA 构造和终端 marker 协议 | 终端直接混入对应 trait |
+| `core/TerminalTraits.scala` | 四种完整的 Make 终端行为、作用域和目标 | 每个终端只挂载其中一个 trait |
+| `core/CheckTraits.scala` | 非 Make 的检查构造行为 | 检查 Config 直接挂载 `CheckOnlyConstruction` |
 
-| 名称 | 用途 | 是否可直接 `config=` |
+| 名称 | 用途 | 终端可否直接挂载 |
 | --- | --- | --- |
-| `CheckOnlyConstructionConfigBase` | 仅检查硬件 | 否；由检查 Config 混入 |
-| `NemuSimulationConstructionConfig` | 本地 NPC/SoC 仿真；要求终端提供 local `NemuHostConfig` | 否；由 NPC/SoC 终端混入 |
-| `FpgaConstructionConfig` | FPGA 构造；要求终端提供匹配板卡的 `NemuHostConfig` 与 `FpgaToolchainConfig` | 否；由 FPGA 终端混入 |
-| `NpcTerminalConfig`、`SocTerminalConfig` | 声明 Make 可选终端的作用域和目标 | 否；由终端混入 |
-| `FpgaNpcTerminalConfig`、`FpgaSocTerminalConfig` | 声明 FPGA 终端目标 | 否；由终端混入 |
+| `HostConstruction`、`NemuSimulationConstruction`、`FpgaConstruction`、`MakeTerminal` | 底层运行接口与约束 | 否；base trait 只允许 core 组合 |
+| `CheckOnlyConstruction` | 仅检查硬件 | 不适用；由检查 Config 直接挂载 |
+| `NpcTerminal`、`SocTerminal` | 完整的本地 NPC/SoC 终端行为；要求 local `NemuHostConfig` | 是；对应终端只挂载其中一个 |
+| `FpgaNpcTerminal`、`FpgaSocTerminal` | 完整的 FPGA NPC/SoC 终端行为；要求匹配板卡的 NEMU 与工具链配方 | 是；对应终端只挂载其中一个 |
 
-终端 marker 只用于自动目录和反射校验；实际硬件参数仍由 L1-L4 的 CDE 或 NPC `++` 链固定。
+四种 core 终端 trait 同时提供运行行为、自动目录身份、scope 和 target；一个终端只挂载一个，且
+不得越过 core 直接混入 base 构造 trait。公共构造 trait 名称不加 `Trait` 后缀，承载这些 trait 的
+文件统一使用 `*Traits.scala`。实际硬件参数仍由 L1-L4 的 CDE 或 NPC `++` 链固定。
 `NemuHostConfig` 与 `FpgaToolchainConfig` 是普通 case class，不进入 CDE 图。自定义终端可用分组
 `copy(...)` 覆盖工具链局部字段，例如：
 

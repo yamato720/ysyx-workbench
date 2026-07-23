@@ -71,18 +71,18 @@ class ConfigCatalogTest extends AnyFlatSpec {
     val directory = Files.createTempDirectory("config-layout-test-")
     try {
       Files.writeString(directory.resolve("Configs.scala"),
-        "package scpu\nclass GoodConfig extends ConstructionConfig with NpcTerminalConfig\n",
+        "package scpu\nclass GoodConfig extends ConstructionConfig with NpcTerminal\n",
         StandardCharsets.UTF_8)
       val core = Files.createDirectories(directory.resolve("core"))
       val misplaced = core.resolve("Misplaced.scala")
       Files.writeString(misplaced,
-        "package scpu\nclass MisplacedConfig extends ConstructionConfig with NpcTerminalConfig\n",
+        "package scpu\nclass MisplacedConfig extends ConstructionConfig with NpcTerminal\n",
         StandardCharsets.UTF_8)
 
       val misplacedError = intercept[IllegalArgumentException] {
         ConfigCatalogGenerator.validateTerminalLayout(directory)
       }
-      assert(misplacedError.getMessage.contains("终端 marker 只能定义"))
+      assert(misplacedError.getMessage.contains("core 终端 trait 只能挂载"))
 
       Files.delete(misplaced)
       Files.writeString(directory.resolve("Configs.scala"),
@@ -91,7 +91,25 @@ class ConfigCatalogTest extends AnyFlatSpec {
       val unmarkedError = intercept[IllegalArgumentException] {
         ConfigCatalogGenerator.validateTerminalLayout(directory)
       }
-      assert(unmarkedError.getMessage.contains("只能包含带终端 marker 的 Config"))
+      assert(unmarkedError.getMessage.contains("只能包含挂载 core 终端 trait 的 Config"))
+
+      Files.writeString(directory.resolve("Configs.scala"),
+        "package scpu\nclass AmbiguousConfig extends ConstructionConfig " +
+          "with NpcTerminal with SocTerminal\n",
+        StandardCharsets.UTF_8)
+      val ambiguousError = intercept[IllegalArgumentException] {
+        ConfigCatalogGenerator.validateTerminalLayout(directory)
+      }
+      assert(ambiguousError.getMessage.contains("挂载了多个 core 终端 trait"))
+
+      Files.writeString(directory.resolve("Configs.scala"),
+        "package scpu\nclass LayerViolationConfig extends ConstructionConfig " +
+          "with NpcTerminal with NemuSimulationConstruction\n",
+        StandardCharsets.UTF_8)
+      val layeringError = intercept[IllegalArgumentException] {
+        ConfigCatalogGenerator.validateTerminalLayout(directory)
+      }
+      assert(layeringError.getMessage.contains("不能混入 base trait"))
     } finally deleteTree(directory)
   }
 

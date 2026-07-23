@@ -10,7 +10,7 @@ FPGA 时启用；独立 NPC、DPI 和非 FPGA SoC 均跳过本层。L3 不决定
 | `u55c/` | U55C 的 L4 板卡 core 和统一终端文件 | `U55cBoardConfig`、`Configs.scala` 中的完整终端 |
 | `zcu102/` | ZCU102 的 L4 板卡 core 和统一终端文件 | `Zcu102BoardConfig`、`Configs.scala` 中的完整终端 |
 
-每块板卡只维护一个根部 `Configs.scala`，且其中只放带终端 marker 的无参类。所有 FPGA 终端使用同一个 `fpga` 作用域；`TARGET=NPC|SOC`
+每块板卡只维护一个根部 `Configs.scala`，且其中只放挂载一个 core 终端 trait 的无参类。所有 FPGA 终端使用同一个 `fpga` 作用域；`TARGET=NPC|SOC`
 在构造时选择裸核或 ysyxSoC elaborator。SoC FPGA 终端直接组合 L4 板卡、完整 L1 NPC 和
 `YsyxElaborateConfig`；板卡键同时选择 FPGA 硬件分支。
 

@@ -1,7 +1,7 @@
 package ysyx
 
 import org.chipsalliance.cde.config.Parameters
-import _root_.scpu.FpgaConstructionConfig
+import _root_.scpu.FpgaConstruction
 import _root_.scpu.fpga.{CdeConfigResolver, FpgaBoard, FpgaConfigParameters, FpgaElaborationManifest}
 import _root_.scpu.ComputeBackend
 import ysyx.fpga.u55c.U55cYsyxFpgaShell
@@ -14,8 +14,8 @@ object ElaborateFPGA extends App {
   val npcConfig = FpgaConfigParameters.npcCoreConfig
   val platform = FpgaConfigParameters.platform
   val toolchain = construction match {
-    case value: FpgaConstructionConfig => value.fpgaToolchainConfig
-    case _ => throw new IllegalArgumentException(s"${entry.className} 未挂载 FpgaConstructionConfig")
+    case value: FpgaConstruction => value.fpgaToolchainConfig
+    case _ => throw new IllegalArgumentException(s"${entry.className} 未挂载 FPGA 终端 trait")
   }
   require(npcConfig.operators.mulDiv.implementation.backend == ComputeBackend.FPGA,
     s"${entry.className} 必须选择 FPGA 算术后端")

@@ -1,7 +1,7 @@
 package scpu
 
 import org.chipsalliance.cde.config.Parameters
-import scpu.FpgaConstructionConfig
+import scpu.FpgaConstruction
 import scpu.fpga.{CdeConfigResolver, FpgaBoard, FpgaConfigParameters, FpgaElaborationManifest}
 import scpu.fpga.u55c.U55cNpcFpgaShell
 import scpu.fpga.zcu102.Zcu102NpcFpgaShell
@@ -17,8 +17,8 @@ object ElaborateFPGA extends App {
   val config = FpgaConfigParameters.npcCoreConfig
   val platform = FpgaConfigParameters.platform
   val toolchain = construction match {
-    case value: FpgaConstructionConfig => value.fpgaToolchainConfig
-    case _ => throw new IllegalArgumentException(s"${entry.className} 未挂载 FpgaConstructionConfig")
+    case value: FpgaConstruction => value.fpgaToolchainConfig
+    case _ => throw new IllegalArgumentException(s"${entry.className} 未挂载 FPGA 终端 trait")
   }
   require(config.operators.mulDiv.implementation.backend == ComputeBackend.FPGA,
     s"${entry.className} 必须选择 FPGA 算术后端")

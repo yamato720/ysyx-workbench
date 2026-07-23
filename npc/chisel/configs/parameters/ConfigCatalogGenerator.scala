@@ -8,7 +8,7 @@ import scala.util.matching.Regex
 /** 从完整 Scala Config 的源码生成 Make 使用的构造目录。
   *
   * TSV 只是 Make 在启动 JVM 前需要的快照，不是另一份人工维护的配置源。可选择
-  * 构造必须混入显式终端 marker；目录不再从 `SimulationConfig`、`FpgaConfig` 等类名
+  * 构造必须混入显式 core 终端 trait；目录不再从 `SimulationConfig`、`FpgaConfig` 等类名
   * 后缀猜测作用域或目标。
   */
 object ConfigCatalogGenerator {
@@ -20,11 +20,17 @@ object ConfigCatalogGenerator {
 
   private final case class ClassBlock(name: String, parent: String, body: String)
 
-  private val terminalMarkers = Map(
-    "NpcTerminalConfig" -> ("npc", "NPC"),
-    "SocTerminalConfig" -> ("soc", "SOC"),
-    "FpgaNpcTerminalConfig" -> ("fpga", "NPC"),
-    "FpgaSocTerminalConfig" -> ("fpga", "SOC")
+  private val terminalTraits = Map(
+    "NpcTerminal" -> ("npc", "NPC"),
+    "SocTerminal" -> ("soc", "SOC"),
+    "FpgaNpcTerminal" -> ("fpga", "NPC"),
+    "FpgaSocTerminal" -> ("fpga", "SOC")
+  )
+  private val baseConstructionTraits = Vector(
+    "HostConstruction",
+    "NemuSimulationConstruction",
+    "FpgaConstruction",
+    "MakeTerminal"
   )
 
   /** 寻找包含 `chisel/configs` 的 NPC 根目录；无法找到时返回 `None`，供安装后的
@@ -132,7 +138,7 @@ object ConfigCatalogGenerator {
 
   /** 每个可运行领域只允许根部 `Configs.scala` 定义终端。
     *
-    * `base/` 与 `core/` 仍由 Scala 编译器递归加载，但 marker 一旦出现在这些层或其他文件中，
+    * `base/` 与 `core/` 仍由 Scala 编译器递归加载，但终端 trait 一旦出现在这些层或其他文件中，
     * 目录生成立即失败，避免可复用组合被意外暴露为 Make 入口。
     */
   private[scpu] def validateTerminalLayout(directory: Path): Path = {
@@ -145,17 +151,26 @@ object ConfigCatalogGenerator {
       else {
         val source = read(path)
         classBlocks(source).flatMap { block =>
-          marker(block).map(_ => s"${directory.relativize(path)}:${block.name}")
+          terminalMetadata(block).map(_ => s"${directory.relativize(path)}:${block.name}")
         }
       }
     }
     require(misplaced.isEmpty,
-      s"终端 marker 只能定义在 $terminalPath，发现：${misplaced.sorted.mkString(", ")}")
+      s"core 终端 trait 只能挂载在 $terminalPath，发现：${misplaced.sorted.mkString(", ")}")
 
     val terminalSource = read(terminalPath)
-    val unmarked = classBlocks(terminalSource).filter(block => marker(block).isEmpty).map(_.name)
+    val terminalBlocks = classBlocks(terminalSource)
+    val unmarked = terminalBlocks.filter(block => terminalMetadata(block).isEmpty).map(_.name)
     require(unmarked.isEmpty,
-      s"$terminalPath 只能包含带终端 marker 的 Config，发现：${unmarked.sorted.mkString(", ")}")
+      s"$terminalPath 只能包含挂载 core 终端 trait 的 Config，发现：${unmarked.sorted.mkString(", ")}")
+    val directBaseTraits = terminalBlocks.flatMap { block =>
+      baseConstructionTraits.collect {
+        case name if raw"\b$name\b".r.findFirstIn(block.body).nonEmpty => s"${block.name}:$name"
+      }
+    }
+    require(directBaseTraits.isEmpty,
+      s"$terminalPath 的终端只能直接挂载一个 core 终端 trait，不能混入 base trait：" +
+        directBaseTraits.sorted.mkString(", "))
     terminalPath
   }
 
@@ -164,15 +179,15 @@ object ConfigCatalogGenerator {
       throw new IllegalArgumentException(s"Missing package declaration in $path")
     )
 
-  private def marker(block: ClassBlock): Option[(String, String)] = {
-    val found = terminalMarkers.collect {
+  private def terminalMetadata(block: ClassBlock): Option[(String, String)] = {
+    val found = terminalTraits.collect {
       case (name, metadata) if raw"\b$name\b".r.findFirstIn(block.body).nonEmpty => metadata
     }.toVector.distinct
-    require(found.size <= 1, s"Config ${block.name} 混入了多个终端 marker")
+    require(found.size <= 1, s"Config ${block.name} 挂载了多个 core 终端 trait")
     found.headOption
   }
 
-  private def discoverMarked(
+  private def discoverTerminals(
     directory: Path,
     expectedScope: String,
     board: Option[String]
@@ -181,14 +196,14 @@ object ConfigCatalogGenerator {
     val source = read(path)
     val pkg = packageName(source, path)
     classBlocks(source).map { block =>
-      val (scope, target) = marker(block).getOrElse(
-        throw new IllegalArgumentException(s"终端文件 $path 中的 ${block.name} 缺少 marker")
+      val (scope, target) = terminalMetadata(block).getOrElse(
+        throw new IllegalArgumentException(s"终端文件 $path 中的 ${block.name} 缺少 core 终端 trait")
       )
       require(scope == expectedScope,
-        s"Config ${block.name} 的 marker 作用域 $scope 与目录 $directory 不一致")
+        s"Config ${block.name} 的终端 trait 作用域 $scope 与目录 $directory 不一致")
       val expectedParent = if (scope == "npc") "ConstructionConfig" else "CDEConfig"
       require(block.parent == expectedParent,
-        s"Config ${block.name} 的终端 marker 要求继承 $expectedParent，实际为 ${block.parent}")
+        s"Config ${block.name} 的终端 trait 要求继承 $expectedParent，实际为 ${block.parent}")
       ConfigCatalog.Entry(
         shortName = block.name,
         className = s"$pkg.${block.name}",
@@ -200,10 +215,10 @@ object ConfigCatalogGenerator {
   }
 
   private def discoverNpc(configRoot: Path): Vector[ConfigCatalog.Entry] =
-    discoverMarked(configRoot.resolve("npc"), "npc", None)
+    discoverTerminals(configRoot.resolve("npc"), "npc", None)
 
   private def discoverSoc(configRoot: Path): Vector[ConfigCatalog.Entry] =
-    discoverMarked(configRoot.resolve("ysyx"), "soc", None)
+    discoverTerminals(configRoot.resolve("ysyx"), "soc", None)
 
   private def boardMetadata(directory: Path): String = {
     val source = scalaFiles(directory).map(read).mkString("\n")
@@ -227,7 +242,7 @@ object ConfigCatalogGenerator {
         if (directory.getFileName.toString == "common") Vector.empty
         else {
           val board = boardMetadata(directory)
-          discoverMarked(directory, "fpga", Some(board))
+          discoverTerminals(directory, "fpga", Some(board))
         }
       }
       finally directories.close()

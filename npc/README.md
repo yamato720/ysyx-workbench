@@ -137,9 +137,10 @@ Config 启用 VCD，则在同一运行目录依次写 `wave-001.vcd`、`wave-002
 | L3 | `chisel/configs/fpga/common/` | NPC/SoC 接入 FPGA 的公共 CDE 键 | FPGA 才需要 |
 | L4 | `chisel/configs/fpga/{u55c,zcu102}/` | 板卡、频率、器件和 Vivado/Vitis 策略 | FPGA 必需且二选一 |
 
-每个领域按 `base -> core -> Configs.scala` 分层：`base/` 放底层键、数据与原子片段，`core/` 形成终端
-可直接引用的具名完整组合，根部 `Configs.scala` 只放带 marker 的无参终端。Make 每次顶层启动都会由
-Scala 校验该布局并生成派生 TSV；marker 出现在 `base/`、`core/` 或其他文件会直接报错。选中 Config
+每个领域按 `base -> core -> Configs.scala` 分层：`base/` 放底层键、数据、原子片段和不可直挂的底层
+trait，`core/` 形成终端可直接引用的具名完整组合与终端 trait，根部 `Configs.scala` 只放无参终端。
+每个终端只挂载一个 core 终端 trait，不能直接混入 base trait。Make 每次顶层启动都会由 Scala 校验该
+布局并生成派生 TSV；终端 trait 出现在领域内其他文件或终端直接混入 base trait 都会报错。选中 Config
 后，SBT/Mill 反射实例化并生成 `profile.env`；Make、NEMU 和 Tcl 只消费该描述。新增终端 Config 不需要
 手工登记 CSV。
 
@@ -154,9 +155,10 @@ FPGA 分支的唯一来源，无需重复叠加平台标签。
 
 `make build/run` 先刷新 Config 目录，再由 SBT 或 Mill 生成规范化 profile。NPC 入口通过
 `ConfigResolver` 得到 `ConstructionConfig`；SoC/FPGA 入口通过 `CdeConfigResolver` 得到 CDE
-`Config`，并从 `NpcCoreConfigKey` 取得完成的 L1 `NpcConfig`。每个运行终端还通过
-`NemuSimulationConstructionConfig` 或 `FpgaConstructionConfig` 直挂 `NemuHostConfig`；FPGA 终端同时
-直挂分组式 `FpgaToolchainConfig`。profile 据此渲染保存的 `host.defconfig` 和现有 `FPGA_*` 字段。Chisel
+`Config`，并从 `NpcCoreConfigKey` 取得完成的 L1 `NpcConfig`。每个运行终端只挂载一个
+`NpcTerminal`、`SocTerminal`、`FpgaNpcTerminal` 或 `FpgaSocTerminal`，并显式提供 `NemuHostConfig`；
+FPGA 终端同时提供分组式 `FpgaToolchainConfig`。profile 据此渲染保存的 `host.defconfig` 和现有
+`FPGA_*` 字段。Chisel
 elaboration 生成按模块拆分的 SystemVerilog，Verilator 或 Vivado/Vitis 消费同一份 RTL 与 profile。
 运行时 AM 只编译测试镜像，并直接执行冻结的 host、xclbin 或 ZCU102 环境清单。
 
