@@ -149,6 +149,7 @@ case "$CAPABILITY:$SCOPE" in
       INTERNAL_CONSTRUCTION=1 config="$CONFIG_FQCN" CONSTRUCTION_PROFILE="$profile"
     cp "$npc_root/chisel/ysyxSoC/build/ysyxSoCFull.v" "$stage/abi/rtl/"
     cp -a "$npc_root/chisel/ysyxSoC/perip" "$stage/abi/rtl/perip"
+    cp -a "$npc_root/chisel/ip/src/main/resources/npc/ip/peripheral" "$stage/abi/rtl/ip"
     ;;
   run:npc)
     run_root_phase chisel 1 4 chisel-dpi
@@ -165,6 +166,7 @@ case "$CAPABILITY:$SCOPE" in
     run_root_phase verilator 3 4 soc-nemu-lib CONSTRUCTION_PHASE_PREREQUISITES=0
     cp "$npc_root/chisel/ysyxSoC/build-sim/ysyxSoCFull.v" "$stage/abi/rtl/"
     cp -a "$npc_root/chisel/ysyxSoC/perip" "$stage/abi/rtl/perip"
+    cp -a "$npc_root/chisel/ip/src/main/resources/npc/ip/peripheral" "$stage/abi/rtl/ip"
     cp -a "$npc_root/intermediate/soc-nemu-lib/." "$stage/abi/verilator/"
     cp -a "$npc_root/intermediate/softfloat/." "$stage/abi/softfloat/"
     refresh_host 4 4

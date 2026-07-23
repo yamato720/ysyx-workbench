@@ -158,9 +158,11 @@ FORCE:
 SOC_SIM_DIR := ./chisel/ysyxSoC/build-sim
 SOC_SIM_VERILOG := $(SOC_SIM_DIR)/ysyxSoCFull.v
 SOC_PERIP_ROOT := ./chisel/ysyxSoC/perip
+SOC_IP_PERIP_ROOT := ./chisel/ip/src/main/resources/npc/ip/peripheral
 SOC_PERIP_V := $(shell find $(SOC_PERIP_ROOT) -name "*.v")
+SOC_IP_PERIP_V := $(shell find $(SOC_IP_PERIP_ROOT) -name "*.v")
 SOC_NEMU_STAMP := $(obj_dir)/soc-nemu-lib/.build-stamp
-SOC_NEMU_INPUTS := $(SOC_SIM_VERILOG) $(SOC_PERIP_V) \
+SOC_NEMU_INPUTS := $(SOC_SIM_VERILOG) $(SOC_PERIP_V) $(SOC_IP_PERIP_V) \
 	./csrc/npc_core.cpp ./csrc/npc_core.h ./csrc/npc_debug.h ./csrc/pmem.cpp ./csrc/soc_dpi.cpp ./csrc/fp_dpi.cpp $(SOFTFLOAT_LIB) Makefile
 
 .PHONY: softfloat-lib fp-dpi-test FORCE
@@ -348,6 +350,8 @@ $(SOC_NEMU_STAMP): FORCE $(SOC_NEMU_INPUTS)
 		--top-module ysyxSoCTop \
 		-I$(SOC_PERIP_ROOT)/uart16550/rtl \
 		-I$(SOC_PERIP_ROOT)/spi/rtl \
+		-I$(SOC_IP_PERIP_ROOT)/uart16550/rtl \
+		-I$(SOC_IP_PERIP_ROOT)/spi/rtl \
 		-Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-CASEINCOMPLETE -Wno-WIDTH \
 		-Wno-UNOPTFLAT -Wno-LATCH -Wno-DECLFILENAME -Wno-PINCONNECTEMPTY \
 		-Wno-TIMESCALEMOD -Wno-ASSIGNDLY -Wno-UNDRIVEN -Wno-PROCASSINIT -Wno-SYNCASYNCNET -Wno-DEFPARAM \
