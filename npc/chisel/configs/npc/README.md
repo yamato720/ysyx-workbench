@@ -52,7 +52,7 @@
 
 新增局部片段后，稳定的架构/性能组合必须提升到 `core/`；供上层复用的完整集成核放入
 `core/IntegrationCore.scala`，本地运行硬件放入 `core/SimulationCore.scala`。终端不得重新展开
-`base/` 片段；只有 `Configs.scala` 中挂载一个 core 终端 trait 的运行类会进入 `make config-list`。
+`base/` 片段；只有 `Configs.scala` 中挂载一个 terminal 层 trait 的运行类会进入 `make config-list`。
 
 ## 供上层使用的成品
 

@@ -53,6 +53,16 @@ class ConfigCatalogTest extends AnyFlatSpec {
     assert(generated.exists(_.shortName == "PipelineSimulationConfig"))
   }
 
+  it should "keep directly mountable terminal traits in their own layer" in {
+    val root = ConfigCatalogGenerator.locateNpcRoot(Paths.get(".").toAbsolutePath.normalize).get
+    val common = root.resolve("chisel/configs/common")
+
+    assert(Files.isRegularFile(common.resolve("TerminalTraits.scala")))
+    assert(!Files.exists(common.resolve("base/TerminalTraits.scala")))
+    assert(!Files.exists(common.resolve("core/TerminalTraits.scala")))
+    assert(!Files.exists(common.resolve("terminal/TerminalTraits.scala")))
+  }
+
   it should "ignore Config-shaped text in comments and string literals" in {
     val source =
       """package scpu
@@ -82,7 +92,7 @@ class ConfigCatalogTest extends AnyFlatSpec {
       val misplacedError = intercept[IllegalArgumentException] {
         ConfigCatalogGenerator.validateTerminalLayout(directory)
       }
-      assert(misplacedError.getMessage.contains("core 终端 trait 只能挂载"))
+      assert(misplacedError.getMessage.contains("terminal 层 trait 只能挂载"))
 
       Files.delete(misplaced)
       Files.writeString(directory.resolve("Configs.scala"),
@@ -91,7 +101,7 @@ class ConfigCatalogTest extends AnyFlatSpec {
       val unmarkedError = intercept[IllegalArgumentException] {
         ConfigCatalogGenerator.validateTerminalLayout(directory)
       }
-      assert(unmarkedError.getMessage.contains("只能包含挂载 core 终端 trait 的 Config"))
+      assert(unmarkedError.getMessage.contains("只能包含挂载 terminal 层 trait 的 Config"))
 
       Files.writeString(directory.resolve("Configs.scala"),
         "package scpu\nclass AmbiguousConfig extends ConstructionConfig " +
@@ -100,7 +110,7 @@ class ConfigCatalogTest extends AnyFlatSpec {
       val ambiguousError = intercept[IllegalArgumentException] {
         ConfigCatalogGenerator.validateTerminalLayout(directory)
       }
-      assert(ambiguousError.getMessage.contains("挂载了多个 core 终端 trait"))
+      assert(ambiguousError.getMessage.contains("挂载了多个 terminal 层 trait"))
 
       Files.writeString(directory.resolve("Configs.scala"),
         "package scpu\nclass LayerViolationConfig extends ConstructionConfig " +

@@ -1,7 +1,7 @@
 # NPC Core 成品
 
 本目录保存 L1 NPC 的非终端完整成品。它们可以直接放入 SoC、FPGA 或板卡的 CDE `++` 链，
-但没有挂载 core 终端 trait，不能被 `make config=` 单独选择。
+但没有挂载 terminal 层 trait，不能被 `make config=` 单独选择。
 
 | 文件 | 层级 | 内容 | 上层使用方式 |
 | --- | --- | --- | --- |
@@ -14,4 +14,4 @@
 
 新增分支预测、乱序等性能能力时，先在 `../base/` 定义局部片段，再在
 `PerformCore.scala` 定义完整性能策略，并在 `SimulationCore.scala` 形成终端可直接调用的完整组合。
-终端 `Configs.scala` 只选择这个硬件 core、挂载一个 core 终端 trait，并提供其运行配方。
+终端 `Configs.scala` 只选择这个硬件 core、挂载一个 terminal 层 trait，并提供其运行配方。

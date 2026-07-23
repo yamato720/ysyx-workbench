@@ -8,7 +8,7 @@ import scala.util.matching.Regex
 /** 从完整 Scala Config 的源码生成 Make 使用的构造目录。
   *
   * TSV 只是 Make 在启动 JVM 前需要的快照，不是另一份人工维护的配置源。可选择
-  * 构造必须混入显式 core 终端 trait；目录不再从 `SimulationConfig`、`FpgaConfig` 等类名
+  * 构造必须混入显式 terminal 层 trait；目录不再从 `SimulationConfig`、`FpgaConfig` 等类名
   * 后缀猜测作用域或目标。
   */
 object ConfigCatalogGenerator {
@@ -156,20 +156,20 @@ object ConfigCatalogGenerator {
       }
     }
     require(misplaced.isEmpty,
-      s"core 终端 trait 只能挂载在 $terminalPath，发现：${misplaced.sorted.mkString(", ")}")
+      s"terminal 层 trait 只能挂载在 $terminalPath，发现：${misplaced.sorted.mkString(", ")}")
 
     val terminalSource = read(terminalPath)
     val terminalBlocks = classBlocks(terminalSource)
     val unmarked = terminalBlocks.filter(block => terminalMetadata(block).isEmpty).map(_.name)
     require(unmarked.isEmpty,
-      s"$terminalPath 只能包含挂载 core 终端 trait 的 Config，发现：${unmarked.sorted.mkString(", ")}")
+      s"$terminalPath 只能包含挂载 terminal 层 trait 的 Config，发现：${unmarked.sorted.mkString(", ")}")
     val directBaseTraits = terminalBlocks.flatMap { block =>
       baseConstructionTraits.collect {
         case name if raw"\b$name\b".r.findFirstIn(block.body).nonEmpty => s"${block.name}:$name"
       }
     }
     require(directBaseTraits.isEmpty,
-      s"$terminalPath 的终端只能直接挂载一个 core 终端 trait，不能混入 base trait：" +
+      s"$terminalPath 的终端只能直接挂载一个 terminal 层 trait，不能混入 base trait：" +
         directBaseTraits.sorted.mkString(", "))
     terminalPath
   }
@@ -183,7 +183,7 @@ object ConfigCatalogGenerator {
     val found = terminalTraits.collect {
       case (name, metadata) if raw"\b$name\b".r.findFirstIn(block.body).nonEmpty => metadata
     }.toVector.distinct
-    require(found.size <= 1, s"Config ${block.name} 挂载了多个 core 终端 trait")
+    require(found.size <= 1, s"Config ${block.name} 挂载了多个 terminal 层 trait")
     found.headOption
   }
 
@@ -197,7 +197,7 @@ object ConfigCatalogGenerator {
     val pkg = packageName(source, path)
     classBlocks(source).map { block =>
       val (scope, target) = terminalMetadata(block).getOrElse(
-        throw new IllegalArgumentException(s"终端文件 $path 中的 ${block.name} 缺少 core 终端 trait")
+        throw new IllegalArgumentException(s"终端文件 $path 中的 ${block.name} 缺少 terminal 层 trait")
       )
       require(scope == expectedScope,
         s"Config ${block.name} 的终端 trait 作用域 $scope 与目录 $directory 不一致")

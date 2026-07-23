@@ -137,9 +137,10 @@ Config 启用 VCD，则在同一运行目录依次写 `wave-001.vcd`、`wave-002
 | L3 | `chisel/configs/fpga/common/` | NPC/SoC 接入 FPGA 的公共 CDE 键 | FPGA 才需要 |
 | L4 | `chisel/configs/fpga/{u55c,zcu102}/` | 板卡、频率、器件和 Vivado/Vitis 策略 | FPGA 必需且二选一 |
 
-每个领域按 `base -> core -> Configs.scala` 分层：`base/` 放底层键、数据、原子片段和不可直挂的底层
-trait，`core/` 形成终端可直接引用的具名完整组合与终端 trait，根部 `Configs.scala` 只放无参终端。
-每个终端只挂载一个 core 终端 trait，不能直接混入 base trait。Make 每次顶层启动都会由 Scala 校验该
+所有配置按 `base -> core -> 根部终端文件` 分层：`base/` 放底层键、数据、原子片段和不可直挂的
+底层 trait，`core/` 形成可复用的具名完整组合，终端级内容直接放在领域根部。公共终端协议位于
+`common/TerminalTraits.scala`，最终无参终端位于各领域根部 `Configs.scala`。每个终端只挂载一个
+terminal 层 trait，不能直接混入 base trait。Make 每次顶层启动都会由 Scala 校验该
 布局并生成派生 TSV；终端 trait 出现在领域内其他文件或终端直接混入 base trait 都会报错。选中 Config
 后，SBT/Mill 反射实例化并生成 `profile.env`；Make、NEMU 和 Tcl 只消费该描述。新增终端 Config 不需要
 手工登记 CSV。
