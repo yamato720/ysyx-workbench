@@ -25,7 +25,7 @@
 | U55C 板卡标识 | `new WithFpgaBoardConfig(FpgaBoard.U55c)` | L3 `common/base/FpgaConfigFragments.scala` | U55C 目标必需 |
 | U55C 时钟 | `new U55cBoardConfig(clockMHz = 125)` | `core/U55cBoardConfig.scala` | U55C 目标必需；允许频率由 `boards/u55c/config.mk` 的物理能力表限制 |
 | U55C 地址与 IP 时序 | `new WithFpgaPlatformConfig(FpgaPlatformSettings(...))` | `core/U55cBoardConfig.scala` | U55C 目标必需 |
-| U55C 器件与实现策略 | `FpgaToolchainConfig.U55cBase` | `Configs.scala` 的终端 `configuredFpga` | U55C 目标必需；不进入 CDE |
+| U55C 器件与实现策略 | `FpgaToolchainConfig.U55cBase` | 根部 `U55cNpcTerminal`/`U55cSocTerminal` 预设 | U55C 目标必需；不进入 CDE |
 | Vitis XRT 环境策略 | `U55cBase.flow.vitisXrtMode = "unset"` | `FpgaToolchainConfig.scala` | U55C 构造必需；只为 `v++` 选择 Vitis 自带的封装工具 |
 | U55C 构造并行度、策略搜索和实现后报告 | `U55cBase.flow`、`U55cBase.reports` | `FpgaToolchainConfig.scala` | 是；worker jobs、策略搜索、时序路径深度和诊断报告开关均由终端冻结 |
 | 浮点宿主回退 | `U55cBase.runtime.floatingFallback = "host-mailbox"` | `FpgaToolchainConfig.scala` | 当前 U55C FPGA F 扩展必需 |

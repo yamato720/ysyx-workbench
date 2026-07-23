@@ -22,7 +22,7 @@ FPGA 时启用；独立 NPC、DPI 和非 FPGA SoC 均跳过本层。L3 不决定
 | 默认 SoC 外部 AXI 核心 | `new ExternalAxiConfig` | `npc/core/IntegrationCore.scala` | 通用 SoC 必需，且可覆盖 |
 | 已完成 NPC 覆盖 | `new FullIsa64PipelineDualForwardingFpgaConfig` 等完整 L1 Config | `npc/core/IntegrationCore.scala` | 是 |
 | 平台地址/IP 时序 | `new WithFpgaPlatformConfig(platform)` | `common/base/FpgaConfigFragments.scala` | FPGA 生成必需 |
-| Vivado/Vitis 策略 | `FpgaToolchainConfig.U55cBase` 或 `Zcu102Base` | 终端 `configuredFpga` | FPGA 生成必需；不进入 CDE |
+| Vivado/Vitis 策略 | `FpgaToolchainConfig.U55cBase` 或 `Zcu102Base` | 根部 U55C/ZCU102 终端预设 trait | FPGA 生成必需；不进入 CDE |
 | SoC FPGA 分支 | `new U55cBoardConfig` 或 `new Zcu102BoardConfig` | L4 `...BoardConfig.scala` | SoC FPGA 必需；板卡键自动选择 |
 | 新物理板卡 | `class MyBoardConfig`（命名模板，需先实现） | 新建 `fpga/<board>/` L4 目录 | 是 |
 | part、引脚、DDR、XDC、vendor IP | 无；不在 L3 添加 | `npc/fpga/boards/<board>/` | 不适用 |

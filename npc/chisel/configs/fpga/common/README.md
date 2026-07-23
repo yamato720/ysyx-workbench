@@ -26,8 +26,8 @@ CDE 底层。L1 完整 NPC Config 已经自行将 `NpcCoreConfigKey` 放入 `Par
 | 默认 SoC 外部 AXI 核心 | `new ExternalAxiConfig` | `npc/core/IntegrationCore.scala` | 通用 SoC 必需，且可覆盖 |
 | 已完成 NPC 的替换 | `new FullIsa64PipelineDualForwardingFpgaConfig` 等完整 L1 Config | `npc/core/IntegrationCore.scala` | 是 |
 | 平台地址/IP 时序 | `new WithFpgaPlatformConfig(platform)` | `base/FpgaConfigFragments.scala` | FPGA 生成必需 |
-| Vivado/Vitis 实现策略 | `FpgaToolchainConfig.U55cBase` 或 `Zcu102Base` | FPGA 终端的 `configuredFpga` | FPGA 生成必需；不进入 CDE |
-| 严格 F 回退策略 | `base.copy(runtime = base.runtime.copy(floatingFallback = "host-mailbox"))` | FPGA 终端 | 当前 FPGA F 扩展必需 |
+| Vivado/Vitis 实现策略 | `FpgaToolchainConfig.U55cBase` 或 `Zcu102Base` | 根部 U55C/ZCU102 终端预设 trait | FPGA 生成必需；不进入 CDE |
+| 严格 F 回退策略 | `base.copy(runtime = base.runtime.copy(floatingFallback = "host-mailbox"))` | `core/FpgaToolchainConfig.scala` 的具名预设 | 当前 FPGA F 扩展必需 |
 | M/F 算子路由 | `new WithFpgaOperatorRoutesConfig(routes)` | `base/FpgaConfigFragments.scala` | FPGA 生成必需；profile 固化模块名、位宽、latency、II 与回退原因 |
 | 板卡选择 | `new WithFpgaBoardConfig(FpgaBoard.U55c)` | `base/FpgaConfigFragments.scala` | L4 物理板卡生成必需 |
 | 频率覆盖 | `new WithFpgaClockMHzConfig(<board MHz>)` | `base/FpgaConfigFragments.scala` | L4 物理板卡生成必需 |

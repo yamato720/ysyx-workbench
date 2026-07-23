@@ -27,7 +27,7 @@
 | ZCU102 板卡标识 | `new WithFpgaBoardConfig(FpgaBoard.Zcu102)` | L3 `common/base/FpgaConfigFragments.scala` | ZCU102 目标必需 |
 | ZCU102 时钟 | `new WithFpgaClockMHzConfig(300)` | L3 `common/base/FpgaConfigFragments.scala` | ZCU102 目标必需 |
 | ZCU102 地址与 IP 时序 | `new WithFpgaPlatformConfig(FpgaPlatformSettings(...))` | `core/Zcu102BoardConfig.scala` | ZCU102 目标必需 |
-| ZCU102 器件与实现策略 | `FpgaToolchainConfig.Zcu102Base` | `Configs.scala` 的终端 `configuredFpga` | ZCU102 目标必需；不进入 CDE |
+| ZCU102 器件与实现策略 | `FpgaToolchainConfig.Zcu102Base` | 根部 `Zcu102NpcTerminal`/`Zcu102SocTerminal` 预设 | ZCU102 目标必需；不进入 CDE |
 | ZCU102 构造并行度、策略搜索和实现后报告 | `Zcu102Base.flow`、`Zcu102Base.reports` | `FpgaToolchainConfig.scala` | 是；worker jobs、策略搜索、时序路径深度和诊断报告开关均由终端冻结 |
 | 默认 NPC 覆盖 | `new FullIsa64PipelineDualForwardingFpgaConfig` 等完整 L1 Config | L1 `core/IntegrationCore.scala` | 是 |
 | 新 ZCU102 CDE 特性 | `class WithMyZcu102FeatureConfig`（命名模板，需先实现） | 新的 ZCU102 Config | 是 |

@@ -10,7 +10,7 @@
 | `base/YsyxBaseConfig.scala` | Rocket RV32 与边缘总线底层 | 否；只由 core 组合 |
 | `base/YsyxParameters.scala` | ysyxSoC 平台、ChipLink、AXI SDRAM 的 CDE 键和查询接口 | 否；供 L2/L3 读取参数 |
 | `core/YsyxCore.scala` | 默认 NPC 与可复用 SoC 图 | 是；终端或板卡直接使用 `YsyxSocConfig`/`YsyxElaborateConfig` |
-| `Configs.scala` | 本地仿真终端 | 是；只包含挂载 `SocTerminal` 的无参终端 |
+| `Configs.scala` | 本地仿真终端 | 是；只包含挂载 `LocalSocTerminal` 的无参终端 |
 
 `YsyxSocConfig` 的默认核心是完整 L1 成品 `ExternalAxiConfig`。把另一个完整 L1 NPC Config
 置于其左侧，即可替换 SoC 内的 NPC，而 Rocket/外设配置保持不变。
@@ -30,7 +30,7 @@
 | 板卡时钟、引脚、厂商平台 | 无；转入 L3/L4 | L3/L4 | 不适用 |
 
 `YsyxElaborateConfig` 与 `YsyxSimulationConfig` 的硬件组合相同；前者只是可复用 CDE 图，后者只挂载
-`SocTerminal` 并提供 `NemuHostConfig.LocalPipelineTrace`，成为可运行终端。
+闭合 `NemuHostConfig.LocalPipelineTrace` 的 `LocalSocTerminal`，成为可运行终端。
 没有 `FpgaBoardKey` 的 SoC CDE 图自动使用本地
 Verilator 分支；L4 板卡终端只要叠加自身 `...BoardConfig` 即自动转入 FPGA 分支，无需额外的平台
 Config。
