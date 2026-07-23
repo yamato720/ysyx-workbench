@@ -78,6 +78,15 @@ make -C am-kernels/tests/cpu-tests run-bat ALL="forwarding matrix-mul" version=1
 - Do not assume ysyxSoC removes the NPC fabric. The NPC Lite arbiter, address split, and Lite-to-Full bridge remain; the SoC places Rocket AXI4 interconnect downstream. In current FPGA mode many SoC peripherals are intentionally absent, so retain or add the SoC path only when its system-level topology is needed.
 - Treat a wider HBM/DDR beat as a separate width-adapter/cache-line design. It requires correct alignment, byte strobes, read extraction, burst semantics, and response ordering; changing one bus-width parameter is insufficient.
 
+## Commit in Reviewable Slices
+
+- Inspect the root worktree and affected submodules before editing, and identify independent commit boundaries for the task.
+- Keep each commit to one coherent behavior change plus the tests and documentation required to verify it. Do not combine unrelated Config, NEMU, FPGA, memory, report, or cleanup work merely because they belong to one long-running task or already share a dirty worktree.
+- After an independent slice passes its narrow regression, commit it immediately when the user has authorized commits. Without that authorization, report the ready commit boundary and ask before committing. Do not split work into commits that are knowingly uncompilable, untestable, or incomplete.
+- Review the staged diff before every commit. Exclude construction caches, generated artifacts, `log/`, failed-build evidence, and unrelated user changes unless they are explicitly part of that slice.
+- Commit submodule changes inside the submodule first. When push is explicitly authorized, push those commits before committing and pushing the root repository's gitlink update. Authorization to commit does not by itself authorize a push.
+- When the user requests Codex attribution, preserve the requested `Co-authored-by` trailer on every applicable commit, not only the final commit in a series.
+
 ## Verify Proportionally
 
 For Config or construction changes, run the catalog and the narrowest relevant checks first:
