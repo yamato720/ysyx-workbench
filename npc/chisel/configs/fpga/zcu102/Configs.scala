@@ -1,8 +1,7 @@
 package scpu.fpga.zcu102
 
 import org.chipsalliance.cde.config.{Config => CDEConfig}
-import _root_.scpu.{FpgaConfig, FpgaNpcTerminal, FpgaSocTerminal}
-import _root_.scpu.{FpgaToolchainConfig, NemuHostConfig}
+import _root_.scpu.{FpgaConfig, Zcu102NpcTerminal, Zcu102SocTerminal}
 import _root_.ysyx.YsyxElaborateConfig
 
 /** ZCU102 的所有可运行终端构造。
@@ -15,10 +14,7 @@ import _root_.ysyx.YsyxElaborateConfig
 class Zcu102NpcFpgaConfig extends CDEConfig(
   new Zcu102BoardConfig ++
     new FpgaConfig
-) with FpgaNpcTerminal {
-  override protected val configuredNemu: NemuHostConfig = NemuHostConfig.Zcu102Base
-  override protected val configuredFpga: FpgaToolchainConfig = FpgaToolchainConfig.Zcu102Base
-}
+) with Zcu102NpcTerminal
 
 /** ZCU102 的 ysyxSoC FPGA 终端构造。
   *
@@ -29,7 +25,4 @@ class Zcu102YsyxSocFpgaConfig extends CDEConfig(
   new Zcu102BoardConfig ++
     new FpgaConfig ++
     new YsyxElaborateConfig
-) with FpgaSocTerminal {
-  override protected val configuredNemu: NemuHostConfig = NemuHostConfig.Zcu102Base
-  override protected val configuredFpga: FpgaToolchainConfig = FpgaToolchainConfig.Zcu102Base
-}
+) with Zcu102SocTerminal

@@ -81,12 +81,12 @@ class ConfigCatalogTest extends AnyFlatSpec {
     val directory = Files.createTempDirectory("config-layout-test-")
     try {
       Files.writeString(directory.resolve("Configs.scala"),
-        "package scpu\nclass GoodConfig extends ConstructionConfig with NpcTerminal\n",
+        "package scpu\nclass GoodConfig extends ConstructionConfig with LocalNpcTerminal\n",
         StandardCharsets.UTF_8)
       val core = Files.createDirectories(directory.resolve("core"))
       val misplaced = core.resolve("Misplaced.scala")
       Files.writeString(misplaced,
-        "package scpu\nclass MisplacedConfig extends ConstructionConfig with NpcTerminal\n",
+        "package scpu\nclass MisplacedConfig extends ConstructionConfig with LocalNpcTerminal\n",
         StandardCharsets.UTF_8)
 
       val misplacedError = intercept[IllegalArgumentException] {
@@ -105,7 +105,7 @@ class ConfigCatalogTest extends AnyFlatSpec {
 
       Files.writeString(directory.resolve("Configs.scala"),
         "package scpu\nclass AmbiguousConfig extends ConstructionConfig " +
-          "with NpcTerminal with SocTerminal\n",
+          "with LocalNpcTerminal with U55cNpcTerminal\n",
         StandardCharsets.UTF_8)
       val ambiguousError = intercept[IllegalArgumentException] {
         ConfigCatalogGenerator.validateTerminalLayout(directory)
@@ -113,8 +113,17 @@ class ConfigCatalogTest extends AnyFlatSpec {
       assert(ambiguousError.getMessage.contains("挂载了多个 terminal 层 trait"))
 
       Files.writeString(directory.resolve("Configs.scala"),
+        "package scpu\nclass ManualRecipeConfig extends ConstructionConfig with LocalNpcTerminal {\n" +
+          "  override protected val configuredNemu = NemuHostConfig.LocalBase\n}\n",
+        StandardCharsets.UTF_8)
+      val manualRecipeError = intercept[IllegalArgumentException] {
+        ConfigCatalogGenerator.validateTerminalLayout(directory)
+      }
+      assert(manualRecipeError.getMessage.contains("不能手动重载 NEMU/FPGA 配方"))
+
+      Files.writeString(directory.resolve("Configs.scala"),
         "package scpu\nclass LayerViolationConfig extends ConstructionConfig " +
-          "with NpcTerminal with NemuSimulationConstruction\n",
+          "with LocalNpcTerminal with NemuSimulationConstruction\n",
         StandardCharsets.UTF_8)
       val layeringError = intercept[IllegalArgumentException] {
         ConfigCatalogGenerator.validateTerminalLayout(directory)

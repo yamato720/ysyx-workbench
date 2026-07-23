@@ -1,7 +1,8 @@
 package scpu.fpga
 
 import org.chipsalliance.cde.config.{Config => CDEConfig}
-import _root_.scpu.{ConfigCatalog, FpgaConstruction, HostConstruction, MakeTerminal, SocTerminal}
+import _root_.scpu.{ConfigCatalog, FpgaConstruction, HostConstruction, LocalSocTerminal, MakeTerminal}
+import _root_.scpu.{U55cNpcTerminal, U55cSocTerminal, Zcu102NpcTerminal, Zcu102SocTerminal}
 
 /** 反射加载自动发现的完整 CDE 构造。 */
 object CdeConfigResolver {
@@ -22,10 +23,18 @@ object CdeConfigResolver {
         require(config.constructionScope == entry.scope && config.constructionTarget == entry.target,
           s"CDE configuration ${entry.className} terminal trait conflicts with catalog metadata")
         entry.scope match {
-          case "soc" => require(config.isInstanceOf[SocTerminal],
-            s"SoC configuration ${entry.className} must directly mount SocTerminal")
-          case "fpga" => require(config.isInstanceOf[FpgaConstruction],
-            s"FPGA configuration ${entry.className} must mount an FPGA terminal trait")
+          case "soc" => require(config.isInstanceOf[LocalSocTerminal],
+            s"SoC configuration ${entry.className} must directly mount LocalSocTerminal")
+          case "fpga" =>
+            val matchesPreset = (entry.board, entry.target) match {
+              case (Some("u55c"), "NPC") => config.isInstanceOf[U55cNpcTerminal]
+              case (Some("u55c"), "SOC") => config.isInstanceOf[U55cSocTerminal]
+              case (Some("zcu102"), "NPC") => config.isInstanceOf[Zcu102NpcTerminal]
+              case (Some("zcu102"), "SOC") => config.isInstanceOf[Zcu102SocTerminal]
+              case _ => false
+            }
+            require(config.isInstanceOf[FpgaConstruction] && matchesPreset,
+              s"FPGA configuration ${entry.className} must mount its matching board/target terminal preset")
           case scope => throw new IllegalArgumentException(s"Unsupported CDE terminal scope $scope")
         }
         entry -> config

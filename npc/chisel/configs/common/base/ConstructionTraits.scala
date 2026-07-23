@@ -1,5 +1,25 @@
 package scpu
 
+private[scpu] object ConstructionValidation {
+  def localNemu(config: NemuHostConfig): NemuHostConfig = {
+    require(config.backend == NemuBackend.LocalVerilator,
+      s"本地仿真只能使用 local NEMU backend，实际为 ${config.backend.id}")
+    config
+  }
+
+  def fpga(nemu: NemuHostConfig, fpga: FpgaToolchainConfig): FpgaToolchainConfig = {
+    val expectedBackend = fpga.device.board match {
+      case "u55c" => NemuBackend.U55c
+      case "zcu102" => NemuBackend.Zcu102
+      case board => throw new IllegalArgumentException(s"不支持的 FPGA 工具链板卡：$board")
+    }
+    require(nemu.backend == expectedBackend,
+      s"FPGA 工具链板卡 ${fpga.device.board} 必须绑定 ${expectedBackend.id} NEMU backend，" +
+        s"实际为 ${nemu.backend.id}")
+    fpga
+  }
+}
+
 /** profile 与反射解析器共享的最小运行构造接口。 */
 trait HostConstruction {
   protected def configuredNemu: NemuHostConfig
@@ -9,17 +29,12 @@ trait HostConstruction {
   final def nemuPreset: String = NemuHostConfig.presetName(nemuConfig)
 }
 
-/** 本地 NPC/SoC 仿真终端；终端必须显式提供 local NEMU 配方。 */
+/** 本地 NPC/SoC 仿真底层行为；完整终端预设必须提供 local NEMU 配方。 */
 trait NemuSimulationConstruction extends HostConstruction {
-  final override def nemuConfig: NemuHostConfig = {
-    val config = configuredNemu
-    require(config.backend == NemuBackend.LocalVerilator,
-      s"本地仿真只能使用 local NEMU backend，实际为 ${config.backend.id}")
-    config
-  }
+  final override def nemuConfig: NemuHostConfig = ConstructionValidation.localNemu(configuredNemu)
 }
 
-/** FPGA 终端；终端必须同时显式提供 NEMU 与 FPGA 工具链配方。 */
+/** FPGA 底层行为；完整终端预设必须同时提供 NEMU 与 FPGA 工具链配方。 */
 trait FpgaConstruction extends HostConstruction {
   protected def configuredFpga: FpgaToolchainConfig
 
@@ -29,16 +44,7 @@ trait FpgaConstruction extends HostConstruction {
   }
 
   final def fpgaToolchainConfig: FpgaToolchainConfig = {
-    val fpga = configuredFpga
-    val expectedBackend = fpga.device.board match {
-      case "u55c" => NemuBackend.U55c
-      case "zcu102" => NemuBackend.Zcu102
-      case board => throw new IllegalArgumentException(s"不支持的 FPGA 工具链板卡：$board")
-    }
-    require(configuredNemu.backend == expectedBackend,
-      s"FPGA 工具链板卡 ${fpga.device.board} 必须绑定 ${expectedBackend.id} NEMU backend，" +
-        s"实际为 ${configuredNemu.backend.id}")
-    fpga
+    ConstructionValidation.fpga(configuredNemu, configuredFpga)
   }
 }
 

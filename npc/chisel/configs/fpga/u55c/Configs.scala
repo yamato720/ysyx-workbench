@@ -1,8 +1,8 @@
 package scpu.fpga.u55c
 
 import org.chipsalliance.cde.config.{Config => CDEConfig}
-import _root_.scpu.{FpgaConfig, FpgaNpcTerminal, FpgaSocTerminal}
-import _root_.scpu.{FpgaToolchainConfig, FullIsa64PipelineDualForwardingFpgaConfig, NemuHostConfig}
+import _root_.scpu.{FpgaConfig, FullIsa64PipelineDualForwardingFpgaConfig}
+import _root_.scpu.{U55cNpcTerminal, U55cSocTerminal}
 import _root_.ysyx.YsyxElaborateConfig
 
 /** U55C 的所有可运行终端构造。
@@ -16,10 +16,7 @@ import _root_.ysyx.YsyxElaborateConfig
 class U55cNpcFpgaConfig extends CDEConfig(
   new U55cBoardConfig ++
     new FpgaConfig
-) with FpgaNpcTerminal {
-  override protected val configuredNemu: NemuHostConfig = NemuHostConfig.U55cBase
-  override protected val configuredFpga: FpgaToolchainConfig = FpgaToolchainConfig.U55cBase
-}
+) with U55cNpcTerminal
 
 /** U55C 的 RV64IMF_Zicsr 裸 NPC 终端构造。
   *
@@ -29,10 +26,7 @@ class U55cNpcFpgaConfig extends CDEConfig(
 class U55cFullIsa64NpcFpgaConfig extends CDEConfig(
   new U55cBoardConfig ++
     new FullIsa64PipelineDualForwardingFpgaConfig
-) with FpgaNpcTerminal {
-  override protected val configuredNemu: NemuHostConfig = NemuHostConfig.U55cBase
-  override protected val configuredFpga: FpgaToolchainConfig = FpgaToolchainConfig.U55cBase
-}
+) with U55cNpcTerminal
 
 /** U55C RV64IMF 裸 NPC 的 250 MHz 时序实验终端。
   *
@@ -42,10 +36,7 @@ class U55cFullIsa64NpcFpgaConfig extends CDEConfig(
 class U55cFullIsa64Npc250MHzFpgaConfig extends CDEConfig(
   new U55cBoardConfig(250) ++
     new FullIsa64PipelineDualForwardingFpgaConfig
-) with FpgaNpcTerminal {
-  override protected val configuredNemu: NemuHostConfig = NemuHostConfig.U55cBase
-  override protected val configuredFpga: FpgaToolchainConfig = FpgaToolchainConfig.U55cBase
-}
+) with U55cNpcTerminal
 
 /** U55C 的 ysyxSoC FPGA 终端构造。
   *
@@ -57,7 +48,4 @@ class U55cYsyxSocFpgaConfig extends CDEConfig(
   new U55cBoardConfig ++
     new FpgaConfig ++
     new YsyxElaborateConfig
-) with FpgaSocTerminal {
-  override protected val configuredNemu: NemuHostConfig = NemuHostConfig.U55cBase
-  override protected val configuredFpga: FpgaToolchainConfig = FpgaToolchainConfig.U55cBase
-}
+) with U55cSocTerminal
