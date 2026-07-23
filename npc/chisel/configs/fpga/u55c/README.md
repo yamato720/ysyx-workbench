@@ -6,11 +6,11 @@
 | 文件 | 职责 | 是否可被更高层复用或覆盖 |
 | --- | --- | --- |
 | `core/U55cBoardConfig.scala` | 板卡标识、可选频率与按核心 XLEN 自动选择的 Xilinx IP 路由 | 是；`U55cBoardConfig(clockMHz = 125)` 是可叠加的 L4 板卡层 |
-| `U55cConfigs.scala` | U55C 裸 NPC、RV64IMF 裸 NPC、250 MHz 时序实验与 ysyxSoC 的所有终端构造 | 是；可作为更高层自定义 CDE 链的右侧基类 |
+| `Configs.scala` | U55C 裸 NPC、RV64IMF 裸 NPC、250 MHz 时序实验与 ysyxSoC 的所有终端构造 | 是；根部只放终端 |
 
 `U55cNpcFpgaConfig` 直接组合 `U55cBoardConfig ++ FpgaConfig`。
 `U55cYsyxSocFpgaConfig` 以 `U55cBoardConfig ++ FpgaConfig ++ YsyxElaborateConfig` 覆盖通用 SoC
-的默认 NPC；板卡键自动选择 SoC 的 FPGA 分支。所有完整成品均在 `U55cConfigs.scala`，以统一的
+的默认 NPC；板卡键自动选择 SoC 的 FPGA 分支。所有完整终端均在 `Configs.scala`，以统一的
 `fpga` 作用域发现，再由 `TARGET=NPC|SOC` 选择对应生成入口。
 
 ## 可增加的特性
@@ -18,14 +18,14 @@
 | 特性 | 可直接复制到 `++` 链的名称 | 添加位置 | 是否可选 |
 | --- | --- | --- | --- |
 | U55C 板卡层 | `new U55cBoardConfig` | `core/U55cBoardConfig.scala` | U55C 目标必需 |
-| U55C 裸 NPC 终端 | `new U55cNpcFpgaConfig` | `U55cConfigs.scala` | 是 |
-| U55C RV64IMF 裸 NPC 终端 | `new U55cFullIsa64NpcFpgaConfig` | `U55cConfigs.scala` | 是 |
-| U55C RV64IMF 250 MHz 时序实验终端 | `new U55cFullIsa64Npc250MHzFpgaConfig` | `U55cConfigs.scala` | 是 |
-| U55C SoC 终端 | `new U55cYsyxSocFpgaConfig` | `U55cConfigs.scala` | 是 |
-| U55C 板卡标识 | `new WithFpgaBoardConfig(FpgaBoard.U55c)` | L3 `core/dependencies/FpgaConfigFragments.scala` | U55C 目标必需 |
+| U55C 裸 NPC 终端 | `new U55cNpcFpgaConfig` | `Configs.scala` | 是 |
+| U55C RV64IMF 裸 NPC 终端 | `new U55cFullIsa64NpcFpgaConfig` | `Configs.scala` | 是 |
+| U55C RV64IMF 250 MHz 时序实验终端 | `new U55cFullIsa64Npc250MHzFpgaConfig` | `Configs.scala` | 是 |
+| U55C SoC 终端 | `new U55cYsyxSocFpgaConfig` | `Configs.scala` | 是 |
+| U55C 板卡标识 | `new WithFpgaBoardConfig(FpgaBoard.U55c)` | L3 `common/base/FpgaConfigFragments.scala` | U55C 目标必需 |
 | U55C 时钟 | `new U55cBoardConfig(clockMHz = 125)` | `core/U55cBoardConfig.scala` | U55C 目标必需；允许频率由 `boards/u55c/config.mk` 的物理能力表限制 |
 | U55C 地址与 IP 时序 | `new WithFpgaPlatformConfig(FpgaPlatformSettings(...))` | `core/U55cBoardConfig.scala` | U55C 目标必需 |
-| U55C 器件与实现策略 | `FpgaToolchainConfig.U55cBase` | `U55cConfigs.scala` 的终端 `configuredFpga` | U55C 目标必需；不进入 CDE |
+| U55C 器件与实现策略 | `FpgaToolchainConfig.U55cBase` | `Configs.scala` 的终端 `configuredFpga` | U55C 目标必需；不进入 CDE |
 | Vitis XRT 环境策略 | `U55cBase.flow.vitisXrtMode = "unset"` | `FpgaToolchainConfig.scala` | U55C 构造必需；只为 `v++` 选择 Vitis 自带的封装工具 |
 | U55C 构造并行度、策略搜索和实现后报告 | `U55cBase.flow`、`U55cBase.reports` | `FpgaToolchainConfig.scala` | 是；worker jobs、策略搜索、时序路径深度和诊断报告开关均由终端冻结 |
 | 浮点宿主回退 | `U55cBase.runtime.floatingFallback = "host-mailbox"` | `FpgaToolchainConfig.scala` | 当前 U55C FPGA F 扩展必需 |

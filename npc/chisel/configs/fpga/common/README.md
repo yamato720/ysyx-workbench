@@ -1,8 +1,10 @@
 # L3 通用 CDE 适配
 
-`core/FpgaConfigParameters.scala` 与 `core/dependencies/FpgaConfigFragments.scala` 是 FPGA 的板卡无关
-CDE 设置层。L1 完整 NPC Config 已经自行将 `NpcCoreConfigKey` 放入 `Parameters`；本目录只提供
+`base/FpgaConfigParameters.scala` 与 `base/FpgaConfigFragments.scala` 是 FPGA 的板卡无关
+CDE 底层。L1 完整 NPC Config 已经自行将 `NpcCoreConfigKey` 放入 `Parameters`；本目录只提供
 硬件需要的时钟、板卡、平台和算子路由键。器件与工具链是终端的 `FpgaToolchainConfig`，不进入 CDE。
+板卡目录的 `core/*BoardConfig.scala` 负责把这些原子片段组合为终端可直接调用的物理策略。
+`CdeConfigResolver.scala` 是终端解析入口，不属于 Config 组合层。
 
 ## 可复用成品与覆盖点
 
@@ -23,11 +25,11 @@ CDE 设置层。L1 完整 NPC Config 已经自行将 `NpcCoreConfigKey` 放入 `
 | 默认裸 FPGA 核心 | `new FpgaConfig` | `npc/core/IntegrationCore.scala` | 裸核 FPGA 必需 |
 | 默认 SoC 外部 AXI 核心 | `new ExternalAxiConfig` | `npc/core/IntegrationCore.scala` | 通用 SoC 必需，且可覆盖 |
 | 已完成 NPC 的替换 | `new FullIsa64PipelineDualForwardingFpgaConfig` 等完整 L1 Config | `npc/core/IntegrationCore.scala` | 是 |
-| 平台地址/IP 时序 | `new WithFpgaPlatformConfig(platform)` | `core/dependencies/FpgaConfigFragments.scala` | FPGA 生成必需 |
+| 平台地址/IP 时序 | `new WithFpgaPlatformConfig(platform)` | `base/FpgaConfigFragments.scala` | FPGA 生成必需 |
 | Vivado/Vitis 实现策略 | `FpgaToolchainConfig.U55cBase` 或 `Zcu102Base` | FPGA 终端的 `configuredFpga` | FPGA 生成必需；不进入 CDE |
 | 严格 F 回退策略 | `base.copy(runtime = base.runtime.copy(floatingFallback = "host-mailbox"))` | FPGA 终端 | 当前 FPGA F 扩展必需 |
-| M/F 算子路由 | `new WithFpgaOperatorRoutesConfig(routes)` | `core/dependencies/FpgaConfigFragments.scala` | FPGA 生成必需；profile 固化模块名、位宽、latency、II 与回退原因 |
-| 板卡选择 | `new WithFpgaBoardConfig(FpgaBoard.U55c)` | `core/dependencies/FpgaConfigFragments.scala` | L4 物理板卡生成必需 |
-| 频率覆盖 | `new WithFpgaClockMHzConfig(<board MHz>)` | `core/dependencies/FpgaConfigFragments.scala` | L4 物理板卡生成必需 |
-| 新 CDE 键或核心策略 | `class WithMyFpgaFeatureConfig`（命名模板，需先实现） | `core/dependencies/` | 是 |
+| M/F 算子路由 | `new WithFpgaOperatorRoutesConfig(routes)` | `base/FpgaConfigFragments.scala` | FPGA 生成必需；profile 固化模块名、位宽、latency、II 与回退原因 |
+| 板卡选择 | `new WithFpgaBoardConfig(FpgaBoard.U55c)` | `base/FpgaConfigFragments.scala` | L4 物理板卡生成必需 |
+| 频率覆盖 | `new WithFpgaClockMHzConfig(<board MHz>)` | `base/FpgaConfigFragments.scala` | L4 物理板卡生成必需 |
+| 新 CDE 键或核心策略 | `class WithMyFpgaFeatureConfig`（命名模板，需先实现） | `base/` | 是 |
 | 器件型号、pin、XDC、vendor IP | 无；不在本文件添加 | `npc/fpga/boards/<board>/` | 不适用 |

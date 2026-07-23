@@ -3,10 +3,10 @@ package scpu.fpga
 import org.chipsalliance.cde.config.Parameters
 import org.scalatest.flatspec.AnyFlatSpec
 import scpu.ExternalAxiConfig
-import scpu.{ArithmeticRouteOperation, FpgaToolchainConfig, NemuHostConfig, NpcConfig, OperatorFallbackReason, OperatorRouteTarget}
+import scpu.{ArithmeticRouteOperation, FpgaToolchainConfig, NemuHostConfig, NpcConfig, NpcCoreConfigKey, OperatorFallbackReason, OperatorRouteTarget}
 import scpu.fpga.u55c.{U55cFullIsa64Npc250MHzFpgaConfig, U55cFullIsa64NpcFpgaConfig, U55cNpcFpgaConfig, U55cYsyxSocFpgaConfig}
 import scpu.fpga.zcu102.{Zcu102NpcFpgaConfig, Zcu102YsyxSocFpgaConfig}
-import ysyx.{YsyxPlatformParameters, YsyxSimulationConfig}
+import ysyx.{YsyxPlatformParameters, YsyxSimulationConfig, YsyxSocConfig}
 
 class FpgaConfigCompositionTest extends AnyFlatSpec {
   private def withConfig[T](value: String)(body: => T): T = {
@@ -124,6 +124,13 @@ class FpgaConfigCompositionTest extends AnyFlatSpec {
     assert(new YsyxSimulationConfig().nemuConfig.pipelineHtml)
     assert(!new U55cNpcFpgaConfig().nemuConfig.pipelineHtml)
     assert(!new Zcu102NpcFpgaConfig().nemuConfig.pipelineHtml)
+  }
+
+  it should "wrap the reusable SoC core without redefining its hardware graph" in {
+    val terminal = new YsyxSimulationConfig
+    val core = new YsyxSocConfig
+
+    assert(terminal(NpcCoreConfigKey) == core(NpcCoreConfigKey))
   }
 
   it should "allow a later complete NPC Config to replace the SoC FPGA default" in {
