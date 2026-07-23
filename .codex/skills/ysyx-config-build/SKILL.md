@@ -17,14 +17,17 @@ Read these sources before changing build behavior or Config composition:
 4. `npc/chisel/configs/common/core/HostConstructionConfigs.scala` for runtime-host traits.
 5. `npc/Makefile`, `npc/scripts/construction-manager.sh`, and `am-kernels/tests/cpu-tests/Makefile` for the actual lifecycle and user-facing commands.
 
-Do not hand-edit `npc/chisel/configs/resources/scpu-config-catalog.tsv` or infer public availability from class names. Make refreshes the catalog through Scala and only discovers complete, public, no-argument Configs with an explicit terminal marker.
+Do not hand-edit `npc/chisel/configs/resources/scpu-config-catalog.tsv` or infer public availability from class names. Make refreshes the catalog through Scala and only discovers complete, public, no-argument Configs from each terminal domain's root `Configs.scala`.
 
 ## Config Rules
 
 - Preserve `left ++ right` precedence: the right side establishes defaults and the left side overrides identical CDE keys.
 - Use `ConstructionConfig` for reusable L1 NPC hardware. It publishes a completed `NpcConfig` through `NpcCoreConfigKey`.
 - Let SoC and FPGA configurations consume that same key. A higher layer can override the default NPC by placing a complete L1 Config to the left of its SoC graph.
-- Keep Make-selectable terminals separate from reusable fragments. Local NPC/SoC terminals mix `NemuSimulationConstructionConfig`; FPGA terminals mix `FpgaConstructionConfig`. Every terminal also mixes one marker: `NpcTerminalConfig`, `SocTerminalConfig`, `FpgaNpcTerminalConfig`, or `FpgaSocTerminalConfig`.
+- Put parameter keys, ordinary data models, composition protocols, and atomic `With...Config` fragments in `base/`. Base must not depend on `core/`, carry a terminal marker, or describe a runnable target.
+- Build terminal-ready, plainly named hardware combinations in `core/`. Core consumes base; a terminal must select these complete core values instead of expanding base fragments again. Keep reusable integration and `check-only` Configs here without terminal markers.
+- Keep every Make-selectable terminal in its domain root `Configs.scala`, and keep only public no-argument terminal classes in that file. Local NPC/SoC terminals mix `NemuSimulationConstructionConfig`; FPGA terminals mix `FpgaConstructionConfig`. Every terminal also mixes exactly one marker: `NpcTerminalConfig`, `SocTerminalConfig`, `FpgaNpcTerminalConfig`, or `FpgaSocTerminalConfig`.
+- Do not add empty terminal files to `common/` or `nemu/`; they have no hardware terminals. FPGA boards share `fpga/common/base/`, form terminal-ready board policy in each board's `core/`, and define final terminals in that board's root `Configs.scala`.
 - Keep hardware parameters in CDE. Terminals directly provide ordinary case class values through `configuredNemu: NemuHostConfig`; FPGA terminals additionally provide grouped `configuredFpga: FpgaToolchainConfig`. Use nested `copy(...)` for local overrides instead of adding CDE keys or another Make selector.
 - Keep `check-only` Configs out of Make's public catalog. Keep board policy at L4 under `configs/fpga/u55c/` or `configs/fpga/zcu102/`.
 - Put only common accelerator/IP parameters in `configs/common/`; keep NPC-specific ISA, pipeline, interface, and memory fragments under `configs/npc/`.

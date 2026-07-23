@@ -1,9 +1,17 @@
 package scpu
 
-import java.nio.file.Paths
+import java.nio.charset.StandardCharsets
+import java.nio.file.{Files, Path, Paths}
 import org.scalatest.flatspec.AnyFlatSpec
+import scala.jdk.CollectionConverters._
 
 class ConfigCatalogTest extends AnyFlatSpec {
+  private def deleteTree(root: Path): Unit = {
+    val paths = Files.walk(root)
+    try paths.iterator.asScala.toVector.reverse.foreach(Files.deleteIfExists)
+    finally paths.close()
+  }
+
   private def withConfig[T](value: String)(body: => T): T = {
     val previous = sys.props.get("npc.config")
     System.setProperty("npc.config", value)
@@ -57,6 +65,34 @@ class ConfigCatalogTest extends AnyFlatSpec {
     assert(!code.contains("CommentConfig"))
     assert(!code.contains("StringConfig"))
     assert(code.contains("RealConfig"))
+  }
+
+  it should "reject terminal Configs outside the root terminal file" in {
+    val directory = Files.createTempDirectory("config-layout-test-")
+    try {
+      Files.writeString(directory.resolve("Configs.scala"),
+        "package scpu\nclass GoodConfig extends ConstructionConfig with NpcTerminalConfig\n",
+        StandardCharsets.UTF_8)
+      val core = Files.createDirectories(directory.resolve("core"))
+      val misplaced = core.resolve("Misplaced.scala")
+      Files.writeString(misplaced,
+        "package scpu\nclass MisplacedConfig extends ConstructionConfig with NpcTerminalConfig\n",
+        StandardCharsets.UTF_8)
+
+      val misplacedError = intercept[IllegalArgumentException] {
+        ConfigCatalogGenerator.validateTerminalLayout(directory)
+      }
+      assert(misplacedError.getMessage.contains("终端 marker 只能定义"))
+
+      Files.delete(misplaced)
+      Files.writeString(directory.resolve("Configs.scala"),
+        "package scpu\nclass UnmarkedConfig extends ConstructionConfig\n",
+        StandardCharsets.UTF_8)
+      val unmarkedError = intercept[IllegalArgumentException] {
+        ConfigCatalogGenerator.validateTerminalLayout(directory)
+      }
+      assert(unmarkedError.getMessage.contains("只能包含带终端 marker 的 Config"))
+    } finally deleteTree(directory)
   }
 
   "ConfigResolver" should "instantiate only registered complete NPC configurations" in {

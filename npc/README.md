@@ -137,9 +137,11 @@ Config 启用 VCD，则在同一运行目录依次写 `wave-001.vcd`、`wave-002
 | L3 | `chisel/configs/fpga/common/` | NPC/SoC 接入 FPGA 的公共 CDE 键 | FPGA 才需要 |
 | L4 | `chisel/configs/fpga/{u55c,zcu102}/` | 板卡、频率、器件和 Vivado/Vitis 策略 | FPGA 必需且二选一 |
 
-Make 每次顶层启动都会由 Scala 重新扫描完整无参 Config，生成派生 TSV。组合片段和检查 Config
-不会成为 Make 入口。选中 Config 后，SBT/Mill 反射实例化并生成 `profile.env`；Make、NEMU 和 Tcl
-只消费该描述。新增终端 Config 不需要手工登记 CSV。
+每个领域按 `base -> core -> Configs.scala` 分层：`base/` 放底层键、数据与原子片段，`core/` 形成终端
+可直接引用的具名完整组合，根部 `Configs.scala` 只放带 marker 的无参终端。Make 每次顶层启动都会由
+Scala 校验该布局并生成派生 TSV；marker 出现在 `base/`、`core/` 或其他文件会直接报错。选中 Config
+后，SBT/Mill 反射实例化并生成 `profile.env`；Make、NEMU 和 Tcl 只消费该描述。新增终端 Config 不需要
+手工登记 CSV。
 
 CDE 的 `++` 从右向左建立基础，左侧值优先。例如板卡 SoC Config 依次叠加板卡、完整 NPC 与
 `YsyxElaborateConfig`，就能替换 SoC 默认核心，同时保留 Rocket 和外设。板卡 CDE 键本身就是

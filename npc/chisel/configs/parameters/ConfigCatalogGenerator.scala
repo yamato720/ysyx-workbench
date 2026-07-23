@@ -130,6 +130,35 @@ object ConfigCatalogGenerator {
     }
   }
 
+  /** 每个可运行领域只允许根部 `Configs.scala` 定义终端。
+    *
+    * `base/` 与 `core/` 仍由 Scala 编译器递归加载，但 marker 一旦出现在这些层或其他文件中，
+    * 目录生成立即失败，避免可复用组合被意外暴露为 Make 入口。
+    */
+  private[scpu] def validateTerminalLayout(directory: Path): Path = {
+    val terminalPath = directory.resolve("Configs.scala").toAbsolutePath.normalize
+    require(Files.isRegularFile(terminalPath), s"终端目录 $directory 缺少根部 Configs.scala")
+
+    val misplaced = scalaFiles(directory).flatMap { path =>
+      val normalized = path.toAbsolutePath.normalize
+      if (normalized == terminalPath) Vector.empty
+      else {
+        val source = read(path)
+        classBlocks(source).flatMap { block =>
+          marker(block).map(_ => s"${directory.relativize(path)}:${block.name}")
+        }
+      }
+    }
+    require(misplaced.isEmpty,
+      s"终端 marker 只能定义在 $terminalPath，发现：${misplaced.sorted.mkString(", ")}")
+
+    val terminalSource = read(terminalPath)
+    val unmarked = classBlocks(terminalSource).filter(block => marker(block).isEmpty).map(_.name)
+    require(unmarked.isEmpty,
+      s"$terminalPath 只能包含带终端 marker 的 Config，发现：${unmarked.sorted.mkString(", ")}")
+    terminalPath
+  }
+
   private def packageName(source: String, path: Path): String =
     PackagePattern.findFirstMatchIn(source).map(_.group(1)).getOrElse(
       throw new IllegalArgumentException(s"Missing package declaration in $path")
@@ -147,24 +176,26 @@ object ConfigCatalogGenerator {
     directory: Path,
     expectedScope: String,
     board: Option[String]
-  ): Vector[ConfigCatalog.Entry] = scalaFiles(directory).flatMap { path =>
+  ): Vector[ConfigCatalog.Entry] = {
+    val path = validateTerminalLayout(directory)
     val source = read(path)
     val pkg = packageName(source, path)
-    classBlocks(source).flatMap { block =>
-      marker(block).map { case (scope, target) =>
-        require(scope == expectedScope,
-          s"Config ${block.name} 的 marker 作用域 $scope 与目录 $directory 不一致")
-        val expectedParent = if (scope == "npc") "ConstructionConfig" else "CDEConfig"
-        require(block.parent == expectedParent,
-          s"Config ${block.name} 的终端 marker 要求继承 $expectedParent，实际为 ${block.parent}")
-        ConfigCatalog.Entry(
-          shortName = block.name,
-          className = s"$pkg.${block.name}",
-          scope = scope,
-          board = board,
-          target = target
-        )
-      }
+    classBlocks(source).map { block =>
+      val (scope, target) = marker(block).getOrElse(
+        throw new IllegalArgumentException(s"终端文件 $path 中的 ${block.name} 缺少 marker")
+      )
+      require(scope == expectedScope,
+        s"Config ${block.name} 的 marker 作用域 $scope 与目录 $directory 不一致")
+      val expectedParent = if (scope == "npc") "ConstructionConfig" else "CDEConfig"
+      require(block.parent == expectedParent,
+        s"Config ${block.name} 的终端 marker 要求继承 $expectedParent，实际为 ${block.parent}")
+      ConfigCatalog.Entry(
+        shortName = block.name,
+        className = s"$pkg.${block.name}",
+        scope = scope,
+        board = board,
+        target = target
+      )
     }
   }
 
