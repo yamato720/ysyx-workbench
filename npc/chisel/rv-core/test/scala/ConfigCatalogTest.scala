@@ -77,7 +77,7 @@ class ConfigCatalogTest extends AnyFlatSpec {
     assert(code.contains("RealConfig"))
   }
 
-  it should "reject terminal Configs outside the root terminal file" in {
+  it should "enforce the root terminal layout while allowing recipe overrides" in {
     val directory = Files.createTempDirectory("config-layout-test-")
     try {
       Files.writeString(directory.resolve("Configs.scala"),
@@ -116,10 +116,8 @@ class ConfigCatalogTest extends AnyFlatSpec {
         "package scpu\nclass ManualRecipeConfig extends ConstructionConfig with LocalNpcTerminal {\n" +
           "  override protected val configuredNemu = NemuHostConfig.LocalBase\n}\n",
         StandardCharsets.UTF_8)
-      val manualRecipeError = intercept[IllegalArgumentException] {
-        ConfigCatalogGenerator.validateTerminalLayout(directory)
-      }
-      assert(manualRecipeError.getMessage.contains("不能手动重载 NEMU/FPGA 配方"))
+      assert(ConfigCatalogGenerator.validateTerminalLayout(directory) ==
+        directory.resolve("Configs.scala").toAbsolutePath.normalize)
 
       Files.writeString(directory.resolve("Configs.scala"),
         "package scpu\nclass LayerViolationConfig extends ConstructionConfig " +

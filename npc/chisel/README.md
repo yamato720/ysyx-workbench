@@ -31,7 +31,7 @@ class U55cYsyxSocFpgaConfig extends CDEConfig(
 
 若要替换 SoC 内 NPC，只需将完成的 L1 Config 置于已有 SoC Config 左侧。板卡、频率、地址与算子
 路由由 `U55cBoardConfig` 或 `Zcu102BoardConfig` 的 CDE 图固定；器件、工具策略和 NEMU host 由
-根部的完整终端预设固定。最终 `Configs.scala` 只选择一个预设，不现场重载 case class，避免 Make
-根据 scope 或 defconfig 名猜测运行宿主。
+根部终端预设提供完整默认值。所有内置 Config 和普通示例都只选择一个预设；显式自定义终端可按需
+重载 case class，同时仍由 backend 与板卡一致性检查约束。
 
 所有可复制特性、完整成品和 Make 发现规则见 [configs/README.md](configs/README.md)。

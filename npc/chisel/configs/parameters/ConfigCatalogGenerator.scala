@@ -34,8 +34,6 @@ object ConfigCatalogGenerator {
     "FpgaConstruction",
     "MakeTerminal"
   )
-  private val manualTerminalRecipes = Vector("configuredNemu", "configuredFpga")
-
   /** 寻找包含 `chisel/configs` 的 NPC 根目录；无法找到时返回 `None`，供安装后的
     * classpath resource 回退路径使用。
     */
@@ -174,14 +172,6 @@ object ConfigCatalogGenerator {
     require(directBaseTraits.isEmpty,
       s"$terminalPath 的终端只能直接挂载一个 terminal 层 trait，不能混入 base trait：" +
         directBaseTraits.sorted.mkString(", "))
-    val manualRecipes = terminalBlocks.flatMap { block =>
-      manualTerminalRecipes.collect {
-        case name if raw"\b$name\b".r.findFirstIn(block.body).nonEmpty => s"${block.name}:$name"
-      }
-    }
-    require(manualRecipes.isEmpty,
-      s"$terminalPath 的终端必须使用完整预设 trait，不能手动重载 NEMU/FPGA 配方：" +
-        manualRecipes.sorted.mkString(", "))
     terminalPath
   }
 

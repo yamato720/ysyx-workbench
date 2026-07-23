@@ -158,9 +158,10 @@ FPGA 分支的唯一来源，无需重复叠加平台标签。
 `ConfigResolver` 得到 `ConstructionConfig`；SoC/FPGA 入口通过 `CdeConfigResolver` 得到 CDE
 `Config`，并从 `NpcCoreConfigKey` 取得完成的 L1 `NpcConfig`。每个运行终端只挂载一个与本地/板卡及
 NPC/SoC 目标精确匹配的 `LocalNpcTerminal`、`LocalSocTerminal`、`U55cNpcTerminal`、
-`U55cSocTerminal`、`Zcu102NpcTerminal` 或 `Zcu102SocTerminal`。这些闭合预设已经固定
-`NemuHostConfig`，FPGA 预设同时固定分组式 `FpgaToolchainConfig`；最终 `Configs.scala` 不得再手动
-重载配方。profile 据此渲染保存的 `host.defconfig` 和现有
+`U55cSocTerminal`、`Zcu102NpcTerminal` 或 `Zcu102SocTerminal`。这些预设已经提供完整
+`NemuHostConfig` 默认值，FPGA 预设同时提供分组式 `FpgaToolchainConfig` 默认值；当前内置
+`Configs.scala` 均一步挂载，不重复展开配方。显式自定义终端仍可在保持 scope、target 与板卡匹配的
+前提下重载配方。profile 据此渲染保存的 `host.defconfig` 和现有
 `FPGA_*` 字段。Chisel
 elaboration 生成按模块拆分的 SystemVerilog，Verilator 或 Vivado/Vitis 消费同一份 RTL 与 profile。
 运行时 AM 只编译测试镜像，并直接执行冻结的 host、xclbin 或 ZCU102 环境清单。

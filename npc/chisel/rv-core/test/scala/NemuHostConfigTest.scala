@@ -3,6 +3,20 @@ package scpu
 import org.scalatest.flatspec.AnyFlatSpec
 
 class NemuHostConfigTest extends AnyFlatSpec {
+  private final class CustomLocalTerminal extends LocalNpcTerminal {
+    override protected val configuredNemu: NemuHostConfig = NemuHostConfig.LocalBase.copy(
+      trace = true,
+      vcd = true
+    )
+  }
+
+  private final class CustomU55cTerminal extends U55cNpcTerminal {
+    override protected val configuredNemu: NemuHostConfig = NemuHostConfig.U55cBase.copy(debug = true)
+    override protected val configuredFpga: FpgaToolchainConfig = FpgaToolchainConfig.U55cBase.copy(
+      flow = FpgaToolchainConfig.U55cBase.flow.copy(implementationParallelJobs = 12)
+    )
+  }
+
   "NEMU host Base" should "explicitly bind every controlled field" in {
     assert(NemuHostConfig.LocalBase.backend == NemuBackend.LocalVerilator)
     assert(NemuHostConfig.LocalBase.devices)
@@ -55,7 +69,7 @@ class NemuHostConfigTest extends AnyFlatSpec {
     ))
   }
 
-  it should "mount each complete preset without manual recipe overrides" in {
+  it should "mount complete defaults and allow explicit recipe overrides" in {
     val terminals = Seq(
       new LocalNpcTerminal {} -> ("npc", "NPC", "local"),
       new LocalSocTerminal {} -> ("soc", "SOC", "local"),
@@ -73,6 +87,13 @@ class NemuHostConfigTest extends AnyFlatSpec {
 
     assert((new U55cNpcTerminal {}).fpgaToolchainConfig == FpgaToolchainConfig.U55cBase)
     assert((new Zcu102SocTerminal {}).fpgaToolchainConfig == FpgaToolchainConfig.Zcu102Base)
+
+    val customLocal = new CustomLocalTerminal
+    assert(customLocal.nemuConfig.trace && customLocal.nemuConfig.vcd)
+    assert(customLocal.nemuPreset == "Custom")
+    val customU55c = new CustomU55cTerminal
+    assert(customU55c.nemuConfig.debug)
+    assert(customU55c.fpgaToolchainConfig.flow.implementationParallelJobs == 12)
   }
 
   "NEMU host catalog" should "use only explicitly registered case class Base values" in {

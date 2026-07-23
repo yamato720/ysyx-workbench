@@ -30,7 +30,7 @@
 | 板卡时钟、引脚、厂商平台 | 无；转入 L3/L4 | L3/L4 | 不适用 |
 
 `YsyxElaborateConfig` 与 `YsyxSimulationConfig` 的硬件组合相同；前者只是可复用 CDE 图，后者只挂载
-闭合 `NemuHostConfig.LocalPipelineTrace` 的 `LocalSocTerminal`，成为可运行终端。
+默认提供 `NemuHostConfig.LocalPipelineTrace` 的 `LocalSocTerminal`，成为可运行终端。
 没有 `FpgaBoardKey` 的 SoC CDE 图自动使用本地
 Verilator 分支；L4 板卡终端只要叠加自身 `...BoardConfig` 即自动转入 FPGA 分支，无需额外的平台
 Config。
