@@ -51,7 +51,7 @@ final class FloatingDpiOperator(width: Int, tagWidth: Int, timing: ArithmeticIpT
 }
 
 /** 不需要动态舍入的 binary32 可综合直接逻辑。 */
-final class FloatingDirectOperator(width: Int, tagWidth: Int, timing: ArithmeticIpTiming)
+class FloatingDirectOperator(width: Int, tagWidth: Int, timing: ArithmeticIpTiming)
     extends ArithmeticIpModel(width, tagWidth, timing) {
   require(width == 32 || width == 64)
 
@@ -112,3 +112,7 @@ final class FloatingDirectOperator(width: Int, tagWidth: Int, timing: Arithmetic
   private val invalid = (orderedCompare && unordered) || ((equalCompare || minMax) && signalingInvalid)
   driveComputedResult(result, Cat(invalid, 0.U(4.W)))
 }
+
+/** 保留 FPGA RTL 与既有 testbench 使用的稳定 wrapper 名称。 */
+final class FpgaFloatingDirectOperator(width: Int, tagWidth: Int, timing: ArithmeticIpTiming)
+    extends FloatingDirectOperator(width, tagWidth, timing)

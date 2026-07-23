@@ -202,7 +202,8 @@ abstract class FloatingOperatorEndpoint(
 ) extends ArithmeticOperatorEndpoint(width, tagWidth) with ExternalEndpointWiring {
   spec.implementation match {
     case ArithmeticEndpointImplementation.SoftFloatDpi => io <> Module(new FloatingDpiOperator(width, tagWidth, timing)).io
-    case ArithmeticEndpointImplementation.FloatingDirect => io <> Module(new FloatingDirectOperator(width, tagWidth, timing)).io
+    case ArithmeticEndpointImplementation.FloatingDirect =>
+      io <> Module(new FpgaFloatingDirectOperator(width, tagWidth, timing)).io
     case ArithmeticEndpointImplementation.External => wireExternal(width, tagWidth, timing, spec.moduleName)
     case other => throw new IllegalArgumentException(s"浮点 wrapper 不支持 $other")
   }
