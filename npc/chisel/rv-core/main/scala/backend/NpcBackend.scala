@@ -2,6 +2,7 @@ package scpu
 
 import chisel3._
 import chisel3.util._
+import npc.ip.arithmetic.ArithmeticResponse
 import scpu.protocol._
 
 /** 供流水算术端点接受的一条操作所使用的按序退休槽。
@@ -77,8 +78,10 @@ class NpcBackend(
   val registerFile = Module(new RegisterFile(width = cfg.xlen, debug = true))
   val floatingRegisterFile = if (cfg.F) Some(Module(new FloatingRegisterFile(cfg.xlen))) else None
   val integerAlu = Module(new IntegerAlu(cfg.xlen))
-  val mulDivAlu = if (cfg.M) Some(components.makeMulDivAlu(cfg.xlen, operatorConfig.mulDiv, operatorConfig.routes)) else None
-  val floatingAlu = if (cfg.F) Some(components.makeFloatingAlu(cfg.xlen, operatorConfig.floating, operatorConfig.routes)) else None
+  val mulDivAlu = if (cfg.M) Some(Module(new MulDivAlu(
+    cfg.xlen, operatorConfig.mulDiv, operatorConfig.routes, components.arithmeticIp))) else None
+  val floatingAlu = if (cfg.F) Some(Module(new FloatingAlu(
+    cfg.xlen, operatorConfig.floating, operatorConfig.routes, components.arithmeticIp))) else None
   val arithmeticAssistPorts = Seq(
     mulDivAlu.map(_.io.assist -> ArithmeticRouteDomain.Integer.id),
     floatingAlu.map(_.io.assist -> ArithmeticRouteDomain.Floating.id)

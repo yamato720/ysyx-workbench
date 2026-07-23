@@ -1,6 +1,7 @@
 package scpu
 
 import chisel3._
+import npc.ip.arithmetic.{ArithmeticOperatorIO, ArithmeticRequest}
 import scpu.protocol.{ArithmeticAssistPort, ArithmeticAssistRequest, ArithmeticAssistResponse}
 
 /**

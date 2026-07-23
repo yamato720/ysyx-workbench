@@ -1,6 +1,6 @@
 package scpu
 
-import chisel3._
+import npc.ip.arithmetic.{ArithmeticIpProvider, SimulationIpComponents}
 
 /**
   * 平台组装点。
@@ -10,21 +10,14 @@ import chisel3._
   */
 trait NpcCoreComponents {
   def name: String
+  def arithmeticIp: ArithmeticIpProvider
 
   def exposesArithmeticAssist(config: NpcConfig): Boolean = false
   def exposesDispatchControl(config: NpcConfig): Boolean = false
-
-  def makeMulDivAlu(width: Int, config: MulDivAlu.Config, routes: OperatorRouteConfig): MulDivAlu
-  def makeFloatingAlu(width: Int, config: FloatingAlu.Config, routes: OperatorRouteConfig): FloatingAluBase
 }
 
 /** 普通 Verilator/NEMU 构建使用的模型和 DPI 算子组件。 */
 object SimulationCoreComponents extends NpcCoreComponents {
   override val name: String = "simulation"
-
-  override def makeMulDivAlu(width: Int, config: MulDivAlu.Config, routes: OperatorRouteConfig): MulDivAlu =
-    Module(new MulDivAlu(width, config, routes))
-
-  override def makeFloatingAlu(width: Int, config: FloatingAlu.Config, routes: OperatorRouteConfig): FloatingAluBase =
-    Module(new FloatingAlu(width, config))
+  override val arithmeticIp: ArithmeticIpProvider = SimulationIpComponents
 }

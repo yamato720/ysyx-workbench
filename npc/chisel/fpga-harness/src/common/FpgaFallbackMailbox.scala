@@ -2,7 +2,7 @@ package scpu.fpga
 
 import chisel3._
 import chisel3.util._
-import scpu.ArithmeticOperation
+import npc.ip.arithmetic.ArithmeticOperation
 import scpu.protocol._
 
 /** 供 PS Linux 与 XRT 宿主访问的 AXI-Lite 寄存器邮箱。 */

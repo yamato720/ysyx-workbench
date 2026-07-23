@@ -3,6 +3,7 @@ package scpu.fpga
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 
+import npc.ip.arithmetic.ArithmeticIpTiming
 import scpu._
 
 sealed abstract class FpgaBoard(val name: String)

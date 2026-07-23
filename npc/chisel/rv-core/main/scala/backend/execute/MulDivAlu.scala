@@ -2,6 +2,7 @@ package scpu
 
 import chisel3._
 import chisel3.util._
+import npc.ip.arithmetic._
 import scpu.protocol.ArithmeticAssistPort
 
 /** RV32M/RV64M 执行外壳。它译码架构 ALU 操作，发射可复用乘除法算子并汇聚响应。
@@ -42,7 +43,8 @@ object MulDivAlu {
 class MulDivAlu(
   width: Int,
   config: MulDivAlu.Config = MulDivAlu.Config(),
-  routes: OperatorRouteConfig = OperatorRouteConfig()
+  routes: OperatorRouteConfig = OperatorRouteConfig(),
+  provider: ArithmeticIpProvider = SimulationIpComponents
 ) extends Module {
   require(width == 32 || width == 64, s"MulDivAlu supports RV32/RV64, got width=$width")
   val io = IO(new Bundle {
@@ -102,18 +104,27 @@ class MulDivAlu(
   private val directDivideSelected = if (routeEnabled) selectedFor(divideRoutes, directTargets) else false.B
   private val fallbackSelected = if (routeEnabled) selectedFor(allRoutes, fallbackTargets) else false.B
 
-  private val vendorMultiplier = if (!routeEnabled || hasRoute(multiplyRoutes, vendorTargets)) Some(Module(new IntegerMultiplierOperator(
-    width, config.implementation, config.tagWidth, config.multiplyTiming,
-    firstRoute(multiplyRoutes, vendorTargets, config.multiplyAdapterModuleName).moduleName))) else None
-  private val vendorDivider = if (!routeEnabled || hasRoute(divideRoutes, vendorTargets)) Some(Module(new IntegerDividerOperator(
-    width, config.implementation, config.tagWidth, config.divideTiming,
-    firstRoute(divideRoutes, vendorTargets, config.dividerAdapterModuleName).moduleName))) else None
-  private val directMultiplier = if (routeEnabled && hasRoute(multiplyRoutes, directTargets)) Some(Module(new IntegerMultiplierOperator(
-    width, ComputeUnitConfig(backend = ComputeBackend.Builtin), config.tagWidth, config.multiplyTiming,
-    "cycle-model"))) else None
-  private val directDivider = if (routeEnabled && hasRoute(divideRoutes, directTargets)) Some(Module(new IntegerDividerOperator(
-    width, ComputeUnitConfig(backend = ComputeBackend.Builtin), config.tagWidth, config.divideTiming,
-    "cycle-model"))) else None
+  private def legacySpec(moduleName: String): ArithmeticEndpointSpec = config.implementation.backend match {
+    case ComputeBackend.IP | ComputeBackend.FPGA =>
+      ArithmeticEndpointSpec(ArithmeticEndpointImplementation.External, moduleName)
+    case _ => ArithmeticEndpointSpec(ArithmeticEndpointImplementation.IntegerReference)
+  }
+  private val vendorMultiplier = if (!routeEnabled || hasRoute(multiplyRoutes, vendorTargets)) Some(
+    provider.makeIntegerMultiplier(width, config.tagWidth, config.multiplyTiming,
+      if (routeEnabled) ArithmeticEndpointSpec(ArithmeticEndpointImplementation.External,
+        firstRoute(multiplyRoutes, vendorTargets, config.multiplyAdapterModuleName).moduleName)
+      else legacySpec(config.multiplyAdapterModuleName))) else None
+  private val vendorDivider = if (!routeEnabled || hasRoute(divideRoutes, vendorTargets)) Some(
+    provider.makeIntegerDivider(width, config.tagWidth, config.divideTiming,
+      if (routeEnabled) ArithmeticEndpointSpec(ArithmeticEndpointImplementation.External,
+        firstRoute(divideRoutes, vendorTargets, config.dividerAdapterModuleName).moduleName)
+      else legacySpec(config.dividerAdapterModuleName))) else None
+  private val directMultiplier = if (routeEnabled && hasRoute(multiplyRoutes, directTargets)) Some(
+    provider.makeIntegerMultiplier(width, config.tagWidth, config.multiplyTiming,
+      ArithmeticEndpointSpec(ArithmeticEndpointImplementation.IntegerReference))) else None
+  private val directDivider = if (routeEnabled && hasRoute(divideRoutes, directTargets)) Some(
+    provider.makeIntegerDivider(width, config.tagWidth, config.divideTiming,
+      ArithmeticEndpointSpec(ArithmeticEndpointImplementation.IntegerReference))) else None
   private val fallback = if (routeEnabled && hasRoute(allRoutes, fallbackTargets)) {
     val reason = allRoutes.collectFirst {
       case (operation, _) if routes.route(operation).target == OperatorRouteTarget.HostFallback =>

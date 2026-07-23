@@ -1,5 +1,7 @@
 package scpu
 
+import npc.ip.arithmetic.ArithmeticIpTiming
+
 /** 回退服务所属的架构算术域。该编码也是 FPGA mailbox ABI 的稳定字段。 */
 sealed abstract class ArithmeticRouteDomain(val id: Int, val profileName: String)
 object ArithmeticRouteDomain {

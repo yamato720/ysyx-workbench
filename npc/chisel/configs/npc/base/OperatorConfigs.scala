@@ -1,5 +1,7 @@
 package scpu
 
+import npc.ip.arithmetic.ArithmeticIpTiming
+
 /** 只覆盖一个算术域的计算实现。 */
 class WithMulDivComputeConfig(implementation: ComputeUnitConfig) extends ConfigFragment {
   override private[scpu] def applyTo(base: NpcConfig): NpcConfig = base.copy(

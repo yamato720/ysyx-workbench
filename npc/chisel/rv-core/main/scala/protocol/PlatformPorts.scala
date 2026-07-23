@@ -2,7 +2,7 @@ package scpu.protocol
 
 import chisel3._
 import chisel3.util._
-import scpu.ArithmeticOperation
+import npc.ip.arithmetic.ArithmeticOperation
 
 /** mailbox ABI v3 的域与回退原因位宽；数值与 Scala 路由配置保持一致。 */
 object ArithmeticAssistAbi {

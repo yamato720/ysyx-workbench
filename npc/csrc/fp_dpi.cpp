@@ -9,7 +9,7 @@ extern "C" {
 
 namespace {
 
-// Keep these values aligned with scpu.FloatingOperation. They are an
+// Keep these values aligned with npc.ip.arithmetic.FloatingOperation. They are an
 // operator-local interface, not a frontend/backend ALU control encoding.
 enum FpOp : std::uint32_t {
   kFadd = 0, kFsub, kFmul, kFdiv, kFsqrt, kFmadd, kFmsub, kFnmsub, kFnmadd,
