@@ -2,6 +2,7 @@ include $(AM_HOME)/scripts/isa/riscv.mk
 include $(AM_HOME)/scripts/platform/nemu.mk
 CFLAGS  += -DISA_H=\"riscv/riscv.h\"
 COMMON_CFLAGS += -march=rv64imf_zicsr -mabi=lp64f # overwrite
+ASFLAGS += $(COMMON_CFLAGS)
 
 AM_SRCS += riscv/nemu/start.S \
            riscv/nemu/cte.c \

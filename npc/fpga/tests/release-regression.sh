@@ -28,7 +28,7 @@ mkdir -p "$artifact_dir"
 u55c_platform=xilinx_u55c_gen3x16_xdma_3_202210_1
 fqcn=scpu.fpga.u55c.U55cYsyxSocFpgaConfig
 host_abi=nemu-construction-v1
-protocol_abi=npc-fpga-mailbox-v2
+protocol_abi=npc-fpga-mailbox-v3
 printf 'xclbin\n' > "$artifact_dir/npc-$u55c_platform.xclbin"
 "$artifact_tool" write --directory "$artifact_dir" --source-root "$source_root" \
   --release-tag v0.2.0-fpga-sdb --board u55c --variant "$fqcn" --type alveo \

@@ -268,4 +268,4 @@ mux8_3_inst.io.sel := MuxCase(0.U, Seq(
 | 2 | `DataManage.scala` | 新增 `RegisterFileTop`（含 CSRs + 写回 Mux） |
 | 3 | `top.scala` | 替换 `RegisterFile_inst` + `mux2_1_WriteBack`，接入 mux8_3.in3/in4，更新 sel 逻辑 |
 | 4 | `abstract-machine/am/src/riscv/npc/cte.c` | 补全 `__am_irq_handle`（case 11 + mepc+=4，参考 nemu 版） |
-| 5 | 测试 | `make -C am-kernels/tests/cpu-tests run ALL=add config=NpcDpiConfig` |
+| 5 | 测试 | `make -C am-kernels/tests/cpu-tests run ALL=add config=SimulationConfig` |

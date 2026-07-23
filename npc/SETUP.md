@@ -216,16 +216,16 @@ make -j$(nproc)
 ```bash
 cd $NPC_HOME
 make config-list
-make build config=NpcDpiConfig
+make build config=SimulationConfig
 ```
 
-正常完成后，`constructions/scpu.NpcDpiConfig/` 包含 RTL、Verilator ABI 和 NEMU host。
+正常完成后，`constructions/scpu.SimulationConfig/` 包含 RTL、Verilator ABI 和 NEMU 运行宿主。
 
 ### 7.3 通过统一入口运行 NPC
 
 ```bash
 cd $YSYX_HOME
-make -C am-kernels/tests/cpu-tests run ALL=add config=NpcDpiConfig
+make -C am-kernels/tests/cpu-tests run ALL=add config=SimulationConfig
 ```
 
 ---
@@ -260,7 +260,7 @@ export JAVA_HOME=$(dirname $(dirname $(readlink -f $(which java))))
 java -version
 ```
 
-### `make build config=NpcDpiConfig` 报 `g++: fatal error: verilated.h: No such file`
+### `make build config=SimulationConfig` 报 `g++: fatal error: verilated.h: No such file`
 
 verilator 未在 PATH 中或 VERILATOR_ROOT 推断失败。检查：
 

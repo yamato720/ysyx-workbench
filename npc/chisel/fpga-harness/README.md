@@ -12,17 +12,17 @@
 
 普通 NPC 流水线仍位于 `../rv-core/main/scala`。`FpgaCoreComponents` 只提供 FPGA 的
 整数 IP 选择、浮点直接/邮箱端点和派发控制；译码、流水线和提交逻辑不复制，也不进入
-板级源码。普通 SBT `root` 不编译本目录；`fpga` 子项目额外编入轻量 CDE，使裸核与 SoC
-共用同一套 FPGA Config 组合方式。
+板级源码。SBT `root` 只额外编入轻量 CDE 参数库；FPGA 终端统一由 ysyxSoC 的 Mill 编译边界编入，
+使裸核与 SoC 共用同一份板卡 Config 源码与组合方式。
 
 两个生成入口依据终端 CDE Config 的 `FpgaBoardKey` 实例化相应 shell，但两者都把生成顶层保持为
 `NpcFpgaTop`。物理端口适配留在 `../../fpga/boards/<board>/rtl`，从而允许每个 Chisel
 shell 独立演进，同时不会改变已存在的板级 Verilog ABI。
 
-`U55cBoardConfig` 或 `Zcu102BoardConfig` 通过 `WithFpgaPlatformConfig`、`WithFpgaToolConfig`、
-`WithFpgaBoardConfig` 和 `WithFpgaClockMHzConfig` 把平台地址、IP 时序、工具策略、板卡与频率写入
-CDE。`NpcFpgaCdeConfig` 选择固定的 L1 `NpcFpgaConfig`，也可由最左侧的 `WithNpcCoreConfig`
-覆盖。shell 从 CDE 读取这些值并验证板卡匹配，不读取结构环境变量。
+`U55cBoardConfig` 或 `Zcu102BoardConfig` 通过 `WithFpgaPlatformConfig`、`WithFpgaBoardConfig` 和
+`WithFpgaClockMHzConfig` 把平台地址、IP 时序、板卡与频率写入 CDE。完整 L1 `FpgaConfig` 自身提供
+CDE 核心键。器件、Vivado/Vitis flow、报告和运行 ABI 来自终端直挂的 `FpgaToolchainConfig`；
+elaborator 会交叉验证目录板卡、工具链板卡与硬件 CDE 板卡。
 
 有效 FPGA 矩阵是两种系统目标乘以两种板卡：
 
@@ -32,8 +32,8 @@ CDE。`NpcFpgaCdeConfig` 选择固定的 L1 `NpcFpgaConfig`，也可由最左侧
 | ysyxSoC | `Zcu102YsyxSocFpgaConfig` / `Zcu102YsyxFpgaShell` | `U55cYsyxSocFpgaConfig` / `U55cYsyxFpgaShell` |
 
 `U55cBoardConfig` 与 `Zcu102BoardConfig` 位于 `../configs/fpga`，是裸核和 SoC 共用的无参
-板卡策略，并在 Config 中设定频率。`U55cNpcFpgaConfig` 与 `Zcu102NpcFpgaConfig` 选择默认
-`NpcFpgaCdeConfig`；`U55cYsyxSocFpgaConfig` 与 `Zcu102YsyxSocFpgaConfig` 位于
-`../configs/fpga/{u55c,zcu102}`，使用 `../configs/ysyx/SocConfig.scala` 的通用 SoC 平台，并在
-其左侧覆盖默认 NPC。将 `WithNpcCoreConfig(npcConfig)` 放在组合链最左侧即可继续覆盖；两块板
-没有不同的 CPU 语义，因此不保留 CPU 专用的板卡别名 Config。
+板卡策略，并在 Config 中设定频率。完整 L1 `FpgaConfig` 自身提供 CDE 核心键；
+`U55cNpcFpgaConfig` 与 `Zcu102NpcFpgaConfig` 直接叠加它。`U55cYsyxSocFpgaConfig` 与
+`Zcu102YsyxSocFpgaConfig` 位于 `../configs/fpga/{u55c,zcu102}`，使用
+`../configs/ysyx/Configs.scala` 的通用 SoC 平台，并在其左侧直接叠加完整 NPC。两块板没有不同的
+CPU 语义，因此不保留 CPU 专用的板卡别名 Config。

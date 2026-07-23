@@ -16,7 +16,7 @@ catalog="$npc_root/chisel/configs/resources/scpu-config-catalog.tsv"
 if [[ ${SCPU_CONFIG_CATALOG_READY:-0} != 1 ]]; then
   "$npc_root/scripts/generate-config-catalog.sh" "$npc_root"
 fi
-resolved=$("$npc_root/scripts/resolve-config.sh" "$catalog" "$request" 'npc,soc,fpga-npc,fpga-soc')
+resolved=$("$npc_root/scripts/resolve-config.sh" "$catalog" "$request" 'npc,soc,fpga')
 [[ $resolved != !* ]] || { echo "${resolved#!}" >&2; exit 2; }
 IFS='|' read -r fqcn scope board target <<< "$resolved"
 
@@ -34,7 +34,7 @@ case "$scope" in
       exit 1
     fi
     ;;
-  soc|fpga-npc|fpga-soc)
+  soc|fpga)
     if ! (cd "$npc_root/chisel/ysyxSoC" && NPC_SCALA_CONFIG="$fqcn" mill -i \
       ysyxsoc.runMain ysyx.DescribeConfig "$temporary") >"$log" 2>&1; then
       echo "生成 $fqcn profile 失败：" >&2
@@ -56,6 +56,8 @@ awk -F= '
   !/^[A-Z][A-Z0-9_]*=/ { exit 1 }
   seen[$1]++ { exit 1 }
   index(substr($0, index($0, "=") + 1), "\r") { exit 1 }
-  END { if (!seen["PROFILE_FORMAT"] || !seen["CAPABILITY"] || !seen["XLEN"]) exit 1 }
+  END {
+    if (!seen["PROFILE_FORMAT"] || !seen["CAPABILITY"] || !seen["XLEN"] || !seen["NEMU_PRESET"]) exit 1
+  }
 ' "$temporary" || { echo "Scala profile 格式无效：$temporary" >&2; exit 1; }
 mv "$temporary" "$output"

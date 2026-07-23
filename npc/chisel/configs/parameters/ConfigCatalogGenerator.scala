@@ -8,8 +8,8 @@ import scala.util.matching.Regex
 /** 从完整 Scala Config 的源码生成 Make 使用的构造目录。
   *
   * TSV 只是 Make 在启动 JVM 前需要的快照，不是另一份人工维护的配置源。可选择
-  * 构造由现有层级和命名约定识别：L1 的非检查 `Npc...Config`、带 standalone 或
-  * simulation 平台的 ysyxSoC Config，以及 `fpga/<board>/` 下的 FPGA 终端 Config。
+  * 构造必须混入显式终端 marker；目录不再从 `SimulationConfig`、`FpgaConfig` 等类名
+  * 后缀猜测作用域或目标。
   */
 object ConfigCatalogGenerator {
   private val CatalogRelativePath = Path.of("chisel", "configs", "resources", "scpu-config-catalog.tsv")
@@ -19,6 +19,13 @@ object ConfigCatalogGenerator {
   private val BoardPattern: Regex = raw"WithFpgaBoardConfig\(FpgaBoard\.([A-Za-z0-9_]+)\)".r
 
   private final case class ClassBlock(name: String, parent: String, body: String)
+
+  private val terminalMarkers = Map(
+    "NpcTerminalConfig" -> ("npc", "NPC"),
+    "SocTerminalConfig" -> ("soc", "SOC"),
+    "FpgaNpcTerminalConfig" -> ("fpga", "NPC"),
+    "FpgaSocTerminalConfig" -> ("fpga", "SOC")
+  )
 
   /** 寻找包含 `chisel/configs` 的 NPC 根目录；无法找到时返回 `None`，供安装后的
     * classpath resource 回退路径使用。
@@ -33,7 +40,78 @@ object ConfigCatalogGenerator {
 
   def catalogPath(npcRoot: Path): Path = npcRoot.resolve(CatalogRelativePath)
 
-  private def read(path: Path): String = Files.readString(path, StandardCharsets.UTF_8)
+  /** 将注释和字面量掩码为空白，保留行列位置供后续正则按源码结构发现类。
+    *
+    * 自动目录不能把文档中的示例类或注释掉的历史 Config 视为真实构造；同时保留换行，避免
+    * 多行类声明的匹配位置发生偏移。
+    */
+  private[scpu] def codeOnly(source: String): String = {
+    val masked = source.toCharArray
+
+    def mask(index: Int): Unit =
+      if (masked(index) != '\n' && masked(index) != '\r') masked(index) = ' '
+
+    def maskRange(start: Int, end: Int): Unit =
+      (start until end).foreach(mask)
+
+    var index = 0
+    while (index < source.length) {
+      if (source.startsWith("//", index)) {
+        val end = source.indexOf('\n', index) match {
+          case -1 => source.length
+          case value => value
+        }
+        maskRange(index, end)
+        index = end
+      } else if (source.startsWith("/*", index)) {
+        var depth = 1
+        maskRange(index, index + 2)
+        index += 2
+        while (index < source.length && depth > 0) {
+          if (source.startsWith("/*", index)) {
+            depth += 1
+            maskRange(index, index + 2)
+            index += 2
+          } else if (source.startsWith("*/", index)) {
+            depth -= 1
+            maskRange(index, index + 2)
+            index += 2
+          } else {
+            mask(index)
+            index += 1
+          }
+        }
+      } else if (source.startsWith("\"\"\"", index)) {
+        val end = source.indexOf("\"\"\"", index + 3) match {
+          case -1 => source.length
+          case value => value + 3
+        }
+        maskRange(index, end)
+        index = end
+      } else if (source(index) == '"' || source(index) == '\'') {
+        val quote = source(index)
+        mask(index)
+        index += 1
+        var closed = false
+        while (index < source.length && !closed) {
+          if (source(index) == '\\' && index + 1 < source.length) {
+            mask(index)
+            mask(index + 1)
+            index += 2
+          } else {
+            closed = source(index) == quote
+            mask(index)
+            index += 1
+          }
+        }
+      } else {
+        index += 1
+      }
+    }
+    new String(masked)
+  }
+
+  private def read(path: Path): String = codeOnly(Files.readString(path, StandardCharsets.UTF_8))
 
   private def scalaFiles(directory: Path): Vector[Path] = {
     if (!Files.isDirectory(directory)) Vector.empty
@@ -57,40 +135,44 @@ object ConfigCatalogGenerator {
       throw new IllegalArgumentException(s"Missing package declaration in $path")
     )
 
-  private def discoverNpc(configRoot: Path): Vector[ConfigCatalog.Entry] =
-    scalaFiles(configRoot.resolve("npc")).flatMap { path =>
-      val source = read(path)
-      val pkg = packageName(source, path)
-      classBlocks(source).collect {
-        case block if block.parent == "NpcConstructionConfig" && !block.name.contains("Check") =>
-          ConfigCatalog.Entry(
-            shortName = block.name,
-            className = s"$pkg.${block.name}",
-            scope = "npc",
-            board = None,
-            target = "NPC"
-          )
+  private def marker(block: ClassBlock): Option[(String, String)] = {
+    val found = terminalMarkers.collect {
+      case (name, metadata) if raw"\b$name\b".r.findFirstIn(block.body).nonEmpty => metadata
+    }.toVector.distinct
+    require(found.size <= 1, s"Config ${block.name} 混入了多个终端 marker")
+    found.headOption
+  }
+
+  private def discoverMarked(
+    directory: Path,
+    expectedScope: String,
+    board: Option[String]
+  ): Vector[ConfigCatalog.Entry] = scalaFiles(directory).flatMap { path =>
+    val source = read(path)
+    val pkg = packageName(source, path)
+    classBlocks(source).flatMap { block =>
+      marker(block).map { case (scope, target) =>
+        require(scope == expectedScope,
+          s"Config ${block.name} 的 marker 作用域 $scope 与目录 $directory 不一致")
+        val expectedParent = if (scope == "npc") "ConstructionConfig" else "CDEConfig"
+        require(block.parent == expectedParent,
+          s"Config ${block.name} 的终端 marker 要求继承 $expectedParent，实际为 ${block.parent}")
+        ConfigCatalog.Entry(
+          shortName = block.name,
+          className = s"$pkg.${block.name}",
+          scope = scope,
+          board = board,
+          target = target
+        )
       }
     }
+  }
+
+  private def discoverNpc(configRoot: Path): Vector[ConfigCatalog.Entry] =
+    discoverMarked(configRoot.resolve("npc"), "npc", None)
 
   private def discoverSoc(configRoot: Path): Vector[ConfigCatalog.Entry] =
-    scalaFiles(configRoot.resolve("ysyx")).flatMap { path =>
-      val source = read(path)
-      val pkg = packageName(source, path)
-      classBlocks(source).collect {
-        case block
-            if block.parent == "CDEConfig" &&
-              (block.body.contains("WithYsyxPlatformConfig(YsyxPlatform.Standalone)") ||
-                block.body.contains("WithYsyxPlatformConfig(YsyxPlatform.Simulation)")) =>
-          ConfigCatalog.Entry(
-            shortName = block.name,
-            className = s"$pkg.${block.name}",
-            scope = "soc",
-            board = None,
-            target = "SOC"
-          )
-      }
-    }
+    discoverMarked(configRoot.resolve("ysyx"), "soc", None)
 
   private def boardMetadata(directory: Path): String = {
     val source = scalaFiles(directory).map(read).mkString("\n")
@@ -114,28 +196,7 @@ object ConfigCatalogGenerator {
         if (directory.getFileName.toString == "common") Vector.empty
         else {
           val board = boardMetadata(directory)
-          scalaFiles(directory).flatMap { path =>
-            val source = read(path)
-            val pkg = packageName(source, path)
-            classBlocks(source).collect {
-              case block if block.parent == "CDEConfig" && block.name.endsWith("NpcFpgaConfig") =>
-                ConfigCatalog.Entry(
-                  shortName = block.name,
-                  className = s"$pkg.${block.name}",
-                  scope = "fpga-npc",
-                  board = Some(board),
-                  target = "NPC"
-                )
-              case block if block.parent == "CDEConfig" && block.name.endsWith("YsyxSocFpgaConfig") =>
-                ConfigCatalog.Entry(
-                  shortName = block.name,
-                  className = s"$pkg.${block.name}",
-                  scope = "fpga-soc",
-                  board = Some(board),
-                  target = "SOC"
-                )
-            }
-          }
+          discoverMarked(directory, "fpga", Some(board))
         }
       }
       finally directories.close()
@@ -149,7 +210,7 @@ object ConfigCatalogGenerator {
     require(duplicateClassNames.isEmpty, s"Duplicate generated Config class names: ${duplicateClassNames.toSeq.sorted.mkString(", ")}")
     require(entries.nonEmpty, s"No Make-selectable Configs found below $ConfigRelativePath")
 
-    val scopeOrder = Map("npc" -> 0, "soc" -> 1, "fpga-npc" -> 2, "fpga-soc" -> 3)
+    val scopeOrder = Map("npc" -> 0, "soc" -> 1, "fpga" -> 2)
     entries.sortBy(entry => (scopeOrder.getOrElse(entry.scope, Int.MaxValue), entry.shortName))
   }
 

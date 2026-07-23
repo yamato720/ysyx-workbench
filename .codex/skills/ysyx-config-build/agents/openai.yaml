@@ -1,0 +1,4 @@
+interface:
+  display_name: "YSYX Config Build"
+  short_description: "Work safely with YSYX CDE Config and Make constructions"
+  default_prompt: "Use $ysyx-config-build to inspect or change the YSYX CDE Config, construction, host, or FPGA build workflow."

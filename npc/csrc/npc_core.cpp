@@ -1,6 +1,7 @@
 // NPC core functions for both standalone and NEMU integration
 #include "npc_core.h"
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <verilated.h>
 #if defined(NPC_STANDALONE) || defined(NPC_VCD_TRACE)
@@ -43,6 +44,9 @@ static uint64_t last_pc = 0;
 static uint64_t last_commit_pc = 0;
 static uint64_t last_commit_next_pc = 0;
 static uint32_t last_commit_inst = 0;
+#if defined(NPC_VCD_TRACE)
+static unsigned int trace_file_sequence = 0;
+#endif
 
 enum NPCPipelineTimingClass {
     NPC_TIMING_NORMAL = 0,
@@ -668,7 +672,17 @@ void start_trace() {
     if (npc_trace && !trace_enabled) {
         // Close any existing trace and reopen to start a fresh VCD from current state
         npc_trace->close();
-        npc_trace->open("clip_wave.vcd");
+        const char *runtime_directory = std::getenv("NEMU_RUNTIME_OUTPUT_DIR");
+        char trace_path[4096];
+        trace_file_sequence++;
+        if (runtime_directory != nullptr && runtime_directory[0] != '\0') {
+            std::snprintf(trace_path, sizeof(trace_path), "%s/wave-%03u.vcd",
+                          runtime_directory, trace_file_sequence);
+        } else {
+            std::snprintf(trace_path, sizeof(trace_path), "wave-%03u.vcd", trace_file_sequence);
+        }
+        npc_trace->open(trace_path);
+        std::printf("NPC VCD：%s\n", trace_path);
     }
     trace_enabled = true;
 }

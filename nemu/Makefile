@@ -21,7 +21,13 @@ endif
 fpga-mailbox-test:
 	@bash "$(NEMU_HOME)/tests/run-fpga-mailbox-test.sh"
 
-.PHONY: fpga-mailbox-test
+pipeline-html-test:
+	@bash "$(NEMU_HOME)/tests/run-pipeline-html-test.sh"
+
+performance-html-test:
+	@bash "$(NEMU_HOME)/tests/run-performance-html-test.sh"
+
+.PHONY: fpga-mailbox-test pipeline-html-test performance-html-test
 
 # Keep native, ZCU102 cross-host and U55C host configurations independent.
 # Defaults preserve the historical in-tree paths.

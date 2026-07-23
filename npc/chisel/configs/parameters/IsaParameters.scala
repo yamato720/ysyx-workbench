@@ -13,5 +13,6 @@ case class ISAConfig(
 /** 乘除法和浮点算术单元的实现与时序参数。 */
 case class OperatorConfig(
   mulDiv: MulDivAlu.Config = MulDivAlu.Config(),
-  floating: FloatingAlu.Config = FloatingAlu.Config()
+  floating: FloatingAlu.Config = FloatingAlu.Config(),
+  routes: OperatorRouteConfig = OperatorRouteConfig()
 )

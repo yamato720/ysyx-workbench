@@ -342,7 +342,7 @@ make ARCH=riscv64-nemu run mainargs=y
 # 期望：打印 'y' 后继续执行（不是无限循环——因为 mepc 已 +4）
 
 # 2. Config 驱动模式；首次运行自动生成 Verilator/NEMU 构造
-make -C am-kernels/tests/cpu-tests run ALL=add config=NpcDpiConfig
+make -C am-kernels/tests/cpu-tests run ALL=add config=SimulationConfig
 ```
 
 ### 2.4 注意事项

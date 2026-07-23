@@ -48,7 +48,7 @@ The built binary is `nemu/build/riscv64-nemu-interpreter` (or `-so` for shared).
 
 ```bash
 make -C npc config-list
-make -C npc build config=NpcDpiConfig
+make -C npc build config=DpiConfig
 make -C npc build config=U55cYsyxSocFpgaConfig
 make -C npc version
 ```
@@ -73,7 +73,7 @@ make ARCH=native run          # Build and run natively on host
 cd am-kernels/tests/cpu-tests
 
 # Run one test on a Verilator NPC construction (ARCH is inferred):
-make run ALL=add config=NpcDpiConfig
+make run ALL=add config=DpiConfig
 
 # Run a batch on a SoC construction:
 make run-bat ALL="add div" config=YsyxSimulationConfig
@@ -136,7 +136,7 @@ Controlled via `menuconfig` (`CONFIG_ITRACE`, `CONFIG_FTRACE`, `CONFIG_MTRACE`, 
 ### NPC–NEMU Integration Mode
 
 To run NEMU calling NPC for hardware simulation:
-1. Select a terminal Config, for example `NpcDpiConfig` or `YsyxSimulationConfig`.
+1. Select a terminal Config, for example `DpiConfig` or `YsyxSimulationConfig`.
 2. Let `make run` or `make run-bat` create or refresh the construction atomically.
 3. The saved NEMU executable loads the Verilator ABI from that same construction; current-tree objects are never mixed into a saved construction.
 4. The `npc/csrc/npc_core.h` C interface (`npc_init`, `npc_single_run`, `npc_get_pc`, etc.) is used by `nemu/src/cpu/cpu-exec.c`.

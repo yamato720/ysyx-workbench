@@ -23,18 +23,27 @@ SystemVerilog 文件放大综合内存占用。
 
 ```bash
 make -C npc build config=U55cNpcFpgaConfig
+make -C npc build config=U55cFullIsa64Npc250MHzFpgaConfig
 make -C npc build config=U55cYsyxSocFpgaConfig
 make -C npc build config=Zcu102NpcFpgaConfig
 make -C npc build config=Zcu102YsyxSocFpgaConfig
 ```
 
-板卡、NPC/SoC 目标、XLEN、F/M、频率、器件、平台、Vivado/Vitis 版本、并行度、实现策略和 WNS
-下限全部由终端 Scala Config 固定。`boards/<board>/config.mk` 只作为 Tcl/IP 板卡基线；构造时会与
-Scala profile 逐项交叉校验，任何漂移都会失败。公开 Make 不接受结构覆盖变量。
+板卡、NPC/SoC 目标、XLEN、F/M、频率、器件、平台、Vivado/Vitis 版本、Vitis XRT 环境策略、并行度、实现策略、WNS
+下限和实现后报告策略全部由终端 Scala Config 固定。`boards/<board>/config.mk` 只保留 Tcl/IP 文件布局、
+允许频率、地址和 IP 时序等独立硬件约束；器件与工具链不在其中重复定义。构造时仍交叉验证 catalog、
+硬件 CDE 板卡及这些独立约束。公开 Make 不接受结构覆盖变量。
 
-`FpgaBuildSettings` 将 `synthesisParallelJobs`、`implementationParallelJobs` 和
-`implementationStrategySearch` 固定在 L4 板卡 Config。前两个值控制宿主 Vivado/Vitis worker jobs；
-策略搜索开启时，Alveo Vitis 还会并行创建默认策略外的实现 run。
+`FpgaToolchainConfig.flow` 将综合/实现 jobs、实现策略和策略搜索固定在 FPGA 终端。前两个值控制宿主
+Vivado/Vitis worker jobs；策略搜索开启时，Alveo Vitis 还会并行创建默认策略外的实现 run。
+`FpgaToolchainConfig.reports` 同样由终端冻结：默认保留 50 条最差路径、每端点 10 条路径，并输出拥塞、
+时钟利用率、控制集、高扇出网络、方法学和 QoR 建议。共享报告位于每个实现 run 的
+`npc-implementation-reports/`；U55C 多策略运行互不写入同一目录。时序摘要是必需证据，其他诊断报告
+若不受工具版本支持只会将原因写入 `report-errors.log`，不会额外阻断 bitstream。
+
+U55C 的 `FPGA_VITIS_XRT_MODE=unset` 仅为 `v++` 链接子进程移除 `XILINX_XRT`，使 Vitis 2022.2
+使用自带的 `xclbinutil`；这避免新版本机 XRT 覆盖后要求不匹配的 Boost 库。它不改变 NEMU/上板运行
+时的 XRT 环境，运行时仍由已保存的宿主配置负责。
 
 ## Shell 分层
 
@@ -60,7 +69,7 @@ npc/fpga/common/scripts/artifact-manifest.sh verify \
   --platform xilinx_u55c_gen3x16_xdma_3_202210_1 \
   --config-fqcn scpu.fpga.u55c.U55cYsyxSocFpgaConfig \
   --host-abi nemu-construction-v1 \
-  --protocol-abi npc-fpga-mailbox-v2
+  --protocol-abi npc-fpga-mailbox-v3
 ```
 
 运行前还会校验清单自身摘要、资产 SHA、板卡、XRT 平台、终端 Config 和 ABI。源码、Config 或工具

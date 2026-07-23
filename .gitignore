@@ -10,8 +10,13 @@
 !README.md
 !.gitignore
 !.gitattributes
+!/.codex/
+!/.codex/skills/
+!/.codex/skills/ysyx-config-build/
+!/.codex/skills/ysyx-config-build/**
 !init.sh
 fceux-am.worktrees/
+/log/
 !.github/*
 !.*.md
 !document/*

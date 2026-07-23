@@ -10,20 +10,30 @@ abstraction layer of the computer hardware:
 Config 驱动的 NPC/SoC/FPGA 运行
 --------------------------------
 
-NPC 相关测试统一从 `am-kernels/tests/cpu-tests` 启动：
+`cpu-tests` 支持多版本性能矩阵：
 
 ```bash
-make -C am-kernels/tests/cpu-tests run ALL=add config=NpcDpiConfig
+make -C am-kernels/tests/cpu-tests run ALL=add config=SimulationConfig
 make -C am-kernels/tests/cpu-tests run-bat ALL="add div" config=YsyxSimulationConfig
 make -C am-kernels/tests/cpu-tests run ALL=add version=1
 make -C am-kernels/tests/cpu-tests run config=U55cYsyxSocFpgaConfig
+make -C am-kernels/tests/cpu-tests version
+make -C am-kernels/tests/cpu-tests run-bat ALL="add div" version=1,2 jobs=2
+```
+
+其他采用 `ARCH=riscv32|64-nemu` 的 AM 工程也可直接按 Config 运行；不必手动指定 `ARCH`：
+
+```bash
+make -C am-kernels/tests/am-tests run config=FullIsa64PipelineDualForwardingSimulationConfig
+make -C nanos-lite run config=FullIsa64PipelineDualForwardingSimulationConfig
 ```
 
 终端 Config 固定 NPC/SoC 后端、XLEN 和板卡；调用者不再分别选择接口。`ARCH` 自动从 XLEN 推导，
 显式传入时只做一致性校验。`version` 是从 `1` 开始、不会因删除其他构造而重排的稳定构造序号。
 
-仿真 Config 缺失时自动原子构造；已有仿真构造在运行前由 NEMU Make 按 C/C++、头文件和
-menuconfig 配置依赖增量刷新。Chisel、Verilator glue 和 FPGA 构造只在 `rebuild=1` 时更新。FPGA
+仿真 Config 缺失时自动原子构造；已有构造直接执行保存的 NEMU host。只有 `host-rebuild=1` 或
+`make -C npc host-build` 才会按 NEMU 的 C/C++、头文件和 menuconfig 依赖增量刷新 host。Chisel、
+Verilator glue 和 FPGA 构造只在 `rebuild=1` 时更新。FPGA
 Config 缺失资产时需添加 `build=1`；已有 FPGA 一直使用同一构造目录中冻结的 NEMU host、manifest 和
 bitstream/xclbin。资产 SHA、板卡、XRT 平台或协议 ABI 不兼容会硬失败。
 
@@ -31,7 +41,13 @@ bitstream/xclbin。资产 SHA、板卡、XRT 平台或协议 ABI 不兼容会硬
 `x` 和软 watchpoint。ZCU102 运行前需要加载构造目录中的 bitstream、设备树并提供 UIO/预留 DDR；
 U55C 需要安装匹配平台的 XRT，NEMU host 会加载构造目录中的平台限定 xclbin。
 
-没有传入 `NPC_CONSTRUCTION_DIR` 的其他 AM 工程仍走普通 NEMU 构建，不受 NPC 构造库影响。
+没有传入 `config=`、`version=` 或 `NPC_CONSTRUCTION_DIR` 的 AM 工程仍走普通 NEMU 构建，不受 NPC
+构造库影响。
+
+启用 NEMU 性能 HTML 的 Config 会为每次运行创建
+`npc/constructions/<FQCN>/runtime/<运行标签>/<timestamp-ns>-<pid>/`。HTML 与可选 VCD 都写入该并发隔离
+目录；`performance.html` 是主页，`instructions.html` 是逐指令明细，启用流水子特征时再生成
+`pipeline.html`。运行完成后 `<运行标签>/latest` 指向最新完成的一次；批次并行不会互相覆盖。
 
 CONTACTS
 

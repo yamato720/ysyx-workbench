@@ -14,17 +14,17 @@ trait NpcCoreComponents {
   def exposesArithmeticAssist(config: NpcConfig): Boolean = false
   def exposesDispatchControl(config: NpcConfig): Boolean = false
 
-  def makeMulDivAlu(width: Int, config: MulDivAlu.Config): MulDivAlu
-  def makeFloatingAlu(width: Int, config: FloatingAlu.Config): FloatingAluBase
+  def makeMulDivAlu(width: Int, config: MulDivAlu.Config, routes: OperatorRouteConfig): MulDivAlu
+  def makeFloatingAlu(width: Int, config: FloatingAlu.Config, routes: OperatorRouteConfig): FloatingAluBase
 }
 
 /** 普通 Verilator/NEMU 构建使用的模型和 DPI 算子组件。 */
 object SimulationCoreComponents extends NpcCoreComponents {
   override val name: String = "simulation"
 
-  override def makeMulDivAlu(width: Int, config: MulDivAlu.Config): MulDivAlu =
-    Module(new MulDivAlu(width, config))
+  override def makeMulDivAlu(width: Int, config: MulDivAlu.Config, routes: OperatorRouteConfig): MulDivAlu =
+    Module(new MulDivAlu(width, config, routes))
 
-  override def makeFloatingAlu(width: Int, config: FloatingAlu.Config): FloatingAluBase =
+  override def makeFloatingAlu(width: Int, config: FloatingAlu.Config, routes: OperatorRouteConfig): FloatingAluBase =
     Module(new FloatingAlu(width, config))
 }

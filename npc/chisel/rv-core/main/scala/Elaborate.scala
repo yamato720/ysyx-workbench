@@ -19,7 +19,7 @@ private[scpu] object ElaborateOutput {
 }
 
 object Elaborate extends App {
-  val (entry, construction) = NpcConfigResolver.resolve("NpcStandaloneConfig")
+  val (entry, construction) = ConfigResolver.resolve("StandaloneConfig")
   val config = construction.config
   println(s"正在生成 Verilog 文件... Config=${entry.className}, XLEN=${config.isa.xlen}, pipeline=${config.pipeline.enablePipeline}")
   _root_.circt.stage.ChiselStage.emitSystemVerilogFile(
@@ -35,7 +35,7 @@ object Elaborate extends App {
 
 // 使用外部内存的 Verilator 仿真 DPI-C 模式。
 object ElaborateDPI extends App {
-  val (entry, construction) = NpcConfigResolver.resolve("NpcDpiConfig")
+  val (entry, construction) = ConfigResolver.resolve("SimulationConfig")
   val config = construction.config
   println(s"正在生成 NEMU 模式的 Verilog 文件... Config=${entry.className}, XLEN=${config.isa.xlen}, M 扩展后端=Chisel")
   _root_.circt.stage.ChiselStage.emitSystemVerilogFile(
@@ -55,7 +55,7 @@ object ElaborateDPI extends App {
   * 使验证能构造可选配置而无需新增环境变量或 Make 开关。
   */
 object ElaboratePipelineDPI extends App {
-  val (entry, construction) = NpcConfigResolver.resolve("NpcPipelineDpiConfig")
+  val (entry, construction) = ConfigResolver.resolve("PipelineSimulationConfig")
   val config = construction.config
   println(s"正在生成流水线 NEMU Verilog 文件... Config=${entry.className}, XLEN=${config.isa.xlen}")
   _root_.circt.stage.ChiselStage.emitSystemVerilogFile(
@@ -75,8 +75,8 @@ object ElaboratePipelineDPI extends App {
 object ElaboratePipelineChecks extends App {
   private def check(xlen: Int): Unit = {
     val config = (
-      new WithNpcXlenConfig(xlen) ++
-        new NpcPipelineCheckConfig
+      new WithXlenConfig(xlen) ++
+        new PipelineCheckConfig
     ).build
     println(s"正在检查流水线 elaboration... XLEN=$xlen")
     _root_.circt.stage.ChiselStage.emitSystemVerilog(new NpcCore(config = config))
@@ -95,8 +95,8 @@ object ElaboratePipelineChecks extends App {
 object ElaborateFloatingChecks extends App {
   private def check(xlen: Int): Unit = {
     val config = (
-      new WithNpcXlenConfig(xlen) ++
-        new NpcFloatingCheckConfig
+      new WithXlenConfig(xlen) ++
+        new FloatingCheckConfig
     ).build
     println(s"正在检查浮点 DPI elaboration... XLEN=$xlen")
     _root_.circt.stage.ChiselStage.emitSystemVerilog(new NpcCore(config = config))
@@ -111,9 +111,9 @@ object ElaborateFloatingChecks extends App {
 object ElaborateMulDivAluChecks extends App {
   private def check(xlen: Int, completionCycles: Int): Unit = {
     val config = (
-      new WithNpcXlenConfig(xlen) ++
+      new WithXlenConfig(xlen) ++
         new WithMulDivCompletionConfig(completionCycles) ++
-        new NpcMulDivCheckConfig
+        new MulDivCheckConfig
     ).build
     println(s"正在检查 MulDivAlu elaboration... XLEN=$xlen, cycles=$completionCycles")
     _root_.circt.stage.ChiselStage.emitCHIRRTL(new NpcCore(config = config))

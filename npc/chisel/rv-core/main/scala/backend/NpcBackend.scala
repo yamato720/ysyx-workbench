@@ -45,7 +45,8 @@ class NpcBackend(
     val axi = new AxiLiteMasterIO(axiConfig.addrWidth, axiConfig.dataWidth)
     val redirectValid = Output(Bool())
     val redirectTarget = Output(UInt(cfg.xlen.W))
-    val arithmeticAssist = if (cfg.F && components.exposesArithmeticAssist(config)) {
+    val memoryFault = Output(new MemoryFault(axiConfig.addrWidth))
+    val arithmeticAssist = if (components.exposesArithmeticAssist(config)) {
       Some(new ArithmeticAssistPort(cfg.xlen))
     } else None
 
@@ -76,9 +77,13 @@ class NpcBackend(
   val registerFile = Module(new RegisterFile(width = cfg.xlen, debug = true))
   val floatingRegisterFile = if (cfg.F) Some(Module(new FloatingRegisterFile(cfg.xlen))) else None
   val integerAlu = Module(new IntegerAlu(cfg.xlen))
-  val mulDivAlu = if (cfg.M) Some(components.makeMulDivAlu(cfg.xlen, operatorConfig.mulDiv)) else None
-  val floatingAlu = if (cfg.F) Some(components.makeFloatingAlu(cfg.xlen, operatorConfig.floating)) else None
-  val arithmeticAssistBusy = floatingAlu.map(_.io.assist.busy).getOrElse(false.B)
+  val mulDivAlu = if (cfg.M) Some(components.makeMulDivAlu(cfg.xlen, operatorConfig.mulDiv, operatorConfig.routes)) else None
+  val floatingAlu = if (cfg.F) Some(components.makeFloatingAlu(cfg.xlen, operatorConfig.floating, operatorConfig.routes)) else None
+  val arithmeticAssistPorts = Seq(
+    mulDivAlu.map(_.io.assist -> ArithmeticRouteDomain.Integer.id),
+    floatingAlu.map(_.io.assist -> ArithmeticRouteDomain.Floating.id)
+  ).flatten
+  val arithmeticAssistBusy = arithmeticAssistPorts.map(_._1.busy).reduceOption(_ || _).getOrElse(false.B)
   private val arithmeticResponseSourceCount = (if (cfg.M) 1 else 0) + (if (cfg.F) 1 else 0)
   // 各 ISA ALU 在内部选择并汇聚纯算子；后端只需仲裁独立发射的 ISA 扩展。
   val arithmeticResponseArbiter =
@@ -87,8 +92,14 @@ class NpcBackend(
     else None
   val csrExecution = Module(new CsrExecution(cfg))
   val csrFile = Module(new CsrFile(cfg))
-  val loadStoreUnit = Module(new LSUAXIAdapter(axiConfig.addrWidth, axiConfig.dataWidth))
+  val loadStoreUnit = Module(new LSUAXIAdapter(
+    axiConfig.addrWidth,
+    axiConfig.dataWidth,
+    config.memory.mainMemoryBase,
+    config.memory.mainMemorySize
+  ))
   loadStoreUnit.io.axi <> io.axi
+  io.memoryFault := loadStoreUnit.io.fault
 
   val dispatch = io.dispatch.bits
   registerFile.io.rs1 := dispatch.rs1
@@ -308,8 +319,8 @@ class NpcBackend(
   val arithmeticIntegerRawHazard =
     arithmeticSourceHazard(dispatch.rs1, dispatch.usesRs1, _.payload.registerWriteEnable,
       zeroRegisterIsImmutable = true) ||
-      arithmeticSourceHazard(dispatch.rs2, dispatch.usesRs2, _.payload.registerWriteEnable,
-        zeroRegisterIsImmutable = true)
+    arithmeticSourceHazard(dispatch.rs2, dispatch.usesRs2, _.payload.registerWriteEnable,
+      zeroRegisterIsImmutable = true)
   val arithmeticFloatingRawHazard =
     arithmeticSourceHazard(dispatch.rs1, dispatch.usesFrs1, _.payload.floatRegisterWriteEnable,
       zeroRegisterIsImmutable = false) ||
@@ -453,24 +464,28 @@ class NpcBackend(
     alu.io.req.bits.tag := arithmeticTail
     connectArithmeticResponse(alu.io.resp)
   }
-  floatingAlu.foreach { alu =>
-    io.arithmeticAssist match {
-      case Some(external) =>
-        external.request.valid := alu.io.assist.request.valid
-        external.request.bits := alu.io.assist.request.bits
-        alu.io.assist.request.ready := external.request.ready
-        alu.io.assist.response.valid := external.response.valid
-        alu.io.assist.response.bits := external.response.bits
-        external.response.ready := alu.io.assist.response.ready
-        external.busy := alu.io.assist.busy
-      case None =>
-        // Simulation components do not expose a host assist port. Their
-        // FloatingAlu ties its outputs off, while the inputs still need
-        // deterministic values at this module boundary.
-        alu.io.assist.request.ready := true.B
-        alu.io.assist.response.valid := false.B
-        alu.io.assist.response.bits := 0.U.asTypeOf(alu.io.assist.response.bits)
-    }
+  io.arithmeticAssist match {
+    case Some(external) =>
+      val requestArbiter = Module(new RRArbiter(new ArithmeticAssistRequest(cfg.xlen), arithmeticAssistPorts.size))
+      arithmeticAssistPorts.zipWithIndex.foreach { case ((assist, _), index) =>
+        requestArbiter.io.in(index) <> assist.request
+      }
+      external.request <> requestArbiter.io.out
+      arithmeticAssistPorts.foreach { case (assist, domain) =>
+        assist.response.valid := external.response.valid && external.response.bits.domain === domain.U
+        assist.response.bits := external.response.bits
+      }
+      external.response.ready := arithmeticAssistPorts.map { case (assist, domain) =>
+        external.response.bits.domain === domain.U(1.W) && assist.response.ready
+      }.reduceOption(_ || _).getOrElse(false.B)
+      external.busy := arithmeticAssistBusy
+    case None =>
+      // 本地模型没有外部服务；仍需给每个端点确定的输入值，避免无消费响应阻塞。
+      arithmeticAssistPorts.foreach { case (assist, _) =>
+        assist.request.ready := true.B
+        assist.response.valid := false.B
+        assist.response.bits := 0.U.asTypeOf(assist.response.bits)
+      }
   }
   arithmeticResponseArbiter.foreach { arbiter =>
     arbiter.io.out.ready := true.B
@@ -531,7 +546,12 @@ class NpcBackend(
   when(directExecuteFire) { executeOutputRequest := executeInput }
   val executeBranchTarget = executeOutputRequest.pc + executeOutputRequest.immediate
   val executeOutputRs1Data = Mux(directExecuteFire, directRs1Data, executeOutputRequest.rs1Data)
-  val executeOutputStoreData = Mux(directExecuteFire, directRs2Data, executeOutputRequest.storeData)
+  // 浮点 store 通过 `storeData`（`usesFrs2`）携带源值；整数 store 才需要 EX
+  // 前递。若统一使用整数 mux，浮点源会丢失，并可能以陈旧值覆盖相邻内存 lane。
+  val directStoreData = Mux(executeOutputRequest.usesFrs2,
+    executeOutputRequest.storeData, directRs2Data)
+  val executeOutputStoreData = Mux(directExecuteFire, directStoreData,
+    executeOutputRequest.storeData)
   val executeJalrTargetRaw = executeOutputRs1Data + executeOutputRequest.immediate
   val serialExecuteResult = integerAlu.io.result
   val serialBranchTaken = Mux(executeRequest.executionUnit === NpcExecutionUnit.integer,

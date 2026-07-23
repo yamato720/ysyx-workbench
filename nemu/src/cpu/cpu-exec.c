@@ -16,11 +16,19 @@
 #include <cpu/cpu.h>
 #include <cpu/decode.h>
 #include <cpu/difftest.h>
+#include <memory/paddr.h>
 #include <locale.h>
 #include <errno.h>
 #include <signal.h>
+#include <unistd.h>
+#ifdef CONFIG_NPC_PERFORMANCE_HTML
+#include <pipeline-html.h>
+#endif
 
 #ifdef NPC
+#ifdef CONFIG_NPC_PERFORMANCE_HTML
+#include <performance-html.h>
+#endif
 #include "npc_debug.h"
 // NPC integration: declare NPC functions
 extern void npc_init();
@@ -33,6 +41,13 @@ extern uint64_t npc_get_current_pc();
 extern uint32_t npc_get_frontend_instruction();
 extern int npc_is_finished();
 extern uint64_t npc_get_reg(int idx);
+extern uint64_t npc_get_freg(int idx);
+extern uint32_t npc_get_fcsr(void);
+extern uint64_t npc_get_last_store_sequence(void);
+extern uint64_t npc_get_last_store_address(void);
+extern uint64_t npc_get_last_store_data(void);
+extern uint32_t npc_get_last_store_strobe(void);
+extern uint32_t npc_get_last_store_word_bytes(void);
 extern uint64_t npc_get_cycle_count();
 extern uint64_t npc_get_commit_count();
 extern uint32_t npc_get_backpressure_reasons();
@@ -113,6 +128,7 @@ enum {
   NPC_PIPELINE_STALL_EXECUTE,
   NPC_PIPELINE_STALL_MEMORY,
   NPC_PIPELINE_STALL_REDIRECT,
+  NPC_PIPELINE_STALL_COUNT,
 };
 
 enum {
@@ -145,6 +161,38 @@ typedef struct {
 } NPCInstructionTiming;
 
 static NPCInstructionTiming npc_last_instruction = {};
+
+#ifdef CONFIG_NPC_PERFORMANCE_HTML
+static void npc_record_pipeline_html(
+    Decode *instruction, uint64_t sequence, uint64_t commit_cycle) {
+  uint64_t stage[PIPELINE_HTML_STAGE_COUNT];
+  for (uint32_t index = 0; index < PIPELINE_HTML_STAGE_COUNT; index++) {
+    stage[index] = npc_get_last_timing_stage_cycles(index);
+  }
+
+  const int instruction_length = (instruction->isa.inst & 0x3) == 0x3 ? 4 : 2;
+  char disassembly[160] = {};
+  void disassemble(char *str, int size, uint64_t pc, uint8_t *code, int nbyte);
+  disassemble(disassembly, sizeof(disassembly), instruction->pc,
+              (uint8_t *)&instruction->isa.inst, instruction_length);
+  npc_pipeline_html_record(sequence, instruction->pc, instruction->isa.inst,
+                           disassembly, commit_cycle, stage);
+}
+
+static void npc_finish_pipeline_html(void) {
+  uint64_t stalls[PIPELINE_HTML_STAGE_COUNT];
+  for (uint32_t index = 0; index < PIPELINE_HTML_STAGE_COUNT; index++) {
+    stalls[index] = npc_get_pipeline_stall_count(index);
+  }
+  npc_pipeline_html_finalize(stalls,
+#ifdef CONFIG_NPC_PIPELINE_HTML
+      true
+#else
+      false
+#endif
+  );
+}
+#endif
 
 #ifdef NPC_FPGA_REMOTE
 extern bool npc_debug_is_interactive(void);
@@ -317,6 +365,112 @@ static void npc_print_pipeline_timing(const char *mode) {
   }
   printf("+------------+-------+------------+------------+------+------+------+------+------+-------+\n");
 }
+
+#ifdef CONFIG_NPC_PERFORMANCE_HTML
+static bool npc_performance_html_finished;
+
+static void npc_finish_performance_html(void) {
+  if (npc_performance_html_finished) return;
+  npc_performance_html_finished = true;
+
+  PerformanceHtmlTimingRow rows[NPC_TIMING_CLASS_COUNT] = {};
+  for (uint32_t timing_class = 0; timing_class < NPC_TIMING_CLASS_COUNT; timing_class++) {
+    rows[timing_class].name = npc_timing_class_names[timing_class];
+    rows[timing_class].count = npc_get_timing_sample_count(timing_class);
+    rows[timing_class].max_total = npc_get_timing_max_total_cycles(timing_class);
+    rows[timing_class].detailed = npc_is_detailed_timing_class(timing_class);
+    for (uint32_t stage = 0; stage < NPC_TIMING_STAGE_COUNT; stage++) {
+      rows[timing_class].stage_total[stage] = npc_get_timing_total_cycles(timing_class, stage);
+      rows[timing_class].last_stage[stage] = npc_get_timing_last_stage_cycles(timing_class, stage);
+    }
+    rows[timing_class].last_pc = npc_get_timing_last_pc(timing_class);
+    rows[timing_class].last_instruction = npc_get_timing_last_instruction(timing_class);
+  }
+
+  uint64_t cycles = 0;
+  uint64_t commits = 0;
+  npc_read_counters(&cycles, &commits);
+  const uint32_t last_class = npc_get_last_timing_class();
+  const char *last_class_name = last_class < NPC_TIMING_CLASS_COUNT
+      ? npc_timing_class_names[last_class] : "unknown";
+  const char *outcome_text = "用户退出";
+  PerformanceHtmlOutcome outcome = PERFORMANCE_HTML_OUTCOME_QUIT;
+  if (nemu_state.state == NEMU_END) {
+    if (nemu_state.halt_ret == 0) {
+      outcome_text = "通过";
+      outcome = PERFORMANCE_HTML_OUTCOME_GOOD;
+    } else {
+      outcome_text = "错误返回";
+      outcome = PERFORMANCE_HTML_OUTCOME_BAD;
+    }
+  } else if (nemu_state.state == NEMU_ABORT) {
+    outcome_text = "异常终止";
+    outcome = PERFORMANCE_HTML_OUTCOME_ABORT;
+  }
+
+  PerformanceHtmlReport report = {
+    .label = getenv("NEMU_RUNTIME_LABEL"),
+#ifdef NPC_SOC
+    .mode = "NPC-SoC",
+#else
+    .mode = "NPC",
+#endif
+    .outcome_text = outcome_text,
+    .outcome = outcome,
+    .clock_mhz = npc_clock_mhz,
+    .cycles = cycles,
+    .commits = commits,
+    .host_time_us = g_timer,
+    .guest_instructions = g_nr_guest_inst,
+    .pipeline_features = npc_get_pipeline_features(),
+    .last_commit_valid = npc_last_instruction.valid,
+    .last_class = last_class_name,
+    .last_pc = npc_last_instruction.pc,
+    .last_instruction = npc_last_instruction.inst,
+    .last_interval = npc_last_instruction.valid
+        ? npc_last_instruction.cycles_after - npc_last_instruction.cycles_before : 0,
+    .last_commits_before = npc_last_instruction.commits_before,
+    .last_commits_after = npc_last_instruction.commits_after,
+    .timing_rows = rows,
+    .timing_row_count = NPC_TIMING_CLASS_COUNT,
+    .aggregate_row = NPC_TIMING_ALL,
+  };
+  for (uint32_t index = 0; index < NPC_PIPELINE_STALL_COUNT; index++) {
+    report.stalls[index] = npc_get_pipeline_stall_count(index);
+  }
+  for (uint32_t stage = 0; stage < NPC_TIMING_STAGE_COUNT; stage++) {
+    report.last_stage[stage] = npc_get_last_timing_stage_cycles(stage);
+  }
+
+  const char *directory = getenv("NEMU_RUNTIME_OUTPUT_DIR");
+  const char *base = directory == NULL || directory[0] == '\0' ? "." : directory;
+  size_t path_size = strlen(base) + sizeof("/performance.html");
+  char *path = malloc(path_size);
+  char *instructions_path = malloc(strlen(base) + sizeof("/instructions.html"));
+  char *pipeline_path = malloc(strlen(base) + sizeof("/pipeline.html"));
+  if (path == NULL || instructions_path == NULL || pipeline_path == NULL) {
+    fprintf(stderr, "无法分配 NEMU 性能 HTML 路径\n");
+    free(path);
+    free(instructions_path);
+    free(pipeline_path);
+    return;
+  }
+  snprintf(path, path_size, "%s/performance.html", base);
+  snprintf(instructions_path, strlen(base) + sizeof("/instructions.html"), "%s/instructions.html", base);
+  snprintf(pipeline_path, strlen(base) + sizeof("/pipeline.html"), "%s/pipeline.html", base);
+  report.instruction_html_available = access(instructions_path, R_OK) == 0;
+  report.pipeline_html_available = access(pipeline_path, R_OK) == 0;
+  free(instructions_path);
+  free(pipeline_path);
+
+  if (performance_html_write(path, &report) == 0) {
+    printf("NEMU 性能 HTML：%s\n", path);
+  } else {
+    fprintf(stderr, "写入 NEMU 性能 HTML 失败：%s（%s）\n", path, strerror(errno));
+  }
+  free(path);
+}
+#endif
 
 void npc_print_performance(void) {
   uint64_t cycles, commits;
@@ -512,6 +666,9 @@ static void exec_once(Decode *s, vaddr_t pc) {
       .inst = s->isa.inst,
       .valid = true,
     };
+#ifdef CONFIG_NPC_PERFORMANCE_HTML
+    npc_record_pipeline_html(s, commits_after, cycles_after);
+#endif
   }
 
 #ifdef CONFIG_NPC_DIFFTEST_NEMU
@@ -520,27 +677,101 @@ static void exec_once(Decode *s, vaddr_t pc) {
     Decode nemu_s;
     nemu_s.pc = pc;
     nemu_s.snpc = pc;
+    const uint32_t reference_inst = paddr_read(pc, 4);
+    const uint32_t reference_opcode = reference_inst & 0x7f;
+    const bool reference_is_store = reference_opcode == 0x23 || reference_opcode == 0x27;
+    uint64_t expected_store_address = 0;
+    uint64_t expected_store_data = 0;
+    uint32_t expected_store_strobe = 0;
+    uint32_t expected_store_word_bytes = sizeof(word_t);
+    bool compare_store = false;
+    if (reference_is_store) {
+      const uint32_t funct3 = BITS(reference_inst, 14, 12);
+      const uint32_t rs1 = BITS(reference_inst, 19, 15);
+      const uint32_t rs2 = BITS(reference_inst, 24, 20);
+      const int32_t immediate = ((int32_t)reference_inst >> 25 << 5) |
+        (int32_t)BITS(reference_inst, 11, 7);
+      const uint32_t access_bytes = 1u << (funct3 & 0x3);
+      const word_t store_address = cpu.gpr[rs1] + immediate;
+      const uint32_t byte_offset = store_address & (expected_store_word_bytes - 1);
+      const uint64_t value_mask = access_bytes == 8 ? UINT64_MAX :
+        ((UINT64_C(1) << (access_bytes * 8)) - 1);
+      const uint64_t source = reference_opcode == 0x27 ? cpu.fpr[rs2] : cpu.gpr[rs2];
+      expected_store_address = store_address & ~(uint64_t)(expected_store_word_bytes - 1);
+      expected_store_strobe = ((1u << access_bytes) - 1) << byte_offset;
+      expected_store_data = (source & value_mask) << (byte_offset * 8);
+      compare_store = in_pmem(store_address);
+    }
     isa_exec_once(&nemu_s);
     // cpu.gpr[] has been updated by isa_exec_once
 
-    // Collect ALL mismatches before printing anything
-    struct { const char *name; uint64_t nemu_val; uint64_t npc_val; } mm[33];
+    // Collect all architectural mismatches before printing anything. Floating
+    // state is essential here: otherwise an FPU error is only reported when a
+    // later compare or move instruction exposes it through a GPR.
+    struct { char name[12]; uint64_t nemu_val; uint64_t npc_val; } mm[71];
     int nm = 0;
     for (int i = 0; i < 32; i++) {
       uint64_t npc_val = npc_get_reg(i);
       if (cpu.gpr[i] != npc_val) {
-        mm[nm].name     = isa_reg_idx2str(i);
+        snprintf(mm[nm].name, sizeof(mm[nm].name), "%s", isa_reg_idx2str(i));
         mm[nm].nemu_val = cpu.gpr[i];
         mm[nm].npc_val  = npc_val;
         nm++;
       }
+    }
+#ifdef CONFIG_RISCV_F
+    for (int i = 0; i < 32; i++) {
+      uint64_t npc_val = npc_get_freg(i);
+      if ((uint64_t)cpu.fpr[i] != npc_val) {
+        snprintf(mm[nm].name, sizeof(mm[nm].name), "f%d", i);
+        mm[nm].nemu_val = cpu.fpr[i];
+        mm[nm].npc_val  = npc_val;
+        nm++;
+      }
+    }
+    uint32_t nemu_fcsr = ((cpu.frm & 0x7) << 5) | (cpu.fflags & 0x1f);
+    uint32_t npc_fcsr = npc_get_fcsr() & 0xff;
+    if (nemu_fcsr != npc_fcsr) {
+      snprintf(mm[nm].name, sizeof(mm[nm].name), "fcsr");
+      mm[nm].nemu_val = nemu_fcsr;
+      mm[nm].npc_val  = npc_fcsr;
+      nm++;
+    }
+#endif
+    if (compare_store) {
+      const uint64_t store_sequence = npc_get_last_store_sequence();
+      const uint64_t store_address = npc_get_last_store_address();
+      const uint64_t store_data = npc_get_last_store_data();
+      const uint32_t store_strobe = npc_get_last_store_strobe();
+      const uint32_t store_word_bytes = npc_get_last_store_word_bytes();
+      uint64_t store_data_mask = 0;
+      for (uint32_t lane = 0; lane < store_word_bytes && lane < 8; lane++) {
+        if (expected_store_strobe & (1u << lane)) {
+          store_data_mask |= UINT64_C(0xff) << (lane * 8);
+        }
+      }
+#define RECORD_STORE_MISMATCH(field, expected, actual) do { \
+        if ((uint64_t)(expected) != (uint64_t)(actual)) { \
+          snprintf(mm[nm].name, sizeof(mm[nm].name), "%s", (field)); \
+          mm[nm].nemu_val = (uint64_t)(expected); \
+          mm[nm].npc_val = (uint64_t)(actual); \
+          nm++; \
+        } \
+      } while (0)
+      RECORD_STORE_MISMATCH("store_seen", 1, store_sequence != 0);
+      RECORD_STORE_MISMATCH("store_addr", expected_store_address, store_address);
+      RECORD_STORE_MISMATCH("store_data", expected_store_data & store_data_mask,
+        store_data & store_data_mask);
+      RECORD_STORE_MISMATCH("store_strb", expected_store_strobe, store_strobe);
+      RECORD_STORE_MISMATCH("store_bytes", expected_store_word_bytes, store_word_bytes);
+#undef RECORD_STORE_MISMATCH
     }
     // ebreak terminates the test program. NEMU keeps dnpc at pc + 4 before
     // ending execution, while NPC treats it as a synchronous trap and exposes
     // mtvec as its committed next PC. Registers must still match.
     bool is_terminal_ebreak = s->isa.inst == 0x00100073;
     if (!is_terminal_ebreak && nemu_s.dnpc != s->dnpc) {
-      mm[nm].name     = "next_pc";
+      snprintf(mm[nm].name, sizeof(mm[nm].name), "next_pc");
       mm[nm].nemu_val = nemu_s.dnpc;
       mm[nm].npc_val  = s->dnpc;
       nm++;
@@ -713,6 +944,10 @@ static void execute_fpga_free_run(void) {
 
 static void statistic() {
   IFNDEF(CONFIG_TARGET_AM, setlocale(LC_NUMERIC, ""));
+#if defined(NPC) && defined(CONFIG_NPC_PERFORMANCE_HTML)
+  npc_finish_pipeline_html();
+  npc_finish_performance_html();
+#endif
 #define NUMBERIC_FMT MUXDEF(CONFIG_TARGET_AM, "%", "%'") PRIu64
   Log("host time spent = " NUMBERIC_FMT " us", g_timer);
   Log("total guest instructions = " NUMBERIC_FMT, g_nr_guest_inst);
@@ -735,7 +970,8 @@ void cpu_exec(uint64_t n) {
   IFDEF(CONFIG_NPC_DIFFTEST_NEMU,
     static bool npc_difftest_logged = false;
     if (!npc_difftest_logged) {
-      Log("NPC self-difftest: " ANSI_FMT("ON", ANSI_FG_GREEN) " (using NEMU software as reference)");
+    Log("NPC self-difftest: " ANSI_FMT("ON", ANSI_FG_GREEN)
+        " (NEMU reference: GPR/FPR/FCSR/next-PC/main-memory stores)");
       npc_difftest_logged = true;
     }
   );

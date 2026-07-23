@@ -18,10 +18,12 @@ object RiscvImmediateGenerator {
     MuxLookup(opcode, 0.U(width.W))(Seq(
       "b0010011".U -> iImm,
       "b0000011".U -> iImm,
+      "b0000111".U -> iImm,
       "b1100111".U -> iImm,
       "b1110011".U -> iImm,
       "b0011011".U -> iImm,
       "b0100011".U -> sImm,
+      "b0100111".U -> sImm,
       "b1100011".U -> bImm,
       "b0110111".U -> uImm,
       "b0010111".U -> uImm,

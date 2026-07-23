@@ -9,12 +9,11 @@ ifeq ($(FPGA_BUILD_REQUESTED),1)
   ifeq ($(strip $(config)),)
     $(error FPGA 内部构造缺少终端 config=<Config>)
   endif
-  FPGA_CATALOG_RESOLVED := $(call scpu_config_resolve,$(strip $(config)),fpga-npc$(comma)fpga-soc)
+  FPGA_CATALOG_RESOLVED := $(call scpu_config_resolve,$(strip $(config)),fpga)
   ifneq ($(call scpu_config_error,$(FPGA_CATALOG_RESOLVED)),)
     $(error $(patsubst !%,%,$(call scpu_config_error,$(FPGA_CATALOG_RESOLVED))))
   endif
   FPGA_SCALA_CONFIG := $(call scpu_config_field,1,$(FPGA_CATALOG_RESOLVED))
-  FPGA_CONFIG_SCOPE := $(call scpu_config_field,2,$(FPGA_CATALOG_RESOLVED))
   FPGA_CONFIG_NAME := $(call scpu_config_field,3,$(FPGA_CATALOG_RESOLVED))
   FPGA_CONFIG_TARGET := $(call scpu_config_field,4,$(FPGA_CATALOG_RESOLVED))
   FPGA_CONFIG_RESOLVED := $(FPGA_BOARDS_DIR)/$(FPGA_CONFIG_NAME)/config.mk
@@ -36,23 +35,9 @@ ifeq ($(FPGA_BUILD_REQUESTED),1)
       $(error FPGA 构造 profile 不存在：$(CONSTRUCTION_PROFILE))
     endif
 
-    # config.mk 只提供 Tcl/IP 文件布局的板卡基线。硬件 ABI 必须来自所选
-    # Scala Config 的 profile；两者重叠的板卡参数不一致时立即拒绝构造。
-    BOARD_CONFIG_FPGA_TYPE := $(FPGA_TYPE)
-    BOARD_CONFIG_FPGA_PART := $(FPGA_PART)
-    BOARD_CONFIG_FPGA_PLATFORM := $(FPGA_PLATFORM)
-    BOARD_CONFIG_FPGA_BOARD_PART := $(FPGA_BOARD_PART)
-    BOARD_CONFIG_FPGA_CLOCK_MHZ := $(FPGA_CLOCK_MHZ)
-    BOARD_CONFIG_FPGA_VIVADO_VERSION := $(FPGA_VIVADO_VERSION)
-    BOARD_CONFIG_FPGA_VITIS_VERSION := $(FPGA_VITIS_VERSION)
-    BOARD_CONFIG_FPGA_VITIS_TARGET := $(FPGA_VITIS_TARGET)
-    BOARD_CONFIG_FPGA_TIMING_WNS_MIN_NS := $(FPGA_TIMING_WNS_MIN_NS)
-    BOARD_CONFIG_FPGA_VIVADO_SYNTH_JOBS := $(FPGA_VIVADO_SYNTH_JOBS)
-    BOARD_CONFIG_FPGA_VIVADO_IMPL_JOBS := $(FPGA_VIVADO_IMPL_JOBS)
-    BOARD_CONFIG_FPGA_VIVADO_IMPL_STRATEGY := $(FPGA_VIVADO_IMPL_STRATEGY)
-    BOARD_CONFIG_FPGA_VIVADO_IMPL_STRATEGY_SEARCH := $(FPGA_VIVADO_IMPL_STRATEGY_SEARCH)
-    BOARD_CONFIG_FPGA_MEMORY_KIND := $(FPGA_MEMORY_KIND)
-    BOARD_CONFIG_FPGA_FLOATING_FALLBACK := $(FPGA_FLOATING_FALLBACK)
+    # config.mk 只提供 Tcl/IP 文件布局以及频率、地址和 IP 时序等独立硬件约束。
+    # device/flow/reports/runtime 完整来自终端 FpgaToolchainConfig 渲染的 profile。
+    BOARD_CONFIG_FPGA_ALLOWED_CLOCK_MHZ := $(FPGA_ALLOWED_CLOCK_MHZ)
     BOARD_CONFIG_FPGA_MEMORY_BASE := $(FPGA_MEMORY_BASE)
     BOARD_CONFIG_FPGA_MEMORY_HOST_BASE := $(FPGA_MEMORY_HOST_BASE)
     BOARD_CONFIG_FPGA_MEMORY_SIZE := $(FPGA_MEMORY_SIZE)
@@ -60,7 +45,6 @@ ifeq ($(FPGA_BUILD_REQUESTED),1)
     BOARD_CONFIG_FPGA_MAILBOX_BASE := $(FPGA_MAILBOX_BASE)
     BOARD_CONFIG_FPGA_DIV_IP_CYCLES := $(FPGA_DIV_IP_CYCLES)
     BOARD_CONFIG_FPGA_DIV_ADAPTER_CYCLES := $(FPGA_DIV_ADAPTER_CYCLES)
-    BOARD_CONFIG_FPGA_PL_GIC_SPI := $(or $(FPGA_PL_GIC_SPI),0)
 
     include $(CONSTRUCTION_PROFILE)
 
@@ -73,50 +57,11 @@ ifeq ($(FPGA_BUILD_REQUESTED),1)
     ifneq ($(TARGET),$(FPGA_CONFIG_TARGET))
       $(error profile 目标 $(TARGET) 与目录目标 $(FPGA_CONFIG_TARGET) 不一致)
     endif
-    ifneq ($(strip $(BOARD_CONFIG_FPGA_TYPE)),$(strip $(FPGA_TYPE)))
-      $(error Scala FPGA_TYPE=$(FPGA_TYPE) 与板卡 config.mk 的 $(BOARD_CONFIG_FPGA_TYPE) 不一致)
+    ifeq ($(strip $(BOARD_CONFIG_FPGA_ALLOWED_CLOCK_MHZ)),)
+      $(error 板卡 config.mk 必须定义 FPGA_ALLOWED_CLOCK_MHZ)
     endif
-    ifneq ($(strip $(BOARD_CONFIG_FPGA_PART)),$(strip $(FPGA_PART)))
-      $(error Scala FPGA_PART=$(FPGA_PART) 与板卡 config.mk 的 $(BOARD_CONFIG_FPGA_PART) 不一致)
-    endif
-    ifneq ($(strip $(BOARD_CONFIG_FPGA_PLATFORM)),$(strip $(FPGA_PLATFORM)))
-      $(error Scala FPGA_PLATFORM=$(FPGA_PLATFORM) 与板卡 config.mk 的 $(BOARD_CONFIG_FPGA_PLATFORM) 不一致)
-    endif
-    ifneq ($(strip $(BOARD_CONFIG_FPGA_BOARD_PART)),$(strip $(FPGA_BOARD_PART)))
-      $(error Scala FPGA_BOARD_PART=$(FPGA_BOARD_PART) 与板卡 config.mk 的 $(BOARD_CONFIG_FPGA_BOARD_PART) 不一致)
-    endif
-    ifneq ($(BOARD_CONFIG_FPGA_CLOCK_MHZ),$(FPGA_CLOCK_MHZ))
-      $(error Scala FPGA_CLOCK_MHZ=$(FPGA_CLOCK_MHZ) 与板卡 config.mk 的 $(BOARD_CONFIG_FPGA_CLOCK_MHZ) 不一致)
-    endif
-    ifneq ($(BOARD_CONFIG_FPGA_VIVADO_VERSION),$(FPGA_VIVADO_VERSION))
-      $(error Scala Vivado 版本 $(FPGA_VIVADO_VERSION) 与板卡 config.mk 的 $(BOARD_CONFIG_FPGA_VIVADO_VERSION) 不一致)
-    endif
-    ifneq ($(BOARD_CONFIG_FPGA_VITIS_VERSION),$(FPGA_VITIS_VERSION))
-      $(error Scala Vitis 版本 $(FPGA_VITIS_VERSION) 与板卡 config.mk 的 $(BOARD_CONFIG_FPGA_VITIS_VERSION) 不一致)
-    endif
-    ifneq ($(BOARD_CONFIG_FPGA_VITIS_TARGET),$(FPGA_VITIS_TARGET))
-      $(error Scala Vitis target $(FPGA_VITIS_TARGET) 与板卡 config.mk 的 $(BOARD_CONFIG_FPGA_VITIS_TARGET) 不一致)
-    endif
-    ifneq ($(BOARD_CONFIG_FPGA_TIMING_WNS_MIN_NS),$(FPGA_TIMING_WNS_MIN_NS))
-      $(error Scala WNS 下限 $(FPGA_TIMING_WNS_MIN_NS) 与板卡 config.mk 的 $(BOARD_CONFIG_FPGA_TIMING_WNS_MIN_NS) 不一致)
-    endif
-    ifneq ($(BOARD_CONFIG_FPGA_VIVADO_SYNTH_JOBS),$(FPGA_VIVADO_SYNTH_JOBS))
-      $(error Scala synth jobs $(FPGA_VIVADO_SYNTH_JOBS) 与板卡 config.mk 的 $(BOARD_CONFIG_FPGA_VIVADO_SYNTH_JOBS) 不一致)
-    endif
-    ifneq ($(BOARD_CONFIG_FPGA_VIVADO_IMPL_JOBS),$(FPGA_VIVADO_IMPL_JOBS))
-      $(error Scala impl jobs $(FPGA_VIVADO_IMPL_JOBS) 与板卡 config.mk 的 $(BOARD_CONFIG_FPGA_VIVADO_IMPL_JOBS) 不一致)
-    endif
-    ifneq ($(BOARD_CONFIG_FPGA_VIVADO_IMPL_STRATEGY),$(FPGA_VIVADO_IMPL_STRATEGY))
-      $(error Scala impl strategy $(FPGA_VIVADO_IMPL_STRATEGY) 与板卡 config.mk 的 $(BOARD_CONFIG_FPGA_VIVADO_IMPL_STRATEGY) 不一致)
-    endif
-    ifneq ($(BOARD_CONFIG_FPGA_VIVADO_IMPL_STRATEGY_SEARCH),$(FPGA_VIVADO_IMPL_STRATEGY_SEARCH))
-      $(error Scala impl strategy search $(FPGA_VIVADO_IMPL_STRATEGY_SEARCH) 与板卡 config.mk 的 $(BOARD_CONFIG_FPGA_VIVADO_IMPL_STRATEGY_SEARCH) 不一致)
-    endif
-    ifneq ($(BOARD_CONFIG_FPGA_MEMORY_KIND),$(FPGA_MEMORY_KIND))
-      $(error Scala memory kind $(FPGA_MEMORY_KIND) 与板卡 config.mk 的 $(BOARD_CONFIG_FPGA_MEMORY_KIND) 不一致)
-    endif
-    ifneq ($(BOARD_CONFIG_FPGA_FLOATING_FALLBACK),$(FPGA_FLOATING_FALLBACK))
-      $(error Scala 浮点回退策略 $(FPGA_FLOATING_FALLBACK) 与板卡 config.mk 的 $(BOARD_CONFIG_FPGA_FLOATING_FALLBACK) 不一致)
+    ifeq ($(filter $(FPGA_CLOCK_MHZ),$(BOARD_CONFIG_FPGA_ALLOWED_CLOCK_MHZ)),)
+      $(error Scala FPGA_CLOCK_MHZ=$(FPGA_CLOCK_MHZ) 不在板卡允许频率 $(BOARD_CONFIG_FPGA_ALLOWED_CLOCK_MHZ) 中)
     endif
     ifneq ($(call fpga_normalize_number,$(BOARD_CONFIG_FPGA_MEMORY_BASE)),$(call fpga_normalize_number,$(MEMORY_BASE)))
       $(error Scala memory base $(MEMORY_BASE) 与板卡 config.mk 的 $(BOARD_CONFIG_FPGA_MEMORY_BASE) 不一致)
@@ -139,10 +84,6 @@ ifeq ($(FPGA_BUILD_REQUESTED),1)
     ifneq ($(BOARD_CONFIG_FPGA_DIV_ADAPTER_CYCLES),$(FPGA_DIV_ADAPTER_CYCLES))
       $(error Scala divider adapter latency $(FPGA_DIV_ADAPTER_CYCLES) 与板卡 config.mk 的 $(BOARD_CONFIG_FPGA_DIV_ADAPTER_CYCLES) 不一致)
     endif
-    ifneq ($(BOARD_CONFIG_FPGA_PL_GIC_SPI),$(FPGA_PL_GIC_SPI))
-      $(error Scala GIC SPI $(FPGA_PL_GIC_SPI) 与板卡 config.mk 的 $(BOARD_CONFIG_FPGA_PL_GIC_SPI) 不一致)
-    endif
-
     override NPC_XLEN := $(XLEN)
     override NPC_F := $(F)
     override NPC_PIPELINE := $(PIPELINE)
@@ -176,7 +117,7 @@ ifeq ($(FPGA_BUILD_REQUESTED),1)
   endif
   FPGA_BOARD_DIR := $(FPGA_BOARDS_DIR)/$(FPGA_CONFIG_NAME)
 
-  override FPGA_SOC := $(if $(filter fpga-soc,$(FPGA_CONFIG_SCOPE)),ysyx,)
+  override FPGA_SOC := $(if $(filter SOC,$(FPGA_CONFIG_TARGET)),ysyx,)
   override NPC_TARGET := $(FPGA_CONFIG_TARGET)
   override NPC_ARITH_BACKEND := fpga
   FPGA_SOC_LABEL := $(if $(FPGA_SOC),ysyx,no-soc)

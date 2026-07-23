@@ -2,7 +2,7 @@ package scpu.protocol
 
 import chisel3._
 import chisel3.util._
-import scpu.ipdpishell.{DPIMem64, MMIO_Core}
+import scpu.ipdpishell.{DPIMem, MMIOCore}
 
 // ============================================================================
 //  AXI4-Lite / AXI4-Full 共享互连协议
@@ -438,105 +438,72 @@ class AxiLiteArbiter2(addrWidth: Int = 32, dataWidth: Int = 64) extends Module {
 //  十、AXI4-Lite DPI RAM 从设备（AxiLiteDpiRamSlave）
 // ============================================================================
 
-/** AXI4-Lite DPI 物理内存从设备
-  *
-  * 封装 DPIMem64 BlackBox，提供 AXI4-Lite 从设备接口。
-  * DPI-C 函数 pmem_read_64 / pmem_write_64 访问 NEMU 共享内存。
-  *
-  * 读事务：sIdle → sRResp（1 拍 DPI 读延迟）
-  * 写事务：sIdle → sWResp（AW+W 都收到后写入）
-  *
-  * 地址对齐由 DPI-C 侧完成（pmem_read_64 内部 addr & ~7）。
+/** AXI4-Lite DPI 物理内存从设备。
+  * 每笔事务直接映射为一个已对齐的 XLEN beat，DPI 端严格验证 4/8 字节范围。
   */
 class AxiLiteDpiRamSlave(addrWidth: Int = 32, dataWidth: Int = 64) extends Module {
+  require(dataWidth == 32 || dataWidth == 64, s"DPI RAM only supports 32/64-bit words, got $dataWidth")
+
   val io = IO(new Bundle {
     val axi = Flipped(new AxiLiteMasterIO(addrWidth, dataWidth))
   })
 
-  val dpiMem = Module(new DPIMem64)
+  val dpiMem = Module(new DPIMem(dataWidth))
   dpiMem.io.clk := clock
   dpiMem.io.rst := reset.asBool
 
-  // ── 状态定义 ──
   val sIdle :: sRResp :: sWResp :: Nil = Enum(3)
   val state = RegInit(sIdle)
-
-  // ── 写通道锁存 ──
   val awAddr = RegInit(0.U(addrWidth.W))
   val awDone = RegInit(false.B)
-  val wData  = RegInit(0.U(dataWidth.W))
-  val wStrb  = RegInit(0.U(8.W))
-  val wDone  = RegInit(false.B)
-  val readAddr = RegInit(0.U(addrWidth.W))
+  val wData = RegInit(0.U(dataWidth.W))
+  val wStrb = RegInit(0.U((dataWidth / 8).W))
+  val wDone = RegInit(false.B)
 
-  // DPIMem64 始终返回对齐的 64 位双字。RV32 请求通过地址位 2 选择其中一个
-  // 32 位字节通道。
-  val readData = if (dataWidth == 32) {
-    Mux(readAddr(2), dpiMem.io.dout(63, 32), dpiMem.io.dout(31, 0))
-  } else {
-    dpiMem.io.dout
-  }
-
-  // ── DPIMem64 默认值 ──
-  dpiMem.io.ren   := false.B
-  dpiMem.io.wen   := false.B
-  dpiMem.io.addr  := 0.U
-  dpiMem.io.din   := 0.U
+  dpiMem.io.ren := false.B
+  dpiMem.io.wen := false.B
+  dpiMem.io.addr := 0.U
+  dpiMem.io.din := 0.U
   dpiMem.io.wstrb := 0.U
 
-  // ── AXI 默认输出 ──
-  io.axi.ar.ready     := false.B
-  io.axi.aw.ready     := false.B
-  io.axi.w.ready      := false.B
-  io.axi.r.valid      := false.B
-  io.axi.r.bits.data  := readData
-  io.axi.r.bits.resp  := AxiLiteResp.OKAY
-  io.axi.b.valid      := false.B
-  io.axi.b.bits.resp  := AxiLiteResp.OKAY
+  io.axi.ar.ready := false.B
+  io.axi.aw.ready := false.B
+  io.axi.w.ready := false.B
+  io.axi.r.valid := false.B
+  io.axi.r.bits.data := dpiMem.io.dout
+  io.axi.r.bits.resp := AxiLiteResp.OKAY
+  io.axi.b.valid := false.B
+  io.axi.b.bits.resp := AxiLiteResp.OKAY
 
-  // ── 状态机 ──
   switch(state) {
     is(sIdle) {
-      // 读优先
       io.axi.ar.ready := true.B
       when(io.axi.ar.fire) {
-        dpiMem.io.ren  := true.B
+        dpiMem.io.ren := true.B
         dpiMem.io.addr := io.axi.ar.bits.addr
-        readAddr := io.axi.ar.bits.addr
         state := sRResp
       }.otherwise {
         io.axi.aw.ready := !awDone
-        io.axi.w.ready  := !wDone
+        io.axi.w.ready := !wDone
         when(io.axi.aw.fire) { awAddr := io.axi.aw.bits.addr; awDone := true.B }
-        when(io.axi.w.fire)  { wData  := io.axi.w.bits.data; wStrb := io.axi.w.bits.strb; wDone := true.B }
+        when(io.axi.w.fire) { wData := io.axi.w.bits.data; wStrb := io.axi.w.bits.strb; wDone := true.B }
         val awComplete = awDone || io.axi.aw.fire
-        val wComplete  = wDone  || io.axi.w.fire
+        val wComplete = wDone || io.axi.w.fire
         when(awComplete && wComplete) {
-          val writeAddr = Mux(io.axi.aw.fire, io.axi.aw.bits.addr, awAddr)
-          val writeData = Mux(io.axi.w.fire, io.axi.w.bits.data, wData)
-          val writeStrb = Mux(io.axi.w.fire, io.axi.w.bits.strb, wStrb)
-
-          dpiMem.io.wen  := true.B
-          dpiMem.io.addr := writeAddr
-          if (dataWidth == 32) {
-            dpiMem.io.din := Mux(writeAddr(2), Cat(writeData, 0.U(32.W)), Cat(0.U(32.W), writeData))
-            dpiMem.io.wstrb := Mux(writeAddr(2), Cat(writeStrb(3, 0), 0.U(4.W)), Cat(0.U(4.W), writeStrb(3, 0)))
-          } else {
-            dpiMem.io.din := writeData
-            dpiMem.io.wstrb := writeStrb
-          }
+          dpiMem.io.wen := true.B
+          dpiMem.io.addr := Mux(io.axi.aw.fire, io.axi.aw.bits.addr, awAddr)
+          dpiMem.io.din := Mux(io.axi.w.fire, io.axi.w.bits.data, wData)
+          dpiMem.io.wstrb := Mux(io.axi.w.fire, io.axi.w.bits.strb, wStrb)
           awDone := false.B
-          wDone  := false.B
-          state  := sWResp
+          wDone := false.B
+          state := sWResp
         }
       }
     }
-
     is(sRResp) {
       io.axi.r.valid := true.B
       when(io.axi.r.fire) { state := sIdle }
     }
-
     is(sWResp) {
       io.axi.b.valid := true.B
       when(io.axi.b.fire) { state := sIdle }
@@ -549,112 +516,83 @@ class AxiLiteDpiRamSlave(addrWidth: Int = 32, dataWidth: Int = 64) extends Modul
 //  十一、AXI4-Lite DPI MMIO 从设备（AxiLiteDpiMmioSlave）
 // ============================================================================
 
-/** AXI4-Lite DPI MMIO 从设备
-  *
-  * 封装 MMIO_Core BlackBox，提供 AXI4-Lite 从设备接口。
-  * DPI-C 函数 mmio_read_impl / mmio_write_impl。
-  *
-  * len 来源：
-  *   - 读事务：ARPROT[1:0]（LSU 编码的 accessType）→ 换算
-  *   - 写事务：PopCount(WSTRB) → 换算
-  *
-  * 数据对齐：
-  *   - 读：MMIO_Core 返回低字节数据，从设备左移到正确字节通道
-  *   - 写：AXI WDATA 位于正确字节通道，从设备右移到低字节后交给 MMIO_Core
+/** AXI4-Lite DPI MMIO 从设备。
+  * 保留原始地址和真实长度，完整总线字及字节掩码原样交给 DPI，避免读取相邻设备寄存器。
   */
 class AxiLiteDpiMmioSlave(addrWidth: Int = 32, dataWidth: Int = 64) extends Module {
+  require(dataWidth == 32 || dataWidth == 64, s"DPI MMIO only supports 32/64-bit words, got $dataWidth")
+
   val io = IO(new Bundle {
     val axi = Flipped(new AxiLiteMasterIO(addrWidth, dataWidth))
   })
 
-  val mmioCore = Module(new MMIO_Core())
+  val mmioCore = Module(new MMIOCore(dataWidth))
   mmioCore.io.clk := clock
   mmioCore.io.rst := reset.asBool
 
-  // ── 状态定义 ──
   val sIdle :: sRResp :: sWResp :: Nil = Enum(3)
   val state = RegInit(sIdle)
+  val awAddr = RegInit(0.U(addrWidth.W))
+  val awDone = RegInit(false.B)
+  val wData = RegInit(0.U(dataWidth.W))
+  val wStrb = RegInit(0.U((dataWidth / 8).W))
+  val wDone = RegInit(false.B)
 
-  // ── 锁存 ──
-  val addrReg = RegInit(0.U(addrWidth.W))
-  val awAddr  = RegInit(0.U(addrWidth.W))
-  val awDone  = RegInit(false.B)
-  val wData   = RegInit(0.U(dataWidth.W))
-  val wStrb   = RegInit(0.U(8.W))
-  val wDone   = RegInit(false.B)
-
-  // AXI size 编码 → 实际字节数
   def sizeToLen(size: UInt): UInt = MuxLookup(size, 1.U(5.W))(Seq(
     "b000".U -> 1.U, "b001".U -> 2.U, "b010".U -> 4.U, "b011".U -> 8.U
   ))
-
-  // PopCount(WSTRB) → len 换算
   def strbToLen(strb: UInt): UInt = MuxLookup(PopCount(strb), 1.U(5.W))(Seq(
-    1.U -> 1.U,  2.U -> 2.U,  4.U -> 4.U,  8.U -> 8.U
+    1.U -> 1.U, 2.U -> 2.U, 4.U -> 4.U, 8.U -> 8.U
   ))
 
-  // ── MMIO_Core 默认值 ──
-  mmioCore.io.re   := false.B
-  mmioCore.io.we   := false.B
+  mmioCore.io.re := false.B
+  mmioCore.io.we := false.B
   mmioCore.io.addr := 0.U
-  mmioCore.io.din  := 0.U
-  mmioCore.io.len  := 0.U
+  mmioCore.io.din := 0.U
+  mmioCore.io.strb := 0.U
+  mmioCore.io.len := 0.U
 
-  // ── AXI 默认输出 ──
-  io.axi.ar.ready     := false.B
-  io.axi.aw.ready     := false.B
-  io.axi.w.ready      := false.B
-  io.axi.r.valid      := false.B
-  io.axi.r.bits.data  := 0.U
-  io.axi.r.bits.resp  := AxiLiteResp.OKAY
-  io.axi.b.valid      := false.B
-  io.axi.b.bits.resp  := AxiLiteResp.OKAY
+  io.axi.ar.ready := false.B
+  io.axi.aw.ready := false.B
+  io.axi.w.ready := false.B
+  io.axi.r.valid := false.B
+  io.axi.r.bits.data := 0.U
+  io.axi.r.bits.resp := AxiLiteResp.OKAY
+  io.axi.b.valid := false.B
+  io.axi.b.bits.resp := AxiLiteResp.OKAY
 
-  // ── 状态机 ──
   switch(state) {
     is(sIdle) {
       io.axi.ar.ready := true.B
       when(io.axi.ar.fire) {
-        addrReg := io.axi.ar.bits.addr
-        // 发起 MMIO 读
-        mmioCore.io.re   := true.B
+        mmioCore.io.re := true.B
         mmioCore.io.addr := io.axi.ar.bits.addr
-        mmioCore.io.len  := sizeToLen(io.axi.ar.bits.size)
+        mmioCore.io.len := sizeToLen(io.axi.ar.bits.size)
         state := sRResp
       }.otherwise {
         io.axi.aw.ready := !awDone
-        io.axi.w.ready  := !wDone
+        io.axi.w.ready := !wDone
         when(io.axi.aw.fire) { awAddr := io.axi.aw.bits.addr; awDone := true.B }
-        when(io.axi.w.fire)  { wData  := io.axi.w.bits.data; wStrb := io.axi.w.bits.strb; wDone := true.B }
-
+        when(io.axi.w.fire) { wData := io.axi.w.bits.data; wStrb := io.axi.w.bits.strb; wDone := true.B }
         val awComplete = awDone || io.axi.aw.fire
-        val wComplete  = wDone  || io.axi.w.fire
+        val wComplete = wDone || io.axi.w.fire
         when(awComplete && wComplete) {
-          val finalAddr = Mux(io.axi.aw.fire, io.axi.aw.bits.addr, awAddr)
-          val finalData = Mux(io.axi.w.fire,  io.axi.w.bits.data,  wData)
-          val finalStrb = Mux(io.axi.w.fire,  io.axi.w.bits.strb,  wStrb)
-          // WDATA 位于字节通道位置，右移到低字节后交给 MMIO_Core
-          val byteOff     = finalAddr(2, 0)
-          val shiftedData = (finalData >> (byteOff << 3))(dataWidth - 1, 0)
-          mmioCore.io.we   := true.B
-          mmioCore.io.addr := finalAddr
-          mmioCore.io.din  := shiftedData
-          mmioCore.io.len  := strbToLen(finalStrb)
+          mmioCore.io.we := true.B
+          mmioCore.io.addr := Mux(io.axi.aw.fire, io.axi.aw.bits.addr, awAddr)
+          mmioCore.io.din := Mux(io.axi.w.fire, io.axi.w.bits.data, wData)
+          mmioCore.io.strb := Mux(io.axi.w.fire, io.axi.w.bits.strb, wStrb)
+          mmioCore.io.len := strbToLen(Mux(io.axi.w.fire, io.axi.w.bits.strb, wStrb))
           awDone := false.B
-          wDone  := false.B
-          state  := sWResp
+          wDone := false.B
+          state := sWResp
         }
       }
     }
-
     is(sRResp) {
-      // MMIO_Core dout 位于低字节，左移到正确字节通道
-      val byteOff = addrReg(2, 0)
-      io.axi.r.valid     := true.B
-      io.axi.r.bits.data := (mmioCore.io.dout << (byteOff << 3))(dataWidth - 1, 0)
+      io.axi.r.valid := true.B
+      io.axi.r.bits.data := mmioCore.io.dout
       when(io.axi.r.fire) { state := sIdle }
     }
-
     is(sWResp) {
       io.axi.b.valid := true.B
       when(io.axi.b.fire) { state := sIdle }

@@ -17,10 +17,12 @@ object ConstructionProfile {
 
   def values(
     entry: ConfigCatalog.Entry,
-    capability: String,
+    host: HostConstructionConfig,
     config: NpcConfig,
     extra: Seq[(String, String)] = Seq.empty
   ): Seq[(String, String)] = {
+    val capability = host.capability
+    val settings = host.nemuConfig
     val mulDiv = config.operators.mulDiv
     val floating = config.operators.floating
     val isaExtensions = Seq(
@@ -28,23 +30,48 @@ object ConstructionProfile {
       Option.when(config.isa.F)("f"),
       Option.when(config.isa.Zicsr)("_zicsr")
     ).flatten.mkString
-    val hostAbi = capability match {
-      case "verilator-npc" | "verilator-soc" | "fpga-npc" | "fpga-soc" => "nemu-construction-v1"
-      case _ => "none"
+    require(capability == "run", s"终端 Config ${entry.className} 必须是可运行的 NEMU Config")
+    val hostAbi = "nemu-construction-v1"
+    val expectedBackend = (entry.scope, entry.board) match {
+      case ("npc" | "soc", _) => Some("local")
+      case ("fpga", Some("u55c")) => Some("u55c")
+      case ("fpga", Some("zcu102")) => Some("zcu102")
+      case ("fpga", _) => throw new IllegalArgumentException(
+        s"FPGA Config ${entry.className} 未声明受支持的板卡"
+      )
+      case _ => None
     }
-    val protocolAbi = capability match {
-      case "verilator-npc" => "npc-dpi-v1"
-      case "verilator-soc" => "ysyx-dpi-v1"
-      case "fpga-npc" | "fpga-soc" => "npc-fpga-mailbox-v2"
-      case _ => "none"
+    for {
+      expected <- expectedBackend
+      actual = settings.backend.id
+    } require(actual == expected,
+      s"Config ${entry.className} 的 NEMU host=$actual 与 $entry 作用域/板卡要求的 $expected 不兼容")
+    val protocolAbi = entry.scope match {
+      case "npc" => "npc-dpi-v1"
+      case "soc" => "ysyx-dpi-v1"
+      case "fpga" => "npc-fpga-mailbox-v3"
+      case scope => throw new IllegalArgumentException(s"未知终端作用域：$scope")
     }
     val base = Seq(
-      "PROFILE_FORMAT" -> "2",
+      "PROFILE_FORMAT" -> "10",
       "CONFIG_SHORT_NAME" -> entry.shortName,
       "CONFIG_FQCN" -> entry.className,
       "SCOPE" -> entry.scope,
       "CAPABILITY" -> capability,
       "HOST_ABI" -> hostAbi,
+      "NEMU_PRESET" -> host.nemuPreset,
+      "NEMU_BACKEND" -> settings.backend.id,
+      "NEMU_TRACE" -> bit(settings.trace),
+      "NEMU_WATCHPOINT" -> bit(settings.watchpoint),
+      "NEMU_VCD" -> bit(settings.vcd),
+      "NEMU_PERFORMANCE_HTML" -> bit(settings.performanceHtml),
+      "NEMU_PIPELINE_HTML" -> bit(settings.pipelineHtml),
+      "NEMU_NPC_DIFFTEST" -> bit(settings.softwareDifftest),
+      "NEMU_DEVICES" -> bit(settings.devices),
+      "NEMU_OPTIMIZATION" -> settings.optimization,
+      "NEMU_DEBUG" -> bit(settings.debug),
+      "NEMU_LTO" -> bit(settings.lto),
+      "NEMU_ASAN" -> bit(settings.asan),
       "PROTOCOL_ABI" -> protocolAbi,
       "TARGET" -> entry.target,
       "XLEN" -> config.isa.xlen.toString,
@@ -84,7 +111,7 @@ object ConstructionProfile {
       "AXI_ID_WIDTH" -> config.axi.idWidth.toString,
       "AXI_EXTERNAL" -> bit(config.axi.useExternalMaster)
     )
-    val all = (base ++ extra).map { case (key, value) => safe(key, value) }
+    val all = (base ++ config.operators.routes.profileValues(config.isa) ++ extra).map { case (key, value) => safe(key, value) }
     val duplicates = all.groupBy(_._1).collect { case (key, values) if values.size > 1 => key }
     require(duplicates.isEmpty, s"profile 含重复字段：${duplicates.toSeq.sorted.mkString(", ")}")
     all
@@ -100,9 +127,9 @@ object ConstructionProfile {
 /** 为 L1 NPC Config 生成规范化 profile。 */
 object DescribeNpcConfig extends App {
   require(args.length == 1, "用法：scpu.DescribeNpcConfig <profile.env>")
-  val (entry, construction) = NpcConfigResolver.resolve("")
+  val (entry, construction) = ConfigResolver.resolve("")
   ConstructionProfile.write(
     Path.of(args(0)),
-    ConstructionProfile.values(entry, construction.capability, construction.config)
+    ConstructionProfile.values(entry, construction, construction.config)
   )
 }

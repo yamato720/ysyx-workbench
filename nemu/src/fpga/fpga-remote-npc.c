@@ -138,6 +138,7 @@ uint64_t npc_debug_stop_pc(void) {
 }
 
 void npc_init(void) {
+  nemu_fpga_fallback_summary_reset();
   runtime_interactive = !sdb_is_batch_mode();
   const uint64_t timeout = parse_environment_u64("NEMU_FPGA_DEBUG_TIMEOUT_MS", 5000);
   if (timeout == 0 || timeout > UINT32_MAX) {
@@ -209,10 +210,10 @@ void npc_init(void) {
     debug_capabilities = read32(NEMU_FPGA_DEBUG_CAPABILITIES);
     const uint32_t required = NEMU_FPGA_DEBUG_CAP_HALT_STEP |
         NEMU_FPGA_DEBUG_CAP_TARGET_MEMORY | NEMU_FPGA_DEBUG_CAP_CSR_SNAPSHOT;
-    if (protocol != NEMU_FPGA_DEBUG_PROTOCOL_V2 ||
+    if (protocol != NEMU_FPGA_DEBUG_PROTOCOL_V3 ||
         (debug_capabilities & required) != required) {
       fprintf(stderr,
-              "interactive FPGA debugging requires a v2 bitstream/xclbin; rebuild the selected FPGA artifact\n");
+              "interactive FPGA debugging requires a v3 bitstream/xclbin; rebuild the selected FPGA artifact\n");
       exit(EXIT_FAILURE);
     }
     debug_sequence = read32(NEMU_FPGA_DEBUG_COMPLETED_SEQUENCE);
@@ -271,7 +272,18 @@ int npc_step_cycle(void) {
                                   NEMU_FPGA_RT_COMMIT_COUNT_HIGH);
   const bool changed = commits != observed_commits;
   observed_commits = commits;
-  if (!changed) sched_yield();
+  if (!changed) {
+#ifdef CONFIG_FPGA_BACKEND_ZCU102
+    if (nemu_fpga_zcu102_uio_wait_interrupt(&zcu102, 1) < 0) {
+      fprintf(stderr, "ZCU102 UIO interrupt wait failed: %s\n", strerror(errno));
+      runtime_failed = true;
+      return 0;
+    }
+#else
+    /* XRT 当前没有可由宿主消费的 IRQ 文件描述符，保留显式轮询。 */
+    sched_yield();
+#endif
+  }
   return changed;
 }
 
@@ -396,6 +408,7 @@ void npc_display_mem_access(void) { puts("FPGA memory accesses are handled in lo
 void npc_cleanup(void) {
   if (runtime_interactive && runtime_started && !runtime_failed && !debug_is_halted())
     (void)npc_debug_halt();
+  nemu_fpga_fallback_summary_print();
 #ifdef CONFIG_FPGA_BACKEND_ZCU102
   nemu_fpga_zcu102_uio_close(&zcu102);
 #elif defined(CONFIG_FPGA_BACKEND_U55C)
