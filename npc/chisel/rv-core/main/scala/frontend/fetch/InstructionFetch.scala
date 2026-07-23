@@ -2,7 +2,8 @@ package scpu
 
 import chisel3._
 import chisel3.util._
-import scpu.protocol.{AxiLiteMasterIO, MemoryFault, MemoryFaultReason}
+import npc.ip.memory.{MemoryFault, MemoryFaultReason}
+import scpu.protocol.AxiLiteMasterIO
 
 /** 带单项响应缓冲的 IF 阶段 AXI 读主机。 */
 class IFetchAXIAdapter(addrWidth: Int = 32, dataWidth: Int = 64) extends Module {

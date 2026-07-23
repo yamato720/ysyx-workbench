@@ -2,7 +2,7 @@ package scpu.protocol
 
 import chisel3._
 import chisel3.util._
-import scpu.ipdpishell.{DPIMem, MMIOCore}
+import npc.ip.memory.{DpiMemory, DpiMmio}
 
 // ============================================================================
 //  AXI4-Lite / AXI4-Full 共享互连协议
@@ -448,7 +448,7 @@ class AxiLiteDpiRamSlave(addrWidth: Int = 32, dataWidth: Int = 64) extends Modul
     val axi = Flipped(new AxiLiteMasterIO(addrWidth, dataWidth))
   })
 
-  val dpiMem = Module(new DPIMem(dataWidth))
+  val dpiMem = Module(new DpiMemory(dataWidth))
   dpiMem.io.clk := clock
   dpiMem.io.rst := reset.asBool
 
@@ -526,7 +526,7 @@ class AxiLiteDpiMmioSlave(addrWidth: Int = 32, dataWidth: Int = 64) extends Modu
     val axi = Flipped(new AxiLiteMasterIO(addrWidth, dataWidth))
   })
 
-  val mmioCore = Module(new MMIOCore(dataWidth))
+  val mmioCore = Module(new DpiMmio(dataWidth))
   mmioCore.io.clk := clock
   mmioCore.io.rst := reset.asBool
 

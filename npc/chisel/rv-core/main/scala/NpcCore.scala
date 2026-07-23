@@ -2,7 +2,7 @@ package scpu
 
 import chisel3._
 import chisel3.util._
-import scpu.ipdpishell.MemoryFaultDpi
+import npc.ip.memory.{DpiMemoryFaultSink, MemoryFault}
 import scpu.protocol._
 
 /**
@@ -77,7 +77,7 @@ class NpcCore(
     backend.io.memoryFault.reason, frontend.io.memoryFault.reason)
 
   if (!axiConfig.useExternalMaster) {
-    val faultDpi = Module(new MemoryFaultDpi)
+    val faultDpi = Module(new DpiMemoryFaultSink)
     faultDpi.io.clk := clock
     faultDpi.io.rst := reset.asBool
     faultDpi.io.valid := io.memoryFault.valid

@@ -10,24 +10,6 @@ object ArithmeticAssistAbi {
   val fallbackReasonWidth = 3
 }
 
-/** 访存器向平台报告的不可恢复访问故障。地址和长度均为指令语义，而非 AXI beat。 */
-class MemoryFault(addrWidth: Int) extends Bundle {
-  val valid = Bool()
-  val addr = UInt(addrWidth.W)
-  val write = Bool()
-  val len = UInt(4.W)
-  val reason = UInt(3.W)
-}
-
-object MemoryFaultReason {
-  val misaligned = 0.U(3.W)
-  val crossBeat = 1.U(3.W)
-  val readResponse = 2.U(3.W)
-  val writeResponse = 3.U(3.W)
-  val dpiOutOfRange = 4.U(3.W)
-  val dpiInvalidRequest = 5.U(3.W)
-}
-
 /** 平台为无法在核内完成的标量算术提供的请求。该协议不绑定 FPGA、DPI 或总线实现。 */
 class ArithmeticAssistRequest(width: Int) extends Bundle {
   val sequence = UInt(32.W)

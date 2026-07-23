@@ -3,6 +3,7 @@ package scpu
 import chisel3._
 import chisel3.util._
 import npc.ip.arithmetic.ArithmeticResponse
+import npc.ip.memory.MemoryFault
 import scpu.protocol._
 
 /** 供流水算术端点接受的一条操作所使用的按序退休槽。

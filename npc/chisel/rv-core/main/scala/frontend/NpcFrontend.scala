@@ -1,5 +1,7 @@
 package scpu
 
+import npc.ip.memory.MemoryFault
+
 import chisel3._
 import chisel3.util._
 import scpu.protocol._

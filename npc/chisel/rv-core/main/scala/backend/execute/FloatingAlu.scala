@@ -118,10 +118,24 @@ class FloatingAlu(
   private def hasTarget(group: Seq[(ArithmeticRouteOperation, NpcAluOp.Floating.Type)], target: OperatorRouteTarget): Boolean =
     group.exists { case (operation, _) => routes.route(operation).target == target }
 
+  private def endpointName(moduleName: String): String = moduleName match {
+    case "npc_fp_addsub_adapter" => "FloatingAddSubOperator"
+    case "npc_fp_multiplier_adapter" => "FloatingMultiplierOperator"
+    case "npc_fp_divider_adapter" => "FloatingDividerOperator"
+    case "npc_fp_fma_adapter" => "FloatingFmaOperator"
+    case "npc_fp_sqrt_adapter" => "FloatingSqrtOperator"
+    case "npc_fp_convert_adapter" => "FloatingConvertOperator"
+    case "npc_fp_compare_adapter" => "FloatingCompareOperator"
+    case other => throw new IllegalArgumentException(s"未知浮点 adapter：$other")
+  }
+
   private def specFor(target: OperatorRouteTarget, moduleName: String): ArithmeticEndpointSpec = target match {
-    case OperatorRouteTarget.Model => ArithmeticEndpointSpec(ArithmeticEndpointImplementation.SoftFloatDpi)
-    case OperatorRouteTarget.VendorIp => ArithmeticEndpointSpec(ArithmeticEndpointImplementation.External, moduleName)
-    case OperatorRouteTarget.DirectLogic => ArithmeticEndpointSpec(ArithmeticEndpointImplementation.FloatingDirect)
+    case OperatorRouteTarget.Model => ArithmeticEndpointSpec(ArithmeticEndpointImplementation.SoftFloatDpi,
+      endpointName = endpointName(moduleName))
+    case OperatorRouteTarget.VendorIp => ArithmeticEndpointSpec(ArithmeticEndpointImplementation.External,
+      moduleName, endpointName(moduleName))
+    case OperatorRouteTarget.DirectLogic => ArithmeticEndpointSpec(ArithmeticEndpointImplementation.FloatingDirect,
+      endpointName = endpointName(moduleName))
     case other => throw new IllegalArgumentException(s"浮点端点不能直接选择 $other")
   }
 
@@ -129,8 +143,10 @@ class FloatingAlu(
     routeGroups.map { case (group, timing, moduleName) =>
       val endpoint = provider.makeFloating(width, config.tagWidth, timing,
         config.implementation.backend match {
-          case ComputeBackend.IP => ArithmeticEndpointSpec(ArithmeticEndpointImplementation.External, moduleName)
-          case _ => ArithmeticEndpointSpec(ArithmeticEndpointImplementation.SoftFloatDpi)
+          case ComputeBackend.IP => ArithmeticEndpointSpec(ArithmeticEndpointImplementation.External, moduleName,
+            endpointName(moduleName))
+          case _ => ArithmeticEndpointSpec(ArithmeticEndpointImplementation.SoftFloatDpi,
+            endpointName = endpointName(moduleName))
         })
       endpoint -> group.map(_._2).map(code => io.req.bits.aluOp === code.asUInt).reduce(_ || _)
     }

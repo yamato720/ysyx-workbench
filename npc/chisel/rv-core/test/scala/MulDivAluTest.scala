@@ -11,9 +11,13 @@ class MulDivAluTest extends AnyFlatSpec {
     val floating = _root_.circt.stage.ChiselStage.emitCHIRRTL(new FloatingAlu(64))
 
     assert(mulDiv.contains("module MulDivAlu"))
+    assert(mulDiv.contains("module IntegerMultiplierOperator"))
+    assert(mulDiv.contains("module IntegerDividerOperator"))
     assert(mulDiv.contains("module IntegerMultiplierModel"))
     assert(mulDiv.contains("module IntegerDividerModel"))
     assert(floating.contains("module FloatingAlu"))
+    assert(floating.contains("module FloatingFmaOperator"))
+    assert(floating.contains("module FloatingCompareOperator"))
     assert(floating.contains("module FloatingDpiOperator"))
   }
 

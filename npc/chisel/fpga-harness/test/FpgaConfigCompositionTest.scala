@@ -204,4 +204,9 @@ class FpgaConfigCompositionTest extends AnyFlatSpec {
       assert(terminal.fpgaToolchainConfig == FpgaToolchainConfig.Zcu102Base)
     }
   }
+
+  it should "select the board-specific arithmetic provider without changing routes" in {
+    assert(FpgaCoreComponents.forBoard(FpgaBoard.U55c).arithmeticIp.name == "xilinx-u55c")
+    assert(FpgaCoreComponents.forBoard(FpgaBoard.Zcu102).arithmeticIp.name == "xilinx-zcu102")
+  }
 }

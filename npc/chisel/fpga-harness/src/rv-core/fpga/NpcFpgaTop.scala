@@ -15,7 +15,7 @@ class NpcFpgaSystem(implicit parameters: Parameters) extends Module {
 
   val mailbox = Module(new FpgaFallbackMailbox(width))
   val core = withReset(reset.asBool || mailbox.io.coreReset) {
-    Module(new NpcCore(config, FpgaCoreComponents))
+    Module(new NpcCore(config, FpgaCoreComponents.forBoard(FpgaConfigParameters.platform.board)))
   }
   core.io.interrupt := io.interrupt
   io.master <> core.io.master
