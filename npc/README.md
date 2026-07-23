@@ -3,6 +3,10 @@
 NPC 使用命名 Scala Config 固定硬件 ABI、运行宿主和 FPGA 实现策略。Make 不再接受结构参数覆盖，
 也不再维护四位快照；一个完整 Config 在 `constructions/<FQCN>/` 中只保留一份成功构造。
 
+稳定 IP 契约、厂商无关逻辑和仿真模型位于独立的 `chisel/ip/` SBT/Mill 模块。该模块只依赖 Chisel；
+rv-core 保留 ISA 译码与操作码映射，ysyxSoC 保留 Diplomacy node 和地址映射，FPGA harness 只绑定板卡
+provider 与厂商资产。
+
 `config=` 只选择硬件终端，不选择 NEMU、DPI 或 Verilator 模式。除只供 Scala/RTL 测试使用的
 `check-only` Config 外，每个可选择终端都绑定一套保存的 NEMU 运行宿主；本地仿真的 DPI 只是该宿主
 连接 Verilator 模型的内部桥接。
@@ -64,6 +68,9 @@ FPGA 的 `build=1` 只允许首次构造；`rebuild=1` 强制在临时目录完�
 C/C++ 和 menuconfig 增量依赖只在 `host-build` 或 `host-rebuild=1` 时运行，并原子替换
 保存 profile 的 `NEMU_*` 段与 `abi/nemu/`；当前终端的硬件和 `FpgaToolchainConfig` 变化不会被吸收。
 Chisel、生成 RTL、Verilator ABI、`npc/csrc` glue 与 FPGA 文件仍只由 `rebuild=1` 更新。
+每次 elaboration 同时生成 `ip-sources.manifest`。其中 `RTL=` 是工具实际编译的源，`MODEL=` 记录已嵌入
+生成 RTL 的仿真模型；FPGA 另生成 `synthesis-sources.manifest`，只允许 `RTL=` 和 `XCI=`。构造冻结按该
+清单复制源文件，不再递归保存整个 `ysyxSoC/perip/`。
 
 ## 构造目录
 
@@ -163,7 +170,8 @@ NPC/SoC 目标精确匹配的 `LocalNpcTerminal`、`LocalSocTerminal`、`U55cNpc
 `Configs.scala` 均一步挂载，不重复展开配方。显式自定义终端仍可在保持 scope、target 与板卡匹配的
 前提下重载配方。profile 据此渲染保存的 `host.defconfig` 和现有
 `FPGA_*` 字段。Chisel
-elaboration 生成按模块拆分的 SystemVerilog，Verilator 或 Vivado/Vitis 消费同一份 RTL 与 profile。
+elaboration 生成按模块拆分的 SystemVerilog 和显式 IP source manifest；Verilator 或 Vivado/Vitis 只消费
+清单列出的 RTL/XCI 与同一份 profile。综合清单会硬拒绝 DPI、NEMU MMIO 和其他仅仿真模型。
 运行时 AM 只编译测试镜像，并直接执行冻结的 host、xclbin 或 ZCU102 环境清单。
 
 ## 验证

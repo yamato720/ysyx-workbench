@@ -3,6 +3,12 @@
 obj_dir := ./intermediate
 CHISEL_OUT := ./generated
 CHISEL_DPI_OUT := ./generated-dpi
+IP_SOURCE_MANIFEST_TOOL := ./scripts/ip-source-manifest.sh
+IP_SIMULATION_MODELS := ./chisel/ip/sources/simulation-models.list
+IP_PERIPHERAL_MODELS := ./chisel/ip/sources/peripheral-models.list
+SOC_SIMULATION_RTL_LIST := ./chisel/ysyxSoC/sources/simulation-rtl.list
+CHISEL_SOURCE_MANIFEST := $(CHISEL_OUT)/ip-sources.manifest
+CHISEL_DPI_SOURCE_MANIFEST := $(CHISEL_DPI_OUT)/ip-sources.manifest
 include ./config-catalog.mk
 include ./fpga/config-select.mk
 
@@ -157,12 +163,14 @@ FORCE:
 
 SOC_SIM_DIR := ./chisel/ysyxSoC/build-sim
 SOC_SIM_VERILOG := $(SOC_SIM_DIR)/ysyxSoCFull.v
+SOC_SOURCE_MANIFEST := $(SOC_SIM_DIR)/ip-sources.manifest
 SOC_PERIP_ROOT := ./chisel/ysyxSoC/perip
 SOC_IP_PERIP_ROOT := ./chisel/ip/src/main/resources/npc/ip/peripheral
-SOC_PERIP_V := $(shell find $(SOC_PERIP_ROOT) -name "*.v")
-SOC_IP_PERIP_V := $(shell find $(SOC_IP_PERIP_ROOT) -name "*.v")
+SOC_PERIP_V := $(shell awk 'NF && index($$1, "#") != 1' $(SOC_SIMULATION_RTL_LIST))
+SOC_IP_PERIP_V := $(shell awk 'NF && index($$1, "#") != 1' $(IP_SIMULATION_MODELS) $(IP_PERIPHERAL_MODELS))
 SOC_NEMU_STAMP := $(obj_dir)/soc-nemu-lib/.build-stamp
 SOC_NEMU_INPUTS := $(SOC_SIM_VERILOG) $(SOC_PERIP_V) $(SOC_IP_PERIP_V) \
+	$(IP_SOURCE_MANIFEST_TOOL) $(IP_SIMULATION_MODELS) $(IP_PERIPHERAL_MODELS) $(SOC_SIMULATION_RTL_LIST) \
 	./csrc/npc_core.cpp ./csrc/npc_core.h ./csrc/npc_debug.h ./csrc/pmem.cpp ./csrc/soc_dpi.cpp ./csrc/fp_dpi.cpp $(SOFTFLOAT_LIB) Makefile
 
 .PHONY: softfloat-lib fp-dpi-test FORCE
@@ -197,6 +205,8 @@ $(CHISEL_STAMP): FORCE
 	echo '=== Generating Verilog from Chisel ==='; \
 	rm -rf "$(CHISEL_OUT)"; \
 	cd "$(CURDIR)" && NPC_SCALA_CONFIG="$(NPC_STANDALONE_SCALA_CONFIG)" sbt $(call NPC_BUILD_PROPS_WITH_CONFIG,$(NPC_STANDALONE_SCALA_CONFIG)) "root/runMain scpu.Elaborate"; \
+	"$(IP_SOURCE_MANIFEST_TOOL)" write simulation "$(CHISEL_SOURCE_MANIFEST)" "$(CURDIR)" \
+		--rtl "$(CHISEL_OUT)/CPU.sv" --model-list "$(IP_SIMULATION_MODELS)"; \
 	test -f "$(CHISEL_OUT)/CPU.sv"; touch "$@"
 
 $(CHISEL_DPI_STAMP): FORCE
@@ -205,6 +215,8 @@ $(CHISEL_DPI_STAMP): FORCE
 	echo '=== Generating NEMU Verilog from Chisel ==='; \
 	rm -rf "$(CHISEL_DPI_OUT)"; \
 	cd "$(CURDIR)" && NPC_SCALA_CONFIG="$(NPC_SIMULATION_SCALA_CONFIG)" sbt $(call NPC_BUILD_PROPS_WITH_CONFIG,$(NPC_SIMULATION_SCALA_CONFIG)) "root/runMain scpu.ElaborateDPI"; \
+	"$(IP_SOURCE_MANIFEST_TOOL)" write simulation "$(CHISEL_DPI_SOURCE_MANIFEST)" "$(CURDIR)" \
+		--rtl "$(CHISEL_DPI_OUT)/CPU.sv" --model-list "$(IP_SIMULATION_MODELS)"; \
 	test -f "$(CHISEL_DPI_OUT)/CPU.sv"; touch "$@"
 
 chisel: $(CHISEL_STAMP)
@@ -232,6 +244,7 @@ chisel-cpu: chisel-dpi softfloat-lib
 	@rm -rf $(obj_dir)/chisel-cpu
 	@mkdir -p $(obj_dir)/chisel-cpu
 	@mkdir -p ./out/chisel-cpu
+	@set -e; rtl_sources=$$("$(IP_SOURCE_MANIFEST_TOOL)" list "$(CHISEL_DPI_SOURCE_MANIFEST)" "$(CURDIR)" rtl); \
 	verilator -Wall --sv --cc --exe --build -j $(shell nproc) \
 		--trace \
 		--top-module CPU \
@@ -241,7 +254,7 @@ chisel-cpu: chisel-dpi softfloat-lib
 		-LDFLAGS "-ldl $(SOFTFLOAT_LIB_ABS)" \
 		-Mdir $(obj_dir)/chisel-cpu \
 		-I$(CHISEL_DPI_OUT) \
-		$(CHISEL_DPI_OUT)/CPU.sv $(NPC_IP_RTL) ./csrc/npc_main.cpp ./csrc/npc_core.cpp ./csrc/pmem.cpp ./csrc/fp_dpi.cpp
+		$$rtl_sources $(NPC_IP_RTL) ./csrc/npc_main.cpp ./csrc/npc_core.cpp ./csrc/pmem.cpp ./csrc/fp_dpi.cpp
 	@mv $(obj_dir)/chisel-cpu/VCPU ./out/chisel-cpu/npc-exec
 	@echo "Built: ./out/chisel-cpu/npc-exec"
 
@@ -253,13 +266,14 @@ $(NPC_NEMU_STAMP): $(NPC_NEMU_PREREQUISITES) FORCE
 	mkdir -p "$(dir $@)"; \
 	echo "=== Building Chisel CPU library for NEMU (VCD=$(NPC_VCD_TRACE_ENABLED)) ==="; \
 		rm -rf "$(obj_dir)/chisel-cpu-lib"; mkdir -p "$(obj_dir)/chisel-cpu-lib" ./out/chisel-cpu-lib; \
+		rtl_sources=$$("$(IP_SOURCE_MANIFEST_TOOL)" list "$(CHISEL_DPI_SOURCE_MANIFEST)" "$(CURDIR)" rtl); \
 		verilator -Wall --sv --cc -j $(shell nproc) $(NPC_VCD_VERILATOR_FLAGS) \
 			--top-module CPU \
 			-Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-CASEINCOMPLETE -Wno-WIDTH \
 			-Wno-UNOPTFLAT -Wno-LATCH -Wno-DECLFILENAME -Wno-PINCONNECTEMPTY \
 			-CFLAGS "-I$(CURDIR)/csrc -fPIC $(NPC_VCD_CFLAGS) -DNPC_XLEN=$(NPC_XLEN)" \
 			-Mdir "$(obj_dir)/chisel-cpu-lib" -I"$(CHISEL_DPI_OUT)" \
-			"$(CHISEL_DPI_OUT)/CPU.sv" $(NPC_IP_RTL); \
+			$$rtl_sources $(NPC_IP_RTL); \
 		if $(MAKE) -C "$(obj_dir)/chisel-cpu-lib" -f VCPU.mk -n VCPU__ALL.o >/dev/null 2>&1; then \
 			$(MAKE) -C "$(obj_dir)/chisel-cpu-lib" -f VCPU.mk VCPU__ALL.o; \
 		else \
@@ -346,7 +360,8 @@ $(SOC_NEMU_STAMP): FORCE $(SOC_NEMU_INPUTS)
 	@echo "=== Building ysyxSoC Verilator library for NEMU ==="
 	@rm -rf $(obj_dir)/soc-nemu-lib
 	@mkdir -p $(obj_dir)/soc-nemu-lib
-	@verilator -Wall -Wno-fatal --quiet --quiet-stats --sv --cc --no-timing -j $(shell nproc) $(NPC_VCD_VERILATOR_FLAGS) \
+	@set -e; rtl_sources=$$("$(IP_SOURCE_MANIFEST_TOOL)" list "$(SOC_SOURCE_MANIFEST)" "$(CURDIR)" rtl); \
+	verilator -Wall -Wno-fatal --quiet --quiet-stats --sv --cc --no-timing -j $(shell nproc) $(NPC_VCD_VERILATOR_FLAGS) \
 		--top-module ysyxSoCTop \
 		-I$(SOC_PERIP_ROOT)/uart16550/rtl \
 		-I$(SOC_PERIP_ROOT)/spi/rtl \
@@ -357,7 +372,7 @@ $(SOC_NEMU_STAMP): FORCE $(SOC_NEMU_INPUTS)
 		-Wno-TIMESCALEMOD -Wno-ASSIGNDLY -Wno-UNDRIVEN -Wno-PROCASSINIT -Wno-SYNCASYNCNET -Wno-DEFPARAM \
 		-CFLAGS "-I$(shell pwd)/csrc -fPIC $(NPC_VCD_CFLAGS) -DNPC_SOC -DNPC_XLEN=32" \
 		-Mdir $(obj_dir)/soc-nemu-lib \
-		$(SOC_SIM_VERILOG) $(SOC_PERIP_V)
+		$$rtl_sources
 	@$(MAKE) -s -C $(obj_dir)/soc-nemu-lib -f VysyxSoCTop.mk libVysyxSoCTop
 	@echo "=== Compiling SoC NEMU glue ==="
 	@VERILATOR_ROOT=$$(dirname $$(dirname $$(which verilator)))/share/verilator && \

@@ -1,38 +1,39 @@
-if {$argc != 11} {
-  puts stderr "usage: package-xo.tcl PROJECT PART TOP RTL_DIR BOARD_RTL_DIR IP_ADAPTER_RTL_DIR IP_DIR XO XLEN SYNTH_JOBS CLOCK_MHZ"
+if {$argc != 8} {
+  puts stderr "usage: package-xo.tcl PROJECT PART TOP SOURCE_MANIFEST XO XLEN SYNTH_JOBS CLOCK_MHZ"
   exit 2
 }
-lassign $argv project_dir part top rtl_dir board_rtl_dir ip_adapter_rtl_dir ip_dir xo xlen synth_jobs clock_mhz
+lassign $argv project_dir part top source_manifest xo xlen synth_jobs clock_mhz
 
-proc recursive_files {directory pattern} {
-  set matches {}
-  foreach entry [glob -nocomplain -directory $directory *] {
-    if {[file isdirectory $entry]} {
-      set matches [concat $matches [recursive_files $entry $pattern]]
-    } elseif {[string match $pattern [file tail $entry]]} {
-      lappend matches $entry
+proc load_source_manifest {manifest} {
+  if {![file isfile $manifest]} { error "source manifest not found: $manifest" }
+  set handle [open $manifest r]
+  set content [read $handle]
+  close $handle
+  set result [dict create rtl {} xci {}]
+  set synthesis_mode 0
+  foreach line [split $content "\n"] {
+    if {$line eq "MODE=synthesis"} { set synthesis_mode 1 }
+    if {[string match "MODEL=*" $line]} { error "synthesis manifest contains simulation model: $line" }
+    foreach {prefix key} {RTL= rtl XCI= xci} {
+      if {[string match "${prefix}*" $line]} {
+        set path [string range $line [string length $prefix] end]
+        if {![file isfile $path]} { error "manifest source not found: $path" }
+        dict lappend result $key $path
+      }
     }
   }
-  return $matches
-}
-
-proc add_rtl_tree {directory} {
-  set files [concat [recursive_files $directory *.v] [recursive_files $directory *.sv]]
-  if {[llength $files] == 0} {
-    puts stderr "no Verilog/SystemVerilog sources found in $directory"
-    exit 2
-  }
-  add_files -norecurse [lsort -unique $files]
+  if {!$synthesis_mode} { error "source manifest is not synthesis mode" }
+  if {[llength [dict get $result rtl]] == 0} { error "source manifest has no RTL" }
+  return $result
 }
 
 create_project npc_u55c $project_dir -part $part -force
 set_property target_language Verilog [current_project]
-add_rtl_tree $rtl_dir
-add_rtl_tree $board_rtl_dir
-add_rtl_tree $ip_adapter_rtl_dir
+set sources [load_source_manifest $source_manifest]
+add_files -norecurse [dict get $sources rtl]
 set_property verilog_define "NPC_FPGA_XLEN=$xlen" [current_fileset]
 
-set xci [recursive_files $ip_dir *.xci]
+set xci [dict get $sources xci]
 if {[llength $xci] != 0} {
   import_ip -files $xci
   generate_target synthesis [get_ips]

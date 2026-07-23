@@ -1,4 +1,5 @@
 FPGA_MANIFEST_TOOL := $(FPGA_ROOT)/common/scripts/manifest.sh
+FPGA_SOURCE_MANIFEST_TOOL := $(CURDIR)/scripts/ip-source-manifest.sh
 FPGA_ARTIFACT_MANIFEST_TOOL := $(FPGA_ROOT)/common/scripts/artifact-manifest.sh
 FPGA_RELEASE_CONSTRUCTION_TOOL := $(FPGA_ROOT)/common/scripts/release-construction.sh
 FPGA_TIMING_WNS_TOOL := $(FPGA_ROOT)/common/scripts/extract-timing-wns.sh
@@ -20,6 +21,8 @@ FPGA_IMPLEMENTATION_REPORT_TCL := $(FPGA_ROOT)/common/tcl/implementation-reports
 FPGA_U55C_REPORT_HOOK := $(FPGA_WORK_DIR)/u55c-implementation-reports.tcl
 FPGA_ELAB_RTL := $(FPGA_RTL_DIR)/NpcFpgaTop.sv
 FPGA_ELAB_PARAMETERS := $(FPGA_RTL_DIR)/fpga-parameters.env
+FPGA_ELAB_SOURCE_MANIFEST := $(FPGA_RTL_DIR)/ip-sources.manifest
+FPGA_SYNTH_SOURCE_MANIFEST := $(FPGA_WORK_DIR)/synthesis-sources.manifest
 FPGA_IP_MANIFEST := $(FPGA_IP_DIR)/manifest.env
 FPGA_IP_ACTUAL_MANIFEST := $(FPGA_IP_DIR)/actual.env
 FPGA_ELAB_DONE := $(FPGA_WORK_DIR)/.elaboration.complete
@@ -205,6 +208,9 @@ $(FPGA_ELAB_DONE): FORCE fpga-check
 		CHISEL_FIRTOOL_PATH="$(CURDIR)/chisel/ysyxSoC/patch/firtool/firtool-$(FPGA_FIRTOOL_VERSION)/bin" \
 		mill -i ysyxsoc.runMain scpu.ElaborateFPGA --target-dir "$(FPGA_RTL_DIR)"; fi; \
 	test -f "$(FPGA_ELAB_RTL)" && test -f "$(FPGA_ELAB_PARAMETERS)"; \
+	"$(FPGA_SOURCE_MANIFEST_TOOL)" write synthesis "$(FPGA_ELAB_SOURCE_MANIFEST)" "$(CURDIR)" \
+		--absolute --rtl-dir "$(FPGA_RTL_DIR)"; \
+	"$(FPGA_SOURCE_MANIFEST_TOOL)" verify "$(FPGA_ELAB_SOURCE_MANIFEST)" "$(CURDIR)" synthesis; \
 	"$(FPGA_MANIFEST_TOOL)" verify "$(FPGA_ELAB_PARAMETERS)" $(FPGA_ELAB_MANIFEST_VALUES); \
 	touch "$@"
 
@@ -236,17 +242,19 @@ $(FPGA_SYNTH_DONE): FORCE $(FPGA_SYNTH_PREREQUISITES)
 	mkdir -p "$(FPGA_WORK_DIR)"; \
 	if test "$(FPGA_TOOL_DRY_RUN)" = 1; then echo 'FPGA synthesis dry run'; touch "$@"; exit 0; fi; \
 	"$(FPGA_MANIFEST_TOOL)" verify "$(FPGA_IP_MANIFEST)" $(FPGA_MANIFEST_VALUES); \
+	"$(FPGA_SOURCE_MANIFEST_TOOL)" write synthesis "$(FPGA_SYNTH_SOURCE_MANIFEST)" "$(CURDIR)" \
+		--absolute --rtl-dir "$(FPGA_RTL_DIR)" --rtl-dir "$(FPGA_BOARD_RTL_DIR)" \
+		--rtl-dir "$(FPGA_IP_ADAPTER_DIR)" --xci-dir "$(FPGA_IP_DIR)"; \
+	"$(FPGA_SOURCE_MANIFEST_TOOL)" verify "$(FPGA_SYNTH_SOURCE_MANIFEST)" "$(CURDIR)" synthesis; \
 	echo '=== Synthesizing FPGA design ==='; \
 	rm -rf "$(FPGA_SYNTH_DIR)"; mkdir -p "$(FPGA_SYNTH_DIR)"; \
 	if test "$(FPGA_TYPE)" = zynqmp; then \
 		vivado -mode batch -nojournal -nolog -source "$(FPGA_SYNTH_TCL)" -tclargs \
-			"$(FPGA_SYNTH_DIR)/project" "$(FPGA_PART)" "$(FPGA_TOP)" "$(FPGA_RTL_DIR)" \
-			"$(FPGA_BOARD_RTL_DIR)" "$(FPGA_IP_ADAPTER_DIR)" "$(FPGA_IP_DIR)" "$(FPGA_DCP)" \
+			"$(FPGA_SYNTH_DIR)/project" "$(FPGA_PART)" "$(FPGA_TOP)" "$(FPGA_SYNTH_SOURCE_MANIFEST)" "$(FPGA_DCP)" \
 			"$(FPGA_VIVADO_SYNTH_JOBS)"; \
 	else \
 		vivado -mode batch -nojournal -nolog -source "$(FPGA_SYNTH_TCL)" -tclargs \
-			"$(FPGA_SYNTH_DIR)/project" "$(FPGA_PART)" "$(FPGA_SYNTH_TOP)" "$(FPGA_RTL_DIR)" \
-			"$(FPGA_BOARD_RTL_DIR)" "$(FPGA_IP_ADAPTER_DIR)" "$(FPGA_IP_DIR)" "$(FPGA_XO)" "$(NPC_XLEN)" \
+			"$(FPGA_SYNTH_DIR)/project" "$(FPGA_PART)" "$(FPGA_SYNTH_TOP)" "$(FPGA_SYNTH_SOURCE_MANIFEST)" "$(FPGA_XO)" "$(NPC_XLEN)" \
 			"$(FPGA_VIVADO_SYNTH_JOBS)" "$(FPGA_CLOCK_MHZ)"; \
 	fi; \
 	test -f "$(if $(filter zynqmp,$(FPGA_TYPE)),$(FPGA_DCP),$(FPGA_XO))"; touch "$@"
@@ -258,6 +266,7 @@ $(FPGA_LINK_DONE): FORCE $(FPGA_LINK_PREREQUISITES)
 	@set -e; \
 	mkdir -p "$(FPGA_WORK_DIR)"; \
 	if test "$(FPGA_TOOL_DRY_RUN)" = 1; then echo 'FPGA link dry run'; touch "$@"; exit 0; fi; \
+	"$(FPGA_SOURCE_MANIFEST_TOOL)" verify "$(FPGA_SYNTH_SOURCE_MANIFEST)" "$(CURDIR)" synthesis; \
 	mkdir -p "$(FPGA_ARTIFACT_DIR)"; \
 	if test "$(FPGA_TYPE)" = alveo; then \
 		{ \
@@ -297,7 +306,7 @@ $(FPGA_LINK_DONE): FORCE $(FPGA_LINK_PREREQUISITES)
 	if test "$(FPGA_TYPE)" = zynqmp; then \
 		vivado -mode batch -nojournal -nolog -source "$(FPGA_LINK_TCL)" -tclargs \
 			"$(FPGA_SYNTH_DIR)/platform" "$(FPGA_PART)" "$(FPGA_BOARD_REPO)" "$(FPGA_BOARD_PART)" \
-			"$(FPGA_RTL_DIR)" "$(FPGA_BOARD_RTL_DIR)" "$(FPGA_IP_ADAPTER_DIR)" "$(FPGA_IP_DIR)" "$(NPC_XLEN)" \
+			"$(FPGA_SYNTH_SOURCE_MANIFEST)" "$(NPC_XLEN)" \
 			"$(FPGA_CLOCK_MHZ)" "$(FPGA_MEMORY_BASE)" "$(FPGA_MEMORY_HOST_BASE)" \
 			"$(FPGA_MAILBOX_BASE)" "$(FPGA_BIT)" "$(FPGA_XSA)" "$(FPGA_VIVADO_IMPL_JOBS)" \
 			"$(FPGA_VIVADO_IMPL_STRATEGY)" "$(FPGA_TIMING_WNS_MIN_NS)" "$(FPGA_IMPLEMENTATION_REPORT_TCL)" \

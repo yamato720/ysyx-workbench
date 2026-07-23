@@ -96,6 +96,15 @@ dry_run() {
     local artifacts asset
     artifacts="$stage/fpga/artifacts"
     mkdir -p "$stage/fpga/rtl" "$stage/fpga/ip" "$stage/fpga/synth" "$stage/fpga/link" "$artifacts"
+    printf '%s\n' 'module NpcFpgaTop; endmodule' > "$stage/fpga/rtl/NpcFpgaTop.sv"
+    "$npc_root/scripts/ip-source-manifest.sh" write synthesis \
+      "$stage/fpga/rtl/ip-sources.manifest" "$npc_root" --absolute \
+      --rtl "$stage/fpga/rtl/NpcFpgaTop.sv"
+    "$npc_root/scripts/ip-source-manifest.sh" write synthesis \
+      "$stage/fpga/synthesis-sources.manifest" "$npc_root" --absolute \
+      --rtl "$stage/fpga/rtl/NpcFpgaTop.sv" \
+      --rtl-dir "$npc_root/fpga/boards/$FPGA_BOARD/rtl" \
+      --rtl-dir "$npc_root/fpga/ip/adapters/xilinx"
     mkdir -p "$stage/fpga/ip/logs"
     printf '%s\n' 'dry-run Vivado multiplier IP' > "$stage/fpga/ip/logs/npc_int_multiplier_ip.log"
     printf '%s\n' 'dry-run Vivado divider IP' > "$stage/fpga/ip/logs/npc_int_divider_ip.log"
@@ -148,8 +157,9 @@ case "$CAPABILITY:$SCOPE" in
     run_phase chisel 1 1 make -C "$npc_root/chisel/ysyxSoC" verilog \
       INTERNAL_CONSTRUCTION=1 config="$CONFIG_FQCN" CONSTRUCTION_PROFILE="$profile"
     cp "$npc_root/chisel/ysyxSoC/build/ysyxSoCFull.v" "$stage/abi/rtl/"
-    cp -a "$npc_root/chisel/ysyxSoC/perip" "$stage/abi/rtl/perip"
-    cp -a "$npc_root/chisel/ip/src/main/resources/npc/ip/peripheral" "$stage/abi/rtl/ip"
+    "$npc_root/scripts/ip-source-manifest.sh" copy \
+      "$npc_root/chisel/ysyxSoC/build/ip-sources.manifest" "$npc_root" "$stage/abi/rtl/sources"
+    cp "$npc_root/chisel/ysyxSoC/build/ip-sources.manifest" "$stage/abi/rtl/ip-sources.manifest"
     ;;
   run:npc)
     run_root_phase chisel 1 4 chisel-dpi
@@ -165,8 +175,9 @@ case "$CAPABILITY:$SCOPE" in
     run_root_phase softfloat 2 4 softfloat-lib
     run_root_phase verilator 3 4 soc-nemu-lib CONSTRUCTION_PHASE_PREREQUISITES=0
     cp "$npc_root/chisel/ysyxSoC/build-sim/ysyxSoCFull.v" "$stage/abi/rtl/"
-    cp -a "$npc_root/chisel/ysyxSoC/perip" "$stage/abi/rtl/perip"
-    cp -a "$npc_root/chisel/ip/src/main/resources/npc/ip/peripheral" "$stage/abi/rtl/ip"
+    "$npc_root/scripts/ip-source-manifest.sh" copy \
+      "$npc_root/chisel/ysyxSoC/build-sim/ip-sources.manifest" "$npc_root" "$stage/abi/rtl/sources"
+    cp "$npc_root/chisel/ysyxSoC/build-sim/ip-sources.manifest" "$stage/abi/rtl/ip-sources.manifest"
     cp -a "$npc_root/intermediate/soc-nemu-lib/." "$stage/abi/verilator/"
     cp -a "$npc_root/intermediate/softfloat/." "$stage/abi/softfloat/"
     refresh_host 4 4

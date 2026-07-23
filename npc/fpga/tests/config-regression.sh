@@ -9,6 +9,7 @@ manager="$npc_root/scripts/construction-manager.sh"
 manifest_tool="$npc_root/fpga/common/scripts/manifest.sh"
 ip_generator="$npc_root/fpga/ip/generators/xilinx/create-arithmetic-ip.tcl"
 implementation_reports_tcl="$npc_root/fpga/common/tcl/implementation-reports.tcl"
+source_manifest_tool="$npc_root/scripts/ip-source-manifest.sh"
 u55c_build_mk="$npc_root/fpga/build.mk"
 zcu102_link_tcl="$npc_root/fpga/boards/zcu102/tcl/link.tcl"
 work=$(mktemp -d)
@@ -23,9 +24,42 @@ fail() {
 "$npc_root/scripts/generate-config-catalog.sh" "$npc_root"
 export SCPU_CONFIG_CATALOG_READY=1
 
+printf '%s\n' 'module manifest_test; endmodule' > "$work/safe.sv"
+printf '%s\n' 'module dpi_test; import "DPI-C" function void pmem_read(input int addr); endmodule' > "$work/dpi.sv"
+"$source_manifest_tool" write simulation "$work/simulation.manifest" "$npc_root" \
+  --rtl "$work/safe.sv" --model "$work/dpi.sv" 2>/dev/null &&
+  fail '清单工具不应接受未定义的 --model 参数'
+"$source_manifest_tool" write simulation "$work/simulation.manifest" "$npc_root" \
+  --rtl "$work/safe.sv" --model-list "$npc_root/chisel/ip/sources/simulation-models.list"
+"$source_manifest_tool" verify "$work/simulation.manifest" "$npc_root" simulation
+grep -q '^MODEL=.*DPIMem.v$' "$work/simulation.manifest" || fail '仿真清单缺少 DPI RAM 模型'
+if grep -q '^XCI=' "$work/simulation.manifest"; then fail '仿真清单包含 XCI'; fi
+if "$source_manifest_tool" write synthesis "$work/invalid-synthesis.manifest" "$npc_root" \
+  --absolute --rtl "$work/dpi.sv" >/dev/null 2>&1; then
+  fail '综合清单未拒绝 DPI 源'
+fi
+"$source_manifest_tool" write synthesis "$work/synthesis.manifest" "$npc_root" \
+  --absolute --rtl "$work/safe.sv" --rtl-dir "$npc_root/fpga/ip/adapters/xilinx"
+"$source_manifest_tool" verify "$work/synthesis.manifest" "$npc_root" synthesis
+if grep -Eq '^MODEL=|DPI|DPIMem|MMIOCore' "$work/synthesis.manifest"; then fail '综合清单含仿真模型'; fi
+for tcl in "$npc_root/fpga/boards/zcu102/tcl/synth.tcl" \
+  "$npc_root/fpga/boards/zcu102/tcl/link.tcl" "$npc_root/fpga/boards/u55c/tcl/package-xo.tcl"; do
+  grep -q 'load_source_manifest' "$tcl" || fail "$tcl 未消费 source manifest"
+  if grep -Eq 'recursive_files|add_rtl_tree' "$tcl"; then fail "$tcl 仍递归收集 RTL"; fi
+done
+
 if rg -q 'Fpga(ToolSettings|BuildSettings)Key|WithFpga(Tool|BuildSettings)Config' \
   "$npc_root/chisel/configs" "$npc_root/chisel/fpga-harness/src"; then
   fail 'FPGA CDE 图仍包含工具链或 build settings key'
+fi
+if rg -q 'scpu\.fpga' "$npc_root/chisel/ysyxSoC/src"; then
+  fail 'ysyxSoC 仍反向依赖 scpu.fpga'
+fi
+if rg -q '\bNpcAluOp\b' "$npc_root/chisel/fpga-harness/src"; then
+  fail 'FPGA harness 不应拥有 ISA 操作映射'
+fi
+if rg -q 'freechips\.rocketchip|org\.chipsalliance\.cde|scpu\.fpga' "$npc_root/chisel/rv-core/main/scala"; then
+  fail 'rv-core 仍依赖 Rocket、CDE 或 FPGA 类型'
 fi
 
 for name in U55cNpcFpgaConfig U55cFullIsa64NpcFpgaConfig U55cFullIsa64Npc250MHzFpgaConfig U55cYsyxSocFpgaConfig Zcu102NpcFpgaConfig Zcu102YsyxSocFpgaConfig; do

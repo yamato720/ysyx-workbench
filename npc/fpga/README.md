@@ -16,8 +16,9 @@ Chisel shell 位于 `../chisel/fpga-harness`；两层通过按模块拆分的 `r
 | `build/` | 旧生成结果；保留在磁盘，但新系统不迁移、不索引、不复用 |
 
 正式构造写入 `../constructions/<FQCN>/fpga/`，其中 `rtl`、`ip`、`synth`、`link` 和 `artifacts`
-相互隔离。Chisel/firtool 按模块输出多个 `.sv`/`.v`，Vivado/Vitis Tcl 递归导入，避免单个巨型
-SystemVerilog 文件放大综合内存占用。
+相互隔离。Chisel/firtool 按模块输出多个 `.sv`/`.v` 和 `rtl/ip-sources.manifest`；IP 生成后，构造器把
+生成 RTL、板卡 wrapper、稳定 adapter 与 `.xci` 合并为 `synthesis-sources.manifest`。Vivado/Vitis Tcl
+只导入该清单，且拒绝 `MODEL=`、DPI 或 NEMU MMIO 内容，不再递归扫描目录。
 
 ## 构建入口
 

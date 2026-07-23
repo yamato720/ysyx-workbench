@@ -1,28 +1,30 @@
-if {$argc != 27} {
-  puts stderr "usage: link.tcl PROJECT PART BOARD_REPO BOARD_PART RTL_DIR BOARD_RTL_DIR IP_ADAPTER_RTL_DIR IP_DIR XLEN CLOCK_MHZ GUEST_MEMORY_BASE HOST_MEMORY_BASE CONTROL_BASE BIT XSA IMPL_JOBS IMPL_STRATEGY WNS_MIN_NS IMPLEMENTATION_REPORTS_TCL TIMING_MAX_PATHS TIMING_PATHS_PER_CLOCK REPORT_CONGESTION REPORT_CLOCK_UTILIZATION REPORT_CONTROL_SETS REPORT_HIGH_FANOUT_NETS REPORT_METHODOLOGY REPORT_QOR_SUGGESTIONS"
+if {$argc != 24} {
+  puts stderr "usage: link.tcl PROJECT PART BOARD_REPO BOARD_PART SOURCE_MANIFEST XLEN CLOCK_MHZ GUEST_MEMORY_BASE HOST_MEMORY_BASE CONTROL_BASE BIT XSA IMPL_JOBS IMPL_STRATEGY WNS_MIN_NS IMPLEMENTATION_REPORTS_TCL TIMING_MAX_PATHS TIMING_PATHS_PER_CLOCK REPORT_CONGESTION REPORT_CLOCK_UTILIZATION REPORT_CONTROL_SETS REPORT_HIGH_FANOUT_NETS REPORT_METHODOLOGY REPORT_QOR_SUGGESTIONS"
   exit 2
 }
-lassign $argv project_dir part board_repo board_part rtl_dir board_rtl_dir ip_adapter_rtl_dir ip_dir xlen clock_mhz guest_memory_base host_memory_base control_base bitstream xsa impl_jobs impl_strategy timing_wns_min implementation_reports_tcl timing_max_paths timing_paths_per_clock report_congestion report_clock_utilization report_control_sets report_high_fanout_nets report_methodology report_qor_suggestions
+lassign $argv project_dir part board_repo board_part source_manifest xlen clock_mhz guest_memory_base host_memory_base control_base bitstream xsa impl_jobs impl_strategy timing_wns_min implementation_reports_tcl timing_max_paths timing_paths_per_clock report_congestion report_clock_utilization report_control_sets report_high_fanout_nets report_methodology report_qor_suggestions
 
-proc recursive_files {directory pattern} {
-  set matches {}
-  foreach entry [glob -nocomplain -directory $directory *] {
-    if {[file isdirectory $entry]} {
-      set matches [concat $matches [recursive_files $entry $pattern]]
-    } elseif {[string match $pattern [file tail $entry]]} {
-      lappend matches $entry
+proc load_source_manifest {manifest} {
+  if {![file isfile $manifest]} { error "source manifest not found: $manifest" }
+  set handle [open $manifest r]
+  set content [read $handle]
+  close $handle
+  set result [dict create rtl {} xci {}]
+  set synthesis_mode 0
+  foreach line [split $content "\n"] {
+    if {$line eq "MODE=synthesis"} { set synthesis_mode 1 }
+    if {[string match "MODEL=*" $line]} { error "synthesis manifest contains simulation model: $line" }
+    foreach {prefix key} {RTL= rtl XCI= xci} {
+      if {[string match "${prefix}*" $line]} {
+        set path [string range $line [string length $prefix] end]
+        if {![file isfile $path]} { error "manifest source not found: $path" }
+        dict lappend result $key $path
+      }
     }
   }
-  return $matches
-}
-
-proc add_rtl_tree {directory} {
-  set files [concat [recursive_files $directory *.v] [recursive_files $directory *.sv]]
-  if {[llength $files] == 0} {
-    puts stderr "no Verilog/SystemVerilog sources found in $directory"
-    exit 2
-  }
-  add_files -norecurse [lsort -unique $files]
+  if {!$synthesis_mode} { error "source manifest is not synthesis mode" }
+  if {[llength [dict get $result rtl]] == 0} { error "source manifest has no RTL" }
+  return $result
 }
 
 if {![file isdirectory $board_repo]} {
@@ -59,12 +61,11 @@ close_project
 create_project npc_zcu102_platform $project_dir -part $part -force
 set_property source_mgmt_mode All [current_project]
 set_property target_language Verilog [current_project]
-add_rtl_tree $rtl_dir
-add_rtl_tree $board_rtl_dir
-add_rtl_tree $ip_adapter_rtl_dir
+set sources [load_source_manifest $source_manifest]
+add_files -norecurse [dict get $sources rtl]
 set_property verilog_define "NPC_FPGA_XLEN=$xlen" [current_fileset]
 
-set xci [recursive_files $ip_dir *.xci]
+set xci [dict get $sources xci]
 if {[llength $xci] != 0} {
   import_ip -files $xci
 }

@@ -82,6 +82,8 @@ make -C am-kernels/tests/cpu-tests run-bat ALL="forwarding matrix-mul" version=1
 - Do not describe the two Lite clients as a doubled data width. They are arbitrated request sources; the current bridge uses the same data width on Lite and Full.
 - Do not assume ysyxSoC removes the NPC fabric. The NPC Lite arbiter, address split, and Lite-to-Full bridge remain; the SoC places Rocket AXI4 interconnect downstream. In current FPGA mode many SoC peripherals are intentionally absent, so retain or add the SoC path only when its system-level topology is needed.
 - Treat a wider HBM/DDR beat as a separate width-adapter/cache-line design. It requires correct alignment, byte strobes, read extraction, burst semantics, and response ordering; changing one bus-width parameter is insufficient.
+- Treat `npc/chisel/ip/` as the stable Chisel-only IP boundary. Keep ISA decode and operation mapping in rv-core, Diplomacy nodes and address maps in ysyxSoC, and board providers plus Xilinx RTL/XCI in the FPGA harness and `npc/fpga/ip/`.
+- Every NPC/SoC elaboration must emit `ip-sources.manifest`. Simulation manifests may contain `MODEL=` evidence for embedded DPI/peripheral models but no `XCI=`; synthesis manifests may contain only `RTL=`/`XCI=` and must reject DPI, NEMU MMIO, fault sinks, and simulation peripherals. Verilator, construction freezing, and Vivado Tcl consume these manifests instead of recursively collecting `ysyxSoC/perip/` or FPGA source trees.
 
 ## Commit in Reviewable Slices
 

@@ -3,6 +3,10 @@
 源码库只保存稳定适配器和生成配方，不保存 Vivado 生成的 `.xci`、示例工程或综合网表。
 这些产物统一写入 `../build/<board>/<variant>/<work-or-version>/ip/`。
 
+Scala 侧的稳定算术端口位于 `chisel/ip/npc.ip.arithmetic`。U55C 与 ZCU102 provider 位于
+`chisel/fpga-harness`，复用本目录的 Xilinx adapter/XCI 配方；rv-core 仍负责 ISA 操作到私有 IP
+操作码的映射。综合前生成的 `synthesis-sources.manifest` 是 Tcl 唯一 source 输入。
+
 当前生成器只创建数据通路实际使用的 `npc_int_multiplier_ip` 和
 `npc_int_divider_ip`。浮点 mailbox 回退不依赖厂商浮点 IP。
 
