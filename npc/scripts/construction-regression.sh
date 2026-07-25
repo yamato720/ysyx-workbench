@@ -23,8 +23,8 @@ export CONSTRUCTION_ID_PREFIX=20260718153042
 "$npc_root/scripts/generate-config-catalog.sh" "$npc_root"
 export NPC_CONFIG_CATALOG_READY=1
 
-"$manager" build "$npc_root" SimulationConfig 0
-"$manager" build "$npc_root" PipelineSimulationConfig 0
+"$manager" build "$npc_root" SimulationConfig
+"$manager" build "$npc_root" PipelineSimulationConfig
 dpi="$CONSTRUCTION_TEST_ROOT/npc.SimulationConfig"
 pipeline="$CONSTRUCTION_TEST_ROOT/npc.PipelineSimulationConfig"
 [[ $(value "$dpi/construction.env" CONSTRUCTION_ID) == 2026071815304200 ]] || fail '首个编号不是 00'
@@ -128,7 +128,7 @@ fi
 
 created=$(value "$dpi/construction.env" CREATED_AT)
 host_before=$(sha256sum "$dpi/abi/nemu/nemu-exec" | cut -d' ' -f1)
-"$manager" ensure "$npc_root" SimulationConfig 0 0 0
+"$manager" ensure "$npc_root" SimulationConfig 0 0
 [[ $(sha256sum "$dpi/abi/nemu/nemu-exec" | cut -d' ' -f1) == "$host_before" ]] ||
   fail '普通 ensure 不应调用 NEMU Make 或替换已保存 host'
 [[ $(value "$dpi/construction.env" CONSTRUCTION_ID) == "$dpi_id" ]] || fail '复用构造改变了稳定编号'
@@ -136,7 +136,7 @@ host_before=$(sha256sum "$dpi/abi/nemu/nemu-exec" | cut -d' ' -f1)
 [[ $(value "$dpi/construction.env" CREATED_AT) == "$created" ]] || fail '复用构造改变了首次构造时间'
 [[ $(value "$dpi/construction.env" REBUILD_COUNT) == 0 ]] || fail '未请求 rebuild 却发生重构'
 
-"$manager" ensure "$npc_root" SimulationConfig 0 1 0
+"$manager" rebuild "$npc_root" SimulationConfig
 [[ $(value "$dpi/construction.env" CONSTRUCTION_ID) == "$dpi_id" ]] || fail '成功 rebuild 改变了稳定编号'
 [[ $(value "$dpi/construction.env" VERSION_INDEX) == "$dpi_version" ]] || fail '成功 rebuild 改变了版本序号'
 [[ $(value "$dpi/construction.env" CREATED_AT) == "$created" ]] || fail '成功 rebuild 改变了首次构造时间'
@@ -152,7 +152,7 @@ sed -i 's/^NEMU_PRESET=LocalPipelineTrace$/NEMU_CONFIG_FQCN=npc.nemu.LocalVerila
 sed -i -e 's/^HOST_FORMAT=.*/HOST_FORMAT=4/' \
   -e 's/^NEMU_PRESET=LocalPipelineTrace$/NEMU_CONFIG_FQCN=npc.nemu.LocalVerilatorPipelineTraceConfig/' \
   "$dpi/abi/nemu/host.env"
-"$manager" ensure "$npc_root" SimulationConfig 0 0 0
+"$manager" ensure "$npc_root" SimulationConfig 0 0
 [[ $(value "$dpi/profile.env" PROFILE_FORMAT) == 10 && $(value "$dpi/profile.env" CAPABILITY) == run ]] ||
   fail '已保存 profile 未迁移到 run 模式'
 [[ $(value "$dpi/construction.env" CAPABILITY) == run ]] ||
@@ -180,9 +180,9 @@ mkdir -p "$dpi/runtime/preserve"; printf 'keep\n' > "$dpi/runtime/preserve/trace
   $(value "$dpi/abi/nemu/host.env" NEMU_PIPELINE_HTML) == 1 ]] ||
   fail 'host 元数据没有升级性能/流水 HTML ABI'
 "$manager" host-build "$npc_root" '' 1 -1
-"$manager" ensure "$npc_root" SimulationConfig 0 0 1
-if "$manager" ensure "$npc_root" SimulationConfig 0 1 1 >/dev/null 2>&1; then
-  fail 'rebuild=1 与 host-rebuild=1 可以同时使用'
+"$manager" ensure "$npc_root" SimulationConfig 0 1
+if "$manager" ensure "$npc_root" SimulationConfig 0 0 1 >/dev/null 2>&1; then
+  fail 'ensure 仍接受已删除的 rebuild 位置参数'
 fi
 
 # profile、construction 元数据、host 与成功日志必须作为一个事务发布。备份阶段和
@@ -206,7 +206,7 @@ if find "$dpi" -name '.profile-host-previous.*' -o -name '.construction-host-pre
 fi
 
 before=$(sha256sum "$dpi/construction.env" | cut -d' ' -f1)
-if failure=$(CONSTRUCTION_TEST_FAIL=1 "$manager" build "$npc_root" SimulationConfig 1 2>&1); then
+if failure=$(CONSTRUCTION_TEST_FAIL=1 "$manager" rebuild "$npc_root" SimulationConfig 2>&1); then
   fail '模拟失败的重构意外成功'
 fi
 [[ $failure == *"make -C $npc_root rebuild config=SimulationConfig"* ]] ||
@@ -225,10 +225,10 @@ if "$manager" delete "$npc_root" "$pipeline_version" 0 </dev/null >/dev/null 2>&
 fi
 
 u55c="$CONSTRUCTION_TEST_ROOT/npc.fpga.u55c.U55cYsyxSocFpgaConfig"
-if "$manager" ensure "$npc_root" U55cYsyxSocFpgaConfig 0 0 0 >/dev/null 2>&1; then
+if "$manager" ensure "$npc_root" U55cYsyxSocFpgaConfig 0 0 >/dev/null 2>&1; then
   fail '缺失 FPGA 构造未要求 build=1'
 fi
-"$manager" ensure "$npc_root" U55cYsyxSocFpgaConfig 1 0 0
+"$manager" ensure "$npc_root" U55cYsyxSocFpgaConfig 1 0
 [[ -f $u55c/fpga/artifacts/artifact-manifest.env ]] || fail 'FPGA dry-run 未生成资产清单'
 [[ $(value "$u55c/.complete" FPGA_ARTIFACT) == "fpga/artifacts/npc-$(value "$u55c/profile.env" FPGA_PLATFORM).xclbin" ]] ||
   fail 'FPGA 完成标志没有记录实际 xclbin'
@@ -254,7 +254,7 @@ fpga_assets_before=$(find "$u55c/fpga" -type f -print0 | LC_ALL=C sort -z | xarg
 [[ $(find "$u55c/fpga" -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1) == "$fpga_assets_before" ]] ||
   fail 'host-build 修改了 FPGA 资产'
 fpga_before=$(sha256sum "$u55c/construction.env" | cut -d' ' -f1)
-if fpga_failure=$(CONSTRUCTION_TEST_FAIL=1 "$manager" build "$npc_root" U55cYsyxSocFpgaConfig 1 2>&1); then
+if fpga_failure=$(CONSTRUCTION_TEST_FAIL=1 "$manager" rebuild "$npc_root" U55cYsyxSocFpgaConfig 2>&1); then
   fail '模拟失败的 FPGA 重构意外成功'
 fi
 [[ $fpga_failure == *"make -C $npc_root rebuild config=U55cYsyxSocFpgaConfig"* ]] ||
@@ -265,9 +265,9 @@ fpga_failed="$CONSTRUCTION_TEST_ROOT/.failed/npc.fpga.u55c.U55cYsyxSocFpgaConfig
   fail '失败的 FPGA 重构没有保存 profile 与逐 IP 证据'
 [[ $(sha256sum "$u55c/construction.env" | cut -d' ' -f1) == "$fpga_before" ]] ||
   fail '失败的 FPGA 重构破坏了旧构造'
-"$manager" ensure "$npc_root" U55cYsyxSocFpgaConfig 0 0 0
+"$manager" ensure "$npc_root" U55cYsyxSocFpgaConfig 0 0
 sed -i -e 's/^PROFILE_FORMAT=.*/PROFILE_FORMAT=3/' -e 's/^SCOPE=fpga$/SCOPE=fpga-soc/' "$u55c/profile.env"
-"$manager" ensure "$npc_root" U55cYsyxSocFpgaConfig 0 0 0
+"$manager" ensure "$npc_root" U55cYsyxSocFpgaConfig 0 0
 [[ $(value "$u55c/profile.env" PROFILE_FORMAT) == 10 && $(value "$u55c/profile.env" SCOPE) == fpga ]] ||
   fail '已保存 FPGA profile 未迁移到统一 fpga 作用域'
 
@@ -277,16 +277,16 @@ mv "$u55c/fpga/artifacts/npc-$platform.xclbin" "$u55c/fpga/artifacts/npc-$platfo
   fail '缺少实际 xclbin 的 FPGA 构造仍被 version 视为完成'
 mv "$u55c/fpga/artifacts/npc-$platform.xclbin.missing" "$u55c/fpga/artifacts/npc-$platform.xclbin"
 printf 'tampered\n' > "$u55c/fpga/artifacts/npc-$platform.xclbin"
-if "$manager" ensure "$npc_root" U55cYsyxSocFpgaConfig 0 0 0 >/dev/null 2>&1; then
+if "$manager" ensure "$npc_root" U55cYsyxSocFpgaConfig 0 0 >/dev/null 2>&1; then
   fail '损坏的 FPGA 资产被放行'
 fi
-"$manager" ensure "$npc_root" U55cYsyxSocFpgaConfig 0 1 0
+"$manager" rebuild "$npc_root" U55cYsyxSocFpgaConfig
 [[ $(value "$u55c/profile.env" FPGA_VIVADO_IMPL_JOBS) == 8 ]] ||
-  fail 'rebuild=1 没有吸收当前 FPGA 工具链字段'
+  fail 'rebuild 没有吸收当前 FPGA 工具链字段'
 
 "$manager" delete "$npc_root" "$pipeline_version" 1
 [[ ! -d $pipeline ]] || fail 'yes=1 未删除构造'
-"$manager" build "$npc_root" StandaloneConfig 0
+"$manager" build "$npc_root" StandaloneConfig
 standalone="$CONSTRUCTION_TEST_ROOT/npc.StandaloneConfig"
 [[ $(value "$standalone/construction.env" VERSION_INDEX) == 4 ]] ||
   fail '删除后新构造复用了已有版本序号'

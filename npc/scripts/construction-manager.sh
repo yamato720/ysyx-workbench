@@ -5,8 +5,8 @@ set -euo pipefail
 usage() {
   cat >&2 <<'EOF'
 用法：construction-manager.sh <命令> <npc-root> [参数]
-命令：catalog | host-catalog | resolve <config> <version> | build <config> <rebuild>
-      host-build <config> <all> <jobs> | ensure <config> <build> <rebuild> <host-rebuild>
+命令：catalog | host-catalog | resolve <config> <version> | build <config> | rebuild <config>
+      host-build <config> <all> <jobs> | ensure <config> <build> <host-rebuild>
       list [selector] | delete <version> <yes>
 EOF
   exit 2
@@ -578,7 +578,7 @@ profile_for() {
   protocol_abi=$(expected_protocol_abi "$scope")
   migrate_profile_mode "$output"
   # 缓存只避免运行已保存构造时反复启动 SBT/Mill，不参与硬件失效判断。实际
-  # 硬件 ABI 仍只能通过 build/rebuild=1 更新。
+  # 硬件 ABI 仍只能通过公开的 make rebuild 更新。
   # 自动目录只包含挂载一个 terminal 层 trait 的完整终端，这些 trait 已组合 NEMU
   # 运行行为、scope 和 target。旧缓存里的 generate-only/check-only profile
   # 不能继续代表同名终端，必须从当前 Scala Config 重建。
@@ -646,7 +646,7 @@ verify_assets() {
 }
 
 # 使用当前终端重新生成的 profile 只替换保存 profile 的 NEMU 段。硬件、FPGA
-# 工具链与协议字段继续冻结，必须通过 rebuild=1 才能更新。
+# 工具链与协议字段继续冻结，必须通过公开的 make rebuild 才能更新。
 write_host_refreshed_profile() {
   local current=$1 saved=$2 output=$3
   [[ $(value "$current" CONFIG_FQCN) == $(value "$saved" CONFIG_FQCN) ]] || {
@@ -1066,8 +1066,12 @@ case "$command" in
     do_resolve "$1" "$2"
     ;;
   build)
-    [[ $# == 2 ]] || usage
-    do_build "$1" "$2"
+    [[ $# == 1 ]] || usage
+    do_build "$1" 0
+    ;;
+  rebuild)
+    [[ $# == 1 ]] || usage
+    do_build "$1" 1
     ;;
   host-build)
     [[ $# == 3 ]] || usage
@@ -1082,18 +1086,14 @@ case "$command" in
     fi
     ;;
   ensure)
-    [[ $# == 4 ]] || usage
-    request=$1 allow_build=$2 force=$3 host_rebuild=$4
-    [[ $force != 1 || $host_rebuild != 1 ]] || {
-      echo 'rebuild=1 已包含 host 重构，不能同时提供 host-rebuild=1' >&2; exit 2;
-    }
+    [[ $# == 3 ]] || usage
+    request=$1 allow_build=$2 host_rebuild=$3
     ensure_version_indexes
     profile=$(profile_for "$request")
     fqcn=$(value "$profile" CONFIG_FQCN)
     scope=$(value "$profile" SCOPE)
     directory="$root/$fqcn"
-    if [[ $force == 1 ]]; then do_build "$fqcn" 1
-    elif [[ ! -d $directory ]]; then
+    if [[ ! -d $directory ]]; then
       if [[ $scope == fpga && $allow_build != 1 ]]; then
         echo "FPGA 构造不存在：$fqcn；首次运行请添加 build=1" >&2; exit 1
       fi
@@ -1103,7 +1103,7 @@ case "$command" in
     else
       verify_assets "$directory"
     fi
-    if [[ $host_rebuild == 1 && $force != 1 ]]; then do_host_build "$fqcn"; fi
+    if [[ $host_rebuild == 1 ]]; then do_host_build "$fqcn"; fi
     ;;
   list)
     [[ $# -le 1 ]] || usage

@@ -197,7 +197,7 @@ fp-dpi-test: softfloat-lib
 # ============== Chisel Build ==============
 
 # A Chisel configuration is an explicit hardware ABI.  Construction management
-# calls these recipes only for a first build or rebuild=1; no source/tool
+# calls these recipes only for a first build or explicit rebuild; no source/tool
 # 摘要比对不得悄悄替换已保存构造。
 $(CHISEL_STAMP): FORCE
 	@set -e; \
@@ -437,11 +437,11 @@ config-list:
 
 build:
 	@test -n "$(strip $(config))" || { echo 'build 必须提供 config=<Config短名或FQCN>' >&2; exit 2; }
-	@$(CONSTRUCTION_MANAGER) build "$(CURDIR)" "$(strip $(config))" 0
+	@$(CONSTRUCTION_MANAGER) build "$(CURDIR)" "$(strip $(config))"
 
 rebuild:
 	@test -n "$(strip $(config))" || { echo 'rebuild 必须提供 config=<Config短名或FQCN>' >&2; exit 2; }
-	@$(CONSTRUCTION_MANAGER) build "$(CURDIR)" "$(strip $(config))" 1
+	@$(CONSTRUCTION_MANAGER) rebuild "$(CURDIR)" "$(strip $(config))"
 
 host-config-list:
 	@$(CONSTRUCTION_MANAGER) host-catalog "$(CURDIR)"
