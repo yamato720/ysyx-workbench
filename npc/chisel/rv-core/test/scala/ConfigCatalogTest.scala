@@ -45,7 +45,7 @@ class ConfigCatalogTest extends AnyFlatSpec {
     assert(names.contains("U55cRv32OperatorSimulationConfig"))
     assert(names.contains("U55cRv64OperatorSimulationConfig"))
     assert(names.contains("U55cRv64NpcFpgaConfig"))
-    assert(names.contains("U55cRv64Npc250MHzFpgaConfig"))
+    assert(names.contains("U55cRv64Npc300MHzFpgaConfig"))
     assert(!names.contains("U55cFullIsa64NpcFpgaConfig"))
     assert(!names.contains("FpgaConfig"))
     assert(!names.contains("ExternalAxiConfig"))

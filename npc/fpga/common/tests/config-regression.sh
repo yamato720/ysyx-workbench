@@ -88,7 +88,7 @@ if rg -q 'freechips\.rocketchip|org\.chipsalliance\.cde|npc\.fpga' "$npc_root/ch
   fail 'rv-core 仍依赖 Rocket、CDE 或 FPGA 类型'
 fi
 
-for name in U55cNpcFpgaConfig U55cRv64NpcFpgaConfig U55cRv64Npc250MHzFpgaConfig U55cYsyxSocFpgaConfig Zcu102NpcFpgaConfig Zcu102YsyxSocFpgaConfig; do
+for name in U55cNpcFpgaConfig U55cRv64NpcFpgaConfig U55cRv64Npc300MHzFpgaConfig U55cYsyxSocFpgaConfig Zcu102NpcFpgaConfig Zcu102YsyxSocFpgaConfig; do
   grep -Eq "^${name}[[:space:]]" "$catalog" || fail "自动目录缺少 $name"
 done
 [[ $($resolver "$catalog" U55cYsyxSocFpgaConfig fpga) == 'npc.fpga.u55c.U55cYsyxSocFpgaConfig|fpga|u55c|SOC' ]] ||
@@ -179,7 +179,7 @@ check_operator_routes() {
 
 check_terminal U55cNpcFpgaConfig u55c NPC 32 125
 check_terminal U55cRv64NpcFpgaConfig u55c NPC 64 125
-check_terminal U55cRv64Npc250MHzFpgaConfig u55c NPC 64 250
+check_terminal U55cRv64Npc300MHzFpgaConfig u55c NPC 64 300
 check_terminal U55cYsyxSocFpgaConfig u55c SOC 32 125
 check_terminal Zcu102NpcFpgaConfig zcu102 NPC 32 300
 check_terminal Zcu102YsyxSocFpgaConfig zcu102 SOC 32 300

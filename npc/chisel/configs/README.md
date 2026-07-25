@@ -71,7 +71,7 @@ classpath、Make 和 construction manager 在启动前解析公开终端。该�
 | `YsyxSimulationConfig` | SoC | 默认 ysyxSoC 本地仿真 |
 | `U55cNpcFpgaConfig` | FPGA（`TARGET=NPC`） | U55C 裸 NPC 上板运行 |
 | `U55cRv64NpcFpgaConfig` | FPGA（`TARGET=NPC`） | U55C RV64IM_Zicsr 裸 NPC 上板运行 |
-| `U55cRv64Npc250MHzFpgaConfig` | FPGA（`TARGET=NPC`） | U55C RV64IM_Zicsr 250 MHz 单实现时序实验 |
+| `U55cRv64Npc300MHzFpgaConfig` | FPGA（`TARGET=NPC`） | U55C RV64IM_Zicsr 300 MHz 单实现时序实验 |
 | `U55cYsyxSocFpgaConfig` | FPGA（`TARGET=SOC`） | U55C ysyxSoC 上板运行 |
 | `Zcu102NpcFpgaConfig` | FPGA（`TARGET=NPC`） | ZCU102 裸 NPC 上板运行 |
 | `Zcu102YsyxSocFpgaConfig` | FPGA（`TARGET=SOC`） | ZCU102 ysyxSoC 上板运行 |

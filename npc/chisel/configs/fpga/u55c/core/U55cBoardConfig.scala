@@ -35,13 +35,13 @@ class U55cBoardConfig(
     new WithFpgaBoardConfig(FpgaBoard.U55c)
 )
 
-/** U55C 的 250 MHz 板卡策略。
+/** U55C 的 300 MHz 板卡策略。
   *
   * RV64 乘法器改用五级流水切分 DSP 组合链；其余 IP 时序保持 U55C 默认值，乘除法
   * 均维持 II=1。
   */
-class U55c250MHzBoardConfig extends U55cBoardConfig(
-  clockMHz = 250,
+class U55c300MHzBoardConfig extends U55cBoardConfig(
+  clockMHz = 300,
   ipAttachment = U55cXilinxIpAttachment(
     OperatorIpTimingConfig.Default.copy(
       multiply = OperatorIpTimingConfig.Default.multiply.copy(latency = 5)

@@ -27,14 +27,14 @@ class U55cRv64NpcFpgaConfig extends CDEConfig(
     new Rv64PipelineDualForwardingFpgaConfig
 ) with U55cNpcTerminal with FpgaIpTerminal
 
-/** U55C RV64IM 裸 NPC 的 250 MHz 时序实验终端。
+/** U55C RV64IM 裸 NPC 的 300 MHz 时序实验终端。
   *
   * 保持完整运行 ABI 与单实现策略，便于将结果和 125 MHz 终端逐项比较；频率仅属于
   * 板卡物理策略，整数 IP 宽度仍由右侧 RV64 核自动推导。为切分 RV64 乘法器的 DSP
   * 组合链，整数乘法固定为 5 级流水且保持 II=1；其余算术 IP 时序维持 U55C 默认值。
   */
-class U55cRv64Npc250MHzFpgaConfig extends CDEConfig(
-  new U55c250MHzBoardConfig ++
+class U55cRv64Npc300MHzFpgaConfig extends CDEConfig(
+  new U55c300MHzBoardConfig ++
     new Rv64PipelineDualForwardingFpgaConfig
 ) with U55cNpcTerminal with FpgaIpTerminal
 

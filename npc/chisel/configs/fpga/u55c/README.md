@@ -5,8 +5,8 @@
 
 | 文件 | 职责 | 是否可被更高层复用或覆盖 |
 | --- | --- | --- |
-| `core/U55cBoardConfig.scala` | 板卡标识、频率与 U55C Xilinx IP 合同 | 是；`U55cBoardConfig` 与 `U55c250MHzBoardConfig` 是可叠加的 L4 板卡策略 |
-| `Configs.scala` | U55C 裸 NPC、RV64IM 裸 NPC、250 MHz 时序实验与 ysyxSoC 的所有终端构造 | 是；根部只放终端 |
+| `core/U55cBoardConfig.scala` | 板卡标识、频率与 U55C Xilinx IP 合同 | 是；`U55cBoardConfig` 与 `U55c300MHzBoardConfig` 是可叠加的 L4 板卡策略 |
+| `Configs.scala` | U55C 裸 NPC、RV64IM 裸 NPC、300 MHz 时序实验与 ysyxSoC 的所有终端构造 | 是；根部只放终端 |
 
 `U55cNpcFpgaConfig` 直接组合 `U55cBoardConfig ++ FpgaConfig`。
 `U55cYsyxSocFpgaConfig` 以 `U55cBoardConfig ++ FpgaConfig ++ YsyxElaborateConfig` 覆盖通用 SoC
@@ -18,10 +18,10 @@
 | 特性 | 可直接复制到 `++` 链的名称 | 添加位置 | 是否可选 |
 | --- | --- | --- | --- |
 | U55C 板卡层 | `new U55cBoardConfig` | `core/U55cBoardConfig.scala` | U55C 目标必需 |
-| U55C 250 MHz 板卡层 | `new U55c250MHzBoardConfig` | `core/U55cBoardConfig.scala` | 是；乘法延迟 5 拍，II=1 |
+| U55C 300 MHz 板卡层 | `new U55c300MHzBoardConfig` | `core/U55cBoardConfig.scala` | 是；乘法延迟 5 拍，II=1 |
 | U55C 裸 NPC 终端 | `new U55cNpcFpgaConfig` | `Configs.scala` | 是 |
 | U55C RV64IM 裸 NPC 终端 | `new U55cRv64NpcFpgaConfig` | `Configs.scala` | 是；F/D 禁用 |
-| U55C RV64IM 250 MHz 时序实验终端 | `new U55cRv64Npc250MHzFpgaConfig` | `Configs.scala` | 是；F/D 禁用 |
+| U55C RV64IM 300 MHz 时序实验终端 | `new U55cRv64Npc300MHzFpgaConfig` | `Configs.scala` | 是；F/D 禁用 |
 | U55C SoC 终端 | `new U55cYsyxSocFpgaConfig` | `Configs.scala` | 是 |
 | U55C 板卡标识 | `new WithFpgaBoardConfig(FpgaBoard.U55c)` | L3 `common/base/FpgaConfigFragments.scala` | U55C 目标必需 |
 | U55C 时钟 | `new U55cBoardConfig(clockMHz = 125)` | `core/U55cBoardConfig.scala` | U55C 目标必需；允许频率由 `npc/fpga/u55c/config.mk` 的物理能力表限制 |
@@ -41,6 +41,6 @@
 `MEIP`。
 
 `U55cBoardConfig` 不接收 XLEN：attachment 通过右侧完成的 `NpcCoreConfigKey` 自动生成匹配
-RV32/RV64 的整数 IP 路由。`U55c250MHzBoardConfig` 把物理时钟和乘法 5 拍 attachment 封装为
-命名板卡策略，仍继承 `multiply.initiationInterval = 1`。`U55cRv64Npc250MHzFpgaConfig` 只选择
+RV32/RV64 的整数 IP 路由。`U55c300MHzBoardConfig` 把物理时钟和乘法 5 拍 attachment 封装为
+命名板卡策略，仍继承 `multiply.initiationInterval = 1`。`U55cRv64Npc300MHzFpgaConfig` 只选择
 该板卡策略与 RV64 核心，ABI 与 125 MHz RV64 终端相同，且默认保持单实现策略以便先观察真实时序缺口。

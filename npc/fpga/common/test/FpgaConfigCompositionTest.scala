@@ -5,7 +5,7 @@ import org.chipsalliance.cde.config.Parameters
 import org.scalatest.flatspec.AnyFlatSpec
 import npc.ExternalAxiConfig
 import npc.{ArithmeticRouteOperation, ComputeBackend, ConstructionConfig, FloatingCheckConfig, FpgaIpTerminal, FpgaToolchainConfig, NemuHostConfig, NemuSimulationIpTerminal, NpcConfig, NpcCoreConfigKey, OperatorIpTimingConfig, OperatorRouteTarget, Rv64IMFZicsrConfig, WithNpcCoreConfig}
-import npc.fpga.u55c.{U55cNpcFpgaConfig, U55cRv64Npc250MHzFpgaConfig, U55cRv64NpcFpgaConfig, U55cXilinxIpAttachment, U55cYsyxSocFpgaConfig}
+import npc.fpga.u55c.{U55cNpcFpgaConfig, U55cRv64Npc300MHzFpgaConfig, U55cRv64NpcFpgaConfig, U55cXilinxIpAttachment, U55cYsyxSocFpgaConfig}
 import npc.fpga.zcu102.{Zcu102NpcFpgaConfig, Zcu102YsyxSocFpgaConfig}
 import ysyx.{YsyxPlatformParameters, YsyxSimulationConfig, YsyxSocConfig}
 
@@ -78,11 +78,11 @@ class FpgaConfigCompositionTest extends AnyFlatSpec {
     assertXilinxRoutes(config, 64)
   }
 
-  "U55cRv64Npc250MHzFpgaConfig" should "use a deeper RV64 multiplier pipeline at 250 MHz" in {
-    implicit val parameters: Parameters = new U55cRv64Npc250MHzFpgaConfig
+  "U55cRv64Npc300MHzFpgaConfig" should "use a deeper RV64 multiplier pipeline at 300 MHz" in {
+    implicit val parameters: Parameters = new U55cRv64Npc300MHzFpgaConfig
     val config = FpgaConfigParameters.npcCoreConfig
     assert(config.isa.xlen == 64)
-    assert(FpgaConfigParameters.platform.clockMHz == 250)
+    assert(FpgaConfigParameters.platform.clockMHz == 300)
     assert(FpgaConfigParameters.ipAttachment.name == "xilinx-u55c")
     assert(config.operators.mulDiv.multiplyTiming.latency == 5)
     assert(config.operators.mulDiv.multiplyTiming.initiationInterval == 1)
@@ -205,7 +205,7 @@ class FpgaConfigCompositionTest extends AnyFlatSpec {
     val u55c = Seq(
       new U55cNpcFpgaConfig,
       new U55cRv64NpcFpgaConfig,
-      new U55cRv64Npc250MHzFpgaConfig,
+      new U55cRv64Npc300MHzFpgaConfig,
       new U55cYsyxSocFpgaConfig
     )
     u55c.foreach { terminal =>

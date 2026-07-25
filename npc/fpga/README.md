@@ -24,7 +24,7 @@
 
 ```bash
 make -C npc build config=U55cNpcFpgaConfig
-make -C npc build config=U55cRv64Npc250MHzFpgaConfig
+make -C npc build config=U55cRv64Npc300MHzFpgaConfig
 make -C npc build config=U55cYsyxSocFpgaConfig
 make -C npc build config=Zcu102NpcFpgaConfig
 make -C npc build config=Zcu102YsyxSocFpgaConfig
