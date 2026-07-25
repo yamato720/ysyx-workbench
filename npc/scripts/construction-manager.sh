@@ -7,7 +7,7 @@ usage() {
 用法：construction-manager.sh <命令> <npc-root> [参数]
 命令：catalog | host-catalog | resolve <config> <version> | build <config> | rebuild <config>
       host-build <config> <all> <jobs> | ensure <config> <build> <host-rebuild>
-      list [selector] | delete <version> <yes>
+      list [selector] | delete <version>
 EOF
   exit 2
 }
@@ -420,8 +420,8 @@ strip_legacy_metadata() {
   fi
 }
 
-# VERSION_INDEX 是用户可见、不会因删除其他构造而重排的序号。旧构造没有该字段时，
-# 首次访问构造库会按内部时间 ID 的顺序补齐，之后新构造始终取最大值加一。
+# VERSION_INDEX 是用户可见的紧凑序号。重构保持原序号；删除后会按当前版本顺序
+# 压缩后续序号。旧构造没有该字段时，首次访问构造库会按内部时间 ID 的顺序补齐。
 migrate_version_indexes_locked() {
   local file index next=1
   local -A used=()
@@ -465,6 +465,26 @@ next_version_index() {
   printf '%s\n' "$((maximum + 1))"
 }
 
+versioned_construction_environments() {
+  local file index
+  while IFS= read -r file; do
+    index=$(value "$file" VERSION_INDEX)
+    require_version_index "$index"
+    printf '%020d\t%s\n' "$index" "$file"
+  done < <(construction_environments) |
+    LC_ALL=C sort -t $'\t' -k1,1n -k2,2 |
+    cut -f2-
+}
+
+reindex_version_indexes_locked() {
+  local file index next=1
+  while IFS= read -r file; do
+    index=$(value "$file" VERSION_INDEX)
+    [[ $index == "$next" ]] || write_version_index "$file" "$next"
+    ((next++))
+  done < <(versioned_construction_environments)
+}
+
 ensure_version_indexes() {
   exec 9>"$root/.lock"
   flock 9
@@ -497,6 +517,14 @@ ensure_version_indexes_for_read() {
     migrate_version_indexes_locked
   fi
   exec {lock_fd}>&-
+}
+
+refresh_catalog_if_stale() {
+  [[ $catalog_ready == 1 ]] && return 0
+  if [[ ! -f $catalog ]] || find "$npc_root/chisel/configs" -name '*.scala' -newer "$catalog" -print -quit | grep -q .; then
+    "$npc_root/scripts/generate-config-catalog.sh" "$npc_root"
+  fi
+  catalog_ready=1
 }
 
 resolve_catalog() {
@@ -797,6 +825,17 @@ do_build() {
   exec 9>"$root/.lock"
   flock 9
   do_build_locked "$request" "$force"
+}
+
+do_delete() {
+  local version_index=$1 directory
+  exec 9>"$root/.lock"
+  flock 9
+  migrate_version_indexes_locked
+  directory=$(construction_by_version "$version_index")
+  rm -rf -- "$directory"
+  reindex_version_indexes_locked
+  echo "已删除构造版本 $version_index，并重新映射后续版本序号"
 }
 
 do_host_build_directory() {
@@ -1116,9 +1155,10 @@ case "$command" in
     found=0
     listed_directories=()
     ensure_version_indexes_for_read
+    refresh_catalog_if_stale
     echo '=== 构造属性位图（+ 表示启用）==='
-    printf '%-8s %-4s %-4s %-2s %-2s %-5s %-4s %-3s %-3s %-3s %-3s %-4s %-4s %-6s %-20s %s\n' \
-      Version RV32 RV64 M F Zicsr Pipe ID EX NPC SoC FPGA U55C ZCU102 Updated Directory
+    printf '%-8s %-4s %-4s %-2s %-2s %-5s %-4s %-3s %-3s %-3s %-3s %-4s %-20s %s\n' \
+      Version RV32 RV64 M F Zicsr Pipe ID EX NPC SoC FPGA Updated Directory
     while IFS= read -r env; do
       directory=$(dirname "$env")
       version_index=$(value "$env" VERSION_INDEX)
@@ -1129,8 +1169,7 @@ case "$command" in
       profile="$directory/profile.env"
       scope=$(value "$profile" SCOPE)
       target=$(value "$profile" TARGET)
-      board=$(value "$profile" FPGA_BOARD)
-      printf '%-8s %-4s %-4s %-2s %-2s %-5s %-4s %-3s %-3s %-3s %-3s %-4s %-4s %-6s %-20s %s\n' \
+      printf '%-8s %-4s %-4s %-2s %-2s %-5s %-4s %-3s %-3s %-3s %-3s %-4s %-20s %s\n' \
         "$version_index" \
         "$(matching_mark "$(value "$profile" XLEN)" 32)" \
         "$(matching_mark "$(value "$profile" XLEN)" 64)" \
@@ -1143,8 +1182,6 @@ case "$command" in
         "$(matching_mark "$target" NPC)" \
         "$(matching_mark "$target" SOC)" \
         "$(matching_mark "$scope" fpga)" \
-        "$(matching_mark "$board" u55c)" \
-        "$(matching_mark "$board" zcu102)" \
         "$(value "$env" UPDATED_AT)" "$directory"
     done < <(construction_environments)
     if [[ $selector_is_version == 1 && $found != 1 ]]; then
@@ -1159,19 +1196,18 @@ case "$command" in
         "$(value "$directory/construction.env" VERSION_INDEX)" \
         "$(value "$directory/profile.env" CONFIG_SHORT_NAME)"
     done
+    echo
+    echo '=== 可构造 Config ==='
+    printf '%-42s %-8s %s\n' Config Scope Target
+    while IFS=$'\t' read -r short fqcn scope board target extra; do
+      [[ -z ${short:-} || $short == \#* ]] && continue
+      [[ -z ${extra:-} ]] || { echo "配置目录格式错误：$catalog" >&2; exit 1; }
+      printf '%-42s %-8s %s\n' "$short" "$scope" "$target"
+    done < "$catalog"
     ;;
   delete)
-    [[ $# == 2 ]] || usage
-    version_index=$1 assume_yes=$2
-    ensure_version_indexes
-    directory=$(construction_by_version "$version_index")
-    if [[ $assume_yes != 1 ]]; then
-      [[ -t 0 ]] || { echo "非交互删除必须传 yes=1" >&2; exit 1; }
-      read -r -p "删除构造版本 $version_index（$directory）？输入 Y 确认：" answer
-      [[ $answer == Y ]] || { echo "已取消删除" >&2; exit 1; }
-    fi
-    rm -rf "$directory"
-    echo "已删除构造版本 $version_index"
+    [[ $# == 1 ]] || usage
+    do_delete "$1"
     ;;
   *) usage ;;
 esac

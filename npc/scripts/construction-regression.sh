@@ -66,8 +66,11 @@ grep -Eq '^1[[:space:]]+SimulationConfig$' <<< "$version_list" ||
   fail 'Config 名称表没有显示版本与短名映射'
 grep -q '^=== 构造属性位图（+ 表示启用）===$' <<< "$version_list" ||
   fail '版本列表没有显示属性位图'
-attribute_header=$(grep '^Version  *RV32  *RV64  *M  *F  *Zicsr  *Pipe  *ID  *EX  *NPC  *SoC  *FPGA  *U55C  *ZCU102' <<< "$version_list" || true)
+attribute_header=$(grep '^Version  *RV32  *RV64  *M  *F  *Zicsr  *Pipe  *ID  *EX  *NPC  *SoC  *FPGA' <<< "$version_list" || true)
 [[ -n $attribute_header ]] || fail '属性位图表头不完整'
+[[ $attribute_header != *U55C* && $attribute_header != *ZCU102* ]] || fail '属性位图泄漏板卡型号'
+grep -Eq '^U55cRv64Npc300MHzFpgaConfig[[:space:]]+fpga[[:space:]]+NPC$' <<< "$version_list" ||
+  fail '版本列表没有显示当前 U55C 300 MHz FPGA Config'
 dpi_attributes=$(awk '/^=== 构造属性位图/{in_attributes=1; next} /^=== Config 名称 ===/{in_attributes=0} in_attributes && $1 == 1 {print}' <<< "$version_list")
 pipeline_attributes=$(awk '/^=== 构造属性位图/{in_attributes=1; next} /^=== Config 名称 ===/{in_attributes=0} in_attributes && $1 == 2 {print}' <<< "$version_list")
 [[ ${dpi_attributes:9:1} == ' ' && ${dpi_attributes:14:1} == + &&
@@ -220,8 +223,8 @@ fi
 if "$manager" resolve "$npc_root" SimulationConfig "$pipeline_version" >/dev/null 2>&1; then
   fail 'config/version 不一致未被拒绝'
 fi
-if "$manager" delete "$npc_root" "$pipeline_version" 0 </dev/null >/dev/null 2>&1; then
-  fail '非交互删除未要求 yes=1'
+if "$manager" delete "$npc_root" "$pipeline_version" 1 >/dev/null 2>&1; then
+  fail 'delete 仍接受已删除的确认参数'
 fi
 
 u55c="$CONSTRUCTION_TEST_ROOT/npc.fpga.u55c.U55cYsyxSocFpgaConfig"
@@ -284,10 +287,11 @@ fi
 [[ $(value "$u55c/profile.env" FPGA_VIVADO_IMPL_JOBS) == 8 ]] ||
   fail 'rebuild 没有吸收当前 FPGA 工具链字段'
 
-"$manager" delete "$npc_root" "$pipeline_version" 1
-[[ ! -d $pipeline ]] || fail 'yes=1 未删除构造'
+make -C "$npc_root" version D="$pipeline_version" >/dev/null
+[[ ! -d $pipeline ]] || fail 'D= 未删除构造'
+[[ $(value "$u55c/construction.env" VERSION_INDEX) == 2 ]] || fail '删除后没有紧凑重映射版本序号'
 "$manager" build "$npc_root" StandaloneConfig
 standalone="$CONSTRUCTION_TEST_ROOT/npc.StandaloneConfig"
-[[ $(value "$standalone/construction.env" VERSION_INDEX) == 4 ]] ||
-  fail '删除后新构造复用了已有版本序号'
+[[ $(value "$standalone/construction.env" VERSION_INDEX) == 3 ]] ||
+  fail '删除后新构造没有使用紧凑序号'
 printf 'Config 构造生命周期回归通过\n'

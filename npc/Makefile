@@ -67,6 +67,11 @@ else
     $(error 旧构造目标已删除；请使用 make -C npc build config=<Config>)
   endif
   LEGACY_STRUCTURE_OVERRIDES := $(foreach variable,$(LEGACY_STRUCTURE_VARS),$(if $(filter command line,$(origin $(variable))),$(variable),))
+  # D 是历史 ISA 覆盖变量；仅 `make version D=<序号>` 将它重新定义为删除构造的
+  # 显式命令参数，其他目标仍必须拒绝该结构覆盖。
+  ifeq ($(strip $(MAKECMDGOALS)),version)
+    LEGACY_STRUCTURE_OVERRIDES := $(filter-out D,$(LEGACY_STRUCTURE_OVERRIDES))
+  endif
   ifneq ($(strip $(LEGACY_STRUCTURE_OVERRIDES)),)
     $(error 结构覆盖变量 $(LEGACY_STRUCTURE_OVERRIDES) 已删除；请在 Scala Config 中固定硬件 ABI)
   endif
@@ -420,7 +425,6 @@ include ./fpga/common/build.mk
 # ============== Config 驱动的公开接口 ==============
 
 CONSTRUCTION_MANAGER := $(CURDIR)/scripts/construction-manager.sh
-DELETE_CONFIRM := $(if $(filter 1,$(strip $(yes))),1,0)
 HOST_BUILD_ALL := $(if $(filter 1,$(strip $(all))),1,0)
 HOST_BUILD_JOBS := $(if $(strip $(jobs)),$(strip $(jobs)),1)
 
@@ -430,6 +434,10 @@ endif
 
 ifneq ($(strip $(host_rebuild)),)
   $(error host_rebuild 已删除，请使用 host-rebuild=1)
+endif
+
+ifneq ($(strip $(delete)),)
+  $(error delete 参数已删除，请使用 make -C npc version D=<版本序号>)
 endif
 
 config-list:
@@ -454,8 +462,8 @@ host-rebuild:
 	@$(CONSTRUCTION_MANAGER) host-build "$(CURDIR)" "$(strip $(config))" "$(HOST_BUILD_ALL)" "$(HOST_BUILD_JOBS)"
 
 version:
-	@if test -n "$(strip $(delete))"; then \
-		$(CONSTRUCTION_MANAGER) delete "$(CURDIR)" "$(strip $(delete))" "$(DELETE_CONFIRM)"; \
+	@if test -n "$(strip $(D))"; then \
+		$(CONSTRUCTION_MANAGER) delete "$(CURDIR)" "$(strip $(D))"; \
 		elif test -n "$(strip $(version))"; then \
 			$(CONSTRUCTION_MANAGER) list "$(CURDIR)" "$(strip $(version))"; \
 		elif test -n "$(strip $(config))"; then \

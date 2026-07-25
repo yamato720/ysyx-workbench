@@ -27,8 +27,7 @@ make -C npc host-rebuild all=1 jobs=-1
 make -C npc version
 make -C npc version config=SimulationConfig
 make -C npc version version=1
-make -C npc version delete=1
-make -C npc version delete=1 yes=1
+make -C npc version D=1
 ```
 
 CPU 测试的正式运行入口位于 `am-kernels/tests/cpu-tests`：
@@ -51,6 +50,10 @@ make -C am-kernels/tests/cpu-tests run-bat ALL="forwarding matrix-mul fpu" \
 保存构造。若存在，正式命令应优先使用 `version=<编号>`，以固定硬件 ABI、运行宿主和 FPGA 资产；多个
 已保存构造的批测使用 `version=1,2,...`。只有尚无保存构造、用户明确要求按当前 Config 解析，或需要
 `build`/`rebuild` 创建或更新构造时，才使用 `config=<Config>` 作为执行选择器。
+
+`make version` 先显示已保存构造的属性位图与版本号，再显示当前 catalog 中所有可构造 Config；
+后者包含尚未 build 的 FPGA 终端。位图只标记是否为 FPGA，不重复显示板卡型号。`D=<序号>` 会直接
+删除对应保存构造，并将后续版本号紧凑重映射。
 
 ## 构造策略
 
@@ -90,8 +93,9 @@ constructions/
     logs/
 ```
 
-首次成功构造分配从 `1` 开始、单调递增且不重排的版本序号。同一个 Config 重构时保留版本序号和
-`CREATED_AT`，更新 `UPDATED_AT`、`REBUILD_COUNT` 和 Config 固定的 ABI。内部时间 ID 仅用于并发安全和
+首次成功构造分配从 `1` 开始的连续版本序号。同一个 Config 重构时保留版本序号和
+`CREATED_AT`，更新 `UPDATED_AT`、`REBUILD_COUNT` 和 Config 固定的 ABI；`make version D=<序号>` 删除后会将
+后续版本紧凑重映射。内部时间 ID 仅用于并发安全和
 迁移排序，不是 Make 接口。构造在 `.staging-*` 完成；成功后最新一次的 Chisel、SoftFloat、Verilator、
 FPGA 和 NEMU host 原始输出分别保存在 `logs/build/<阶段>.log` 与 `logs/host/nemu-host.log`，并随构造
 原子发布。每类只保留最新日志。失败构造写入 `.failed/<FQCN>/<build|host>/`，旧目录和其 ABI 保持不变。
@@ -101,15 +105,15 @@ FPGA 和 NEMU host 原始输出分别保存在 `logs/build/<阶段>.log` 与 `lo
 `fpga/ip-generated/logs/npc_int_divider_ip.log` 分别保存参数、复用/生成动作和最终属性报告。
 
 构造 staging 目录带 `.incomplete`，host、RTL 和资产校验完成后改写为 `.complete`，随后才原子发布。
-`make version` 只读取完成的正式构造快照，不启动 Scala 目录刷新，也不等待正在进行的长构造；FPGA
-完成态还要求 U55C 的平台限定 `xclbin` 或 ZCU102 的 `npc.bit` 实际存在且非空。完整 manifest/SHA 校验
-仍在构造发布和运行预检执行，避免静态版本查询反复读取大文件。
+`make version` 的已保存构造表只读取完成的正式快照；可构造 Config 表仅在 Scala Config 源码比 catalog
+更新时刷新。它不等待正在进行的长构造；FPGA 完成态还要求 U55C 的平台限定 `xclbin` 或 ZCU102 的 `npc.bit`
+实际存在且非空。完整 manifest/SHA 校验仍在构造发布和运行预检执行，避免静态版本查询反复读取大文件。
 只有旧构造尚未补齐一次性版本迁移元数据时才等待全局锁。`config-list`、`build` 和按当前 Config 解析的
 运行仍会刷新 Scala 目录。
 
 版本主表用 `+`/空白属性位图代替长 Config 名称：XLEN 分为 RV32/RV64，ISA 显示 M/F/Zicsr，流水线
-固定显示 Pipe/ID/EX 三格，随后显示 NPC/SoC/FPGA 目标和 U55C/ZCU102 板卡。Config 短名在第二张
-“版本 → Config”表中单独列出，便于保持主表对齐并快速比较硬件差异。
+固定显示 Pipe/ID/EX 三格，随后显示 NPC/SoC/FPGA 目标。板卡信息由 Config 名称表达，不在位图重复显示。
+Config 短名在第二张“版本 → Config”表中单独列出，第三张表列出当前所有可构造 Config，便于比较硬件差异。
 
 NEMU host 的 `performanceHtml` 可选项会在运行结束时写入
 `runtime/<test>/<timestamp-ns>-<pid>/performance.html`。它是报告主页，包含总体 CPI/IPC/MIPS、宿主耗时、
