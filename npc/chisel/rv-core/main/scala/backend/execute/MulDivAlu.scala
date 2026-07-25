@@ -4,7 +4,7 @@ import chisel3._
 import chisel3.util._
 import npc.ip.arithmetic._
 
-/** RV32M/RV64M 执行外壳。它译码架构 ALU 操作，发射可复用乘除法算子并汇聚响应。
+/** RV32M/RV64M 执行外壳。它译码架构 ALU 操作，发射可复用乘除法算子并返回响应。
   * 算子本身位于 `compute/`，可供其他模块复用。
   */
 object MulDivAlu {
@@ -139,8 +139,12 @@ class MulDivAlu(
     NpcAluOp.MulDiv.REMUW.asUInt -> IntegerDivideOperation.unsignedWordRemainder.asUInt
   ))
 
+  // 后端严格单在途，但这个外壳也保存已选端点，避免在请求离开后对多个完成源做仲裁。
+  // 同时用该占用位阻止保持 valid 的上游向可流水的端点重复发射同一条请求。
+  private val responseInFlight = RegInit(false.B)
+
   private def forwardRequest(endpoint: ArithmeticOperatorIO, selected: Bool, operation: UInt): Unit = {
-    endpoint.req.valid := io.req.valid && selected
+    endpoint.req.valid := io.req.valid && !responseInFlight && selected
     endpoint.req.bits.operandA := io.req.bits.operandA
     endpoint.req.bits.operandB := io.req.bits.operandB
     endpoint.req.bits.operandC := io.req.bits.operandC
@@ -155,18 +159,41 @@ class MulDivAlu(
   vendorDivider.foreach(endpoint => forwardRequest(endpoint.io, vendorDivideSelected, divideOperation))
   directMultiplier.foreach(endpoint => forwardRequest(endpoint.io, directMultiplySelected, multiplyOperation))
   directDivider.foreach(endpoint => forwardRequest(endpoint.io, directDivideSelected, divideOperation))
-  io.req.ready := MuxCase(false.B, Seq(
-    vendorMultiplier.map(endpoint => vendorMultiplySelected -> endpoint.io.req.ready),
-    vendorDivider.map(endpoint => vendorDivideSelected -> endpoint.io.req.ready),
-    directMultiplier.map(endpoint => directMultiplySelected -> endpoint.io.req.ready),
-    directDivider.map(endpoint => directDivideSelected -> endpoint.io.req.ready)
-  ).flatten)
 
-  private val responseSources = Seq(
-    vendorMultiplier.map(_.io.resp), vendorDivider.map(_.io.resp),
-    directMultiplier.map(_.io.resp), directDivider.map(_.io.resp)
+  private val endpointSelections = Seq(
+    vendorMultiplier.map(vendorMultiplySelected -> _),
+    vendorDivider.map(vendorDivideSelected -> _),
+    directMultiplier.map(directMultiplySelected -> _),
+    directDivider.map(directDivideSelected -> _)
   ).flatten
-  private val responses = Module(new RRArbiter(new ArithmeticResponse(width, config.tagWidth), responseSources.size))
-  responseSources.zipWithIndex.foreach { case (source, index) => responses.io.in(index) <> source }
-  io.resp <> responses.io.out
+  private val responseSources = endpointSelections.map(_._2.io.resp)
+  private val responseSourceWidth = math.max(1, log2Ceil(responseSources.size))
+  private val responseSourceReg = RegInit(0.U(responseSourceWidth.W))
+
+  // 此 ready 最终反压到后端的 ID/EX 弹性寄存器。外部 FPGA endpoint 必须只由已寄存的
+  // 单请求占用状态驱动它，不能由响应 valid/ready 组合回传；核心严格单在途，IP 的 II=1
+  // 仅表示厂商单元的能力，不会被用于并发发射。
+  io.req.ready := !responseInFlight && MuxCase(false.B,
+    endpointSelections.map { case (selected, endpoint) => selected -> endpoint.io.req.ready })
+
+  when(io.req.fire) {
+    responseInFlight := true.B
+    responseSourceReg := MuxCase(0.U(responseSourceWidth.W), endpointSelections.zipWithIndex.map {
+      case ((selected, _), index) => selected -> index.U(responseSourceWidth.W)
+    })
+  }.elsewhen(io.resp.fire) {
+    responseInFlight := false.B
+  }
+
+  val emptyResponse = 0.U.asTypeOf(new ArithmeticResponse(width, config.tagWidth))
+  val selectedResponseValid = MuxLookup(responseSourceReg, false.B)(responseSources.zipWithIndex.map {
+    case (source, index) => index.U -> source.valid
+  })
+  io.resp.valid := responseInFlight && selectedResponseValid
+  io.resp.bits := MuxLookup(responseSourceReg, emptyResponse)(responseSources.zipWithIndex.map {
+    case (source, index) => index.U -> source.bits
+  })
+  responseSources.zipWithIndex.foreach { case (source, index) =>
+    source.ready := responseInFlight && responseSourceReg === index.U(responseSourceWidth.W) && io.resp.ready
+  }
 }

@@ -15,10 +15,12 @@ class MulDivAluTest extends AnyFlatSpec {
     assert(mulDiv.contains("module IntegerDividerOperator"))
     assert(mulDiv.contains("module IntegerMultiplierModel"))
     assert(mulDiv.contains("module IntegerDividerModel"))
+    assert(!mulDiv.contains("RRArbiter"))
     assert(floating.contains("module FloatingAlu"))
     assert(floating.contains("module FloatingFmaOperator"))
     assert(floating.contains("module FloatingCompareOperator"))
     assert(floating.contains("module FloatingDpiOperator"))
+    assert(!floating.contains("RRArbiter"))
   }
 
   "Reusable arithmetic operators" should "elaborate independently from the execution backend" in {

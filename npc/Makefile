@@ -424,11 +424,11 @@ DELETE_CONFIRM := $(if $(filter 1,$(strip $(yes))),1,0)
 HOST_BUILD_ALL := $(if $(filter 1,$(strip $(all))),1,0)
 HOST_BUILD_JOBS := $(if $(strip $(jobs)),$(strip $(jobs)),1)
 
-ifneq ($(origin rebuild),undefined)
+ifneq ($(strip $(rebuild)),)
   $(error rebuild=1 已删除，请使用 make -C npc rebuild config=<Config>)
 endif
 
-ifneq ($(origin host_rebuild),undefined)
+ifneq ($(strip $(host_rebuild)),)
   $(error host_rebuild 已删除，请使用 host-rebuild=1)
 endif
 

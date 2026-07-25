@@ -34,4 +34,14 @@ class NpcModularStructureTest extends AnyFlatSpec {
       assert(!chirrtl.contains("debugCommitInstruction : UInt"))
     }
   }
+
+  it should "use one registered arithmetic response instead of a tag completion queue" in {
+    val chirrtl = _root_.circt.stage.ChiselStage.emitCHIRRTL(new NpcCore(config(64)))
+
+    assert(chirrtl.contains("arithmeticResponseReg"))
+    assert(!chirrtl.contains("arithmeticEntries"))
+    assert(!chirrtl.contains("arithmeticHead"))
+    assert(!chirrtl.contains("arithmeticTail"))
+    assert(!chirrtl.contains("arithmeticResponseArbiter"))
+  }
 }

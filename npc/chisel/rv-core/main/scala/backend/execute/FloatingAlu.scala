@@ -157,8 +157,11 @@ class FloatingAlu(
     }
   }
 
+  // 浮点在 FPGA 配置中默认关闭，但本地模型也遵循与 M 相同的单在途协议：锁存发射的
+  // 端点编号，在请求离开后只接收该端点的响应，不保留多完成源仲裁器。
+  private val responseInFlight = RegInit(false.B)
   endpointEntries.foreach { case (endpoint, selectedOperation) =>
-    endpoint.io.req.valid := io.req.valid && selectedOperation
+    endpoint.io.req.valid := io.req.valid && !responseInFlight && selectedOperation
     endpoint.io.req.bits.operandA := io.req.bits.operandA
     endpoint.io.req.bits.operandB := io.req.bits.operandB
     endpoint.io.req.bits.operandC := io.req.bits.operandC
@@ -169,11 +172,31 @@ class FloatingAlu(
     endpoint.io.req.bits.fcsr := io.req.bits.fcsr
     endpoint.io.req.bits.tag := io.req.bits.tag
   }
-  io.req.ready := MuxCase(false.B,
+  private val responseSources = endpointEntries.map(_._1.io.resp)
+  private val responseSourceWidth = math.max(1, log2Ceil(responseSources.size))
+  private val responseSourceReg = RegInit(0.U(responseSourceWidth.W))
+
+  io.req.ready := !responseInFlight && MuxCase(false.B,
     endpointEntries.map { case (endpoint, selectedOperation) => selectedOperation -> endpoint.io.req.ready })
 
-  private val responseSources = endpointEntries.map(_._1.io.resp)
-  private val responses = Module(new RRArbiter(new ArithmeticResponse(width, config.tagWidth), responseSources.size))
-  responseSources.zipWithIndex.foreach { case (source, index) => responses.io.in(index) <> source }
-  io.resp <> responses.io.out
+  when(io.req.fire) {
+    responseInFlight := true.B
+    responseSourceReg := MuxCase(0.U(responseSourceWidth.W), endpointEntries.zipWithIndex.map {
+      case ((_, selectedOperation), index) => selectedOperation -> index.U(responseSourceWidth.W)
+    })
+  }.elsewhen(io.resp.fire) {
+    responseInFlight := false.B
+  }
+
+  val emptyResponse = 0.U.asTypeOf(new ArithmeticResponse(width, config.tagWidth))
+  val selectedResponseValid = MuxLookup(responseSourceReg, false.B)(responseSources.zipWithIndex.map {
+    case (source, index) => index.U -> source.valid
+  })
+  io.resp.valid := responseInFlight && selectedResponseValid
+  io.resp.bits := MuxLookup(responseSourceReg, emptyResponse)(responseSources.zipWithIndex.map {
+    case (source, index) => index.U -> source.bits
+  })
+  responseSources.zipWithIndex.foreach { case (source, index) =>
+    source.ready := responseInFlight && responseSourceReg === index.U(responseSourceWidth.W) && io.resp.ready
+  }
 }
