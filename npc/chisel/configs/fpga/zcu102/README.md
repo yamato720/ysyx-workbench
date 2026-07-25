@@ -13,9 +13,10 @@
 的默认 NPC；板卡键自动选择 SoC 的 FPGA 分支。所有完整终端均在 `Configs.scala`，以统一的
 `fpga` 作用域发现，再由 `TARGET=NPC|SOC` 选择对应生成入口。
 
-严格 RVF 的数值算子经 ABI v3 mailbox 回退到主机 SoftFloat；符号、比较、搬移和分类仍直接在 PL
-完成。`FPGA_NOTIFICATION_MODE=ps-uio-irq` 表示 PL mailbox 中断通知 ZCU102 PS 的 UIO 主机，主机在
-`poll/read` 后重使能 UIO。该通知不接入 NPC 的 RISC-V 外部中断或陷阱路径。
+所有公开 FPGA Config 固定 `F=0`、`D=0`；PL 不生成硬件 FPR、本地 FPU、浮点 IP 或 NEMU 指令
+代执行服务。浮点学习仅由本地 Verilator/NEMU 仿真 Config 提供。
+`FPGA_NOTIFICATION_MODE=ps-uio-irq` 仍用于调试与运行控制；该通知不接入 NPC 的 RISC-V 外部中断
+或陷阱路径。
 
 ## 可增加的特性
 
@@ -26,9 +27,10 @@
 | ZCU102 SoC 终端 | `new Zcu102YsyxSocFpgaConfig` | `Configs.scala` | 是 |
 | ZCU102 板卡标识 | `new WithFpgaBoardConfig(FpgaBoard.Zcu102)` | L3 `common/base/FpgaConfigFragments.scala` | ZCU102 目标必需 |
 | ZCU102 时钟 | `new WithFpgaClockMHzConfig(300)` | L3 `common/base/FpgaConfigFragments.scala` | ZCU102 目标必需 |
-| ZCU102 地址与 IP 时序 | `new WithFpgaPlatformConfig(FpgaPlatformSettings(...))` | `core/Zcu102BoardConfig.scala` | ZCU102 目标必需 |
+| ZCU102 地址与时钟 | `new WithFpgaPlatformConfig(FpgaPlatformSettings(...))` | `core/Zcu102BoardConfig.scala` | ZCU102 目标必需 |
+| ZCU102 整数 IP | `Zcu102XilinxIpAttachment(...)` | `core/Zcu102BoardConfig.scala` | ZCU102 目标必需；同一 attachment 同时挂接 NPC 与 SoC |
 | ZCU102 器件与实现策略 | `FpgaToolchainConfig.Zcu102Base` | 根部 `Zcu102NpcTerminal`/`Zcu102SocTerminal` 预设 | ZCU102 目标必需；不进入 CDE |
 | ZCU102 构造并行度、策略搜索和实现后报告 | `Zcu102Base.flow`、`Zcu102Base.reports` | `FpgaToolchainConfig.scala` | 是；worker jobs、策略搜索、时序路径深度和诊断报告开关均由终端冻结 |
-| 默认 NPC 覆盖 | `new FullIsa64PipelineDualForwardingFpgaConfig` 等完整 L1 Config | L1 `core/IntegrationCore.scala` | 是 |
+| 默认 NPC 覆盖 | `new Rv64PipelineDualForwardingFpgaConfig` 等完整 L1 Config | L1 `core/IntegrationCore.scala` | 是；仅 IM_Zicsr |
 | 新 ZCU102 CDE 特性 | `class WithMyZcu102FeatureConfig`（命名模板，需先实现） | 新的 ZCU102 Config | 是 |
-| wrapper、约束、Vivado block design 和 vendor IP 文件 | 无；不在 Scala Config 添加 | `npc/fpga/boards/zcu102/` | ZCU102 bitstream 必需 |
+| wrapper、约束、Vivado block design 和 vendor IP 文件 | 无；不在 Scala Config 添加 | `npc/fpga/zcu102/` 与 `npc/fpga-ip-generator/` | ZCU102 bitstream 必需 |

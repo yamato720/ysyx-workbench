@@ -1,6 +1,8 @@
-package scpu
+package npc
 
-private[scpu] object ConstructionValidation {
+import org.chipsalliance.cde.config.View
+
+private[npc] object ConstructionValidation {
   def localNemu(config: NemuHostConfig): NemuHostConfig = {
     require(config.backend == NemuBackend.LocalVerilator,
       s"本地仿真只能使用 local NEMU backend，实际为 ${config.backend.id}")
@@ -27,6 +29,32 @@ trait HostConstruction {
   final val capability: String = "run"
   def nemuConfig: NemuHostConfig = configuredNemu
   final def nemuPreset: String = NemuHostConfig.presetName(nemuConfig)
+}
+
+/** 与运行宿主平行的计算 IP 挂载合同。
+  *
+  * 完整构造必须由终端 trait 主动提供该选择；核心组合和 CDE 图不能通过构造参数或
+  * `++` 链自行挑选 NEMU/FPGA 后端。
+  */
+trait IpConstruction {
+  protected def configuredIp: IpComputeSelection
+
+  final def ipComputeSelection: IpComputeSelection = configuredIp
+}
+
+/** 从 CDE 顶层终端取得已挂载的计算 IP。
+  *
+  * CDE 的 `site` 始终是最终终端，因此 NPC 与 SoC 可共享这个桥接，而不必把 IP
+  * 选择作为各层 Config 的构造参数继续传递。
+  */
+private[npc] object IpConstruction {
+  def selection(site: View): IpComputeSelection = site match {
+    case construction: IpConstruction => construction.ipComputeSelection
+    case _ => throw new IllegalArgumentException(
+      "NPC CDE 构造必须挂载 IP terminal trait，例如 " +
+        "NemuSimulationIpTerminal 或 FpgaIpTerminal"
+    )
+  }
 }
 
 /** 本地 NPC/SoC 仿真底层行为；完整终端预设必须提供 local NEMU 配方。 */

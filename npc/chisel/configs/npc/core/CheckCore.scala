@@ -1,4 +1,4 @@
-package scpu
+package npc
 
 /** 用于流水线功能检查的整数 NPC。 */
 class PipelineCheckConfig extends ConstructionConfig(
@@ -6,7 +6,7 @@ class PipelineCheckConfig extends ConstructionConfig(
     new PipelineDualFwdPerformConfig ++
     new WithTopDebugConfig ++
     new BaseConfig
-) with CheckOnlyConstruction
+) with CheckOnlyConstruction with NemuSimulationIpTerminal
 
 /** 用于带 F 扩展流水线功能检查的 NPC。 */
 class FloatingCheckConfig extends ConstructionConfig(
@@ -14,7 +14,7 @@ class FloatingCheckConfig extends ConstructionConfig(
     new PipelineDualFwdPerformConfig ++
     new WithTopDebugConfig ++
     new BaseConfig
-) with CheckOnlyConstruction
+) with CheckOnlyConstruction with NemuSimulationIpTerminal
 
 /** 用于乘除法延迟检查的流水线 NPC。 */
 class MulDivCheckConfig extends ConstructionConfig(
@@ -22,4 +22,4 @@ class MulDivCheckConfig extends ConstructionConfig(
     new PipelineDualFwdPerformConfig ++
     new WithTopDebugConfig ++
     new BaseConfig
-) with CheckOnlyConstruction
+) with CheckOnlyConstruction with NemuSimulationIpTerminal

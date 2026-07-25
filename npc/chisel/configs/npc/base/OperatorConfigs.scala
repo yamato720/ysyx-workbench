@@ -1,17 +1,17 @@
-package scpu
+package npc
 
 import npc.ip.arithmetic.ArithmeticIpTiming
 
 /** 只覆盖一个算术域的计算实现。 */
 class WithMulDivComputeConfig(implementation: ComputeUnitConfig) extends ConfigFragment {
-  override private[scpu] def applyTo(base: NpcConfig): NpcConfig = base.copy(
+  override private[npc] def applyTo(base: NpcConfig): NpcConfig = base.copy(
     operators = base.operators.copy(mulDiv = base.operators.mulDiv.copy(implementation = implementation))
   )
 }
 
 /** 只覆盖浮点算术域的计算实现。 */
 class WithFloatingComputeConfig(implementation: ComputeUnitConfig) extends ConfigFragment {
-  override private[scpu] def applyTo(base: NpcConfig): NpcConfig = base.copy(
+  override private[npc] def applyTo(base: NpcConfig): NpcConfig = base.copy(
     operators = base.operators.copy(floating = base.operators.floating.copy(implementation = implementation))
   )
 }
@@ -39,7 +39,7 @@ class WithGenericIpComputeConfig(ip: IpComputeConfig = IpComputeConfig()) extend
 )
 
 private class WithGenericIpComputeFragment(ip: IpComputeConfig) extends ConfigFragment {
-  override private[scpu] def applyTo(base: NpcConfig): NpcConfig = {
+  override private[npc] def applyTo(base: NpcConfig): NpcConfig = {
     require(!base.isa.F,
       "Generic IP arithmetic cannot be used with RISC-V F: Vivado 2022.2 FPO lacks dynamic RISC-V rounding, " +
         "NX reporting, and unsigned float-to-integer conversion. Use WithModelComputeConfig or WithFpgaComputeConfig.")
@@ -47,14 +47,14 @@ private class WithGenericIpComputeFragment(ip: IpComputeConfig) extends ConfigFr
   }
 }
 
-/** 使用 FPGA 整数 IP 与浮点 mailbox 回退端点。 */
+/** 使用 FPGA 整数 IP。 */
 class WithFpgaComputeConfig extends ConfigBundle(
-  new WithComputeConfig(ComputeUnitConfig(backend = ComputeBackend.FPGA))
+  new WithMulDivComputeConfig(ComputeUnitConfig(backend = ComputeBackend.FPGA))
 )
 
 /** 覆盖已启用扩展的逐操作路由；仅由检查构造或板级 CDE 覆盖使用。 */
 class WithOperatorRoutesConfig(routes: OperatorRouteConfig) extends ConfigFragment {
-  override private[scpu] def applyTo(base: NpcConfig): NpcConfig = base.copy(
+  override private[npc] def applyTo(base: NpcConfig): NpcConfig = base.copy(
     operators = base.operators.copy(routes = base.operators.routes.overlay(routes))
   )
 }
@@ -63,7 +63,7 @@ class WithOperatorRoutesConfig(routes: OperatorRouteConfig) extends ConfigFragme
 class WithArithmeticOutputFifoDepthConfig(depth: Int) extends ConfigFragment {
   require(depth >= 1, s"Arithmetic output FIFO depth must be positive, got $depth")
 
-  override private[scpu] def applyTo(base: NpcConfig): NpcConfig = {
+  override private[npc] def applyTo(base: NpcConfig): NpcConfig = {
     def withFifoDepth(timing: ArithmeticIpTiming): ArithmeticIpTiming = timing.copy(responseFifoDepth = depth)
     def withIpDepth(implementation: ComputeUnitConfig): ComputeUnitConfig = implementation.copy(
       ip = implementation.ip.copy(outputFifoDepth = depth)
@@ -92,7 +92,7 @@ class WithArithmeticOutputFifoDepthConfig(depth: Int) extends ConfigFragment {
 
 /** 覆盖整数和浮点算术的完成时序，并保留现有计算实现。 */
 class WithArithmeticTimingConfig(timing: OperatorIpTimingConfig) extends ConfigFragment {
-  override private[scpu] def applyTo(base: NpcConfig): NpcConfig = {
+  override private[npc] def applyTo(base: NpcConfig): NpcConfig = {
     def withFifoDepth(implementation: ComputeUnitConfig): ComputeUnitConfig = implementation.copy(
       ip = implementation.ip.copy(outputFifoDepth = timing.outputFifoDepth)
     )
@@ -102,19 +102,19 @@ class WithArithmeticTimingConfig(timing: OperatorIpTimingConfig) extends ConfigF
     base.copy(operators = base.operators.copy(
       mulDiv = mulDiv.copy(
         implementation = withFifoDepth(mulDiv.implementation),
-        completionCycles = timing.divCycles,
-        multiplyTiming = timing.timing(timing.multiplyCycles, timing.multiplyInitiationInterval),
-        dividerInitiationInterval = timing.divInitiationInterval
+        completionCycles = timing.divide.latency,
+        multiplyTiming = timing.timing(timing.multiply),
+        dividerInitiationInterval = timing.divide.initiationInterval
       ),
       floating = floating.copy(
         implementation = withFifoDepth(floating.implementation),
-        addSubTiming = timing.timing(timing.floatingAddSubCycles, timing.floatingAddSubInitiationInterval),
-        multiplyTiming = timing.timing(timing.floatingMultiplyCycles, timing.floatingMultiplyInitiationInterval),
-        divideTiming = timing.timing(timing.floatingDivideCycles, timing.floatingDivideInitiationInterval),
-        fmaTiming = timing.timing(timing.floatingFmaCycles, timing.floatingFmaInitiationInterval),
-        sqrtTiming = timing.timing(timing.floatingSqrtCycles, timing.floatingSqrtInitiationInterval),
-        convertTiming = timing.timing(timing.floatingConvertCycles, timing.floatingConvertInitiationInterval),
-        compareTiming = timing.timing(timing.floatingCompareCycles, timing.floatingCompareInitiationInterval)
+        addSubTiming = timing.timing(timing.floatingAddSub),
+        multiplyTiming = timing.timing(timing.floatingMultiply),
+        divideTiming = timing.timing(timing.floatingDivide),
+        fmaTiming = timing.timing(timing.floatingFma),
+        sqrtTiming = timing.timing(timing.floatingSqrt),
+        convertTiming = timing.timing(timing.floatingConvert),
+        compareTiming = timing.timing(timing.floatingCompare)
       )
     ))
   }
@@ -127,7 +127,7 @@ class WithDefaultArithmeticTimingConfig extends ConfigBundle(
 
 /** 覆盖乘除法单元的完成延迟，用于时序检查构造。 */
 class WithMulDivCompletionConfig(cycles: Int) extends ConfigFragment {
-  override private[scpu] def applyTo(base: NpcConfig): NpcConfig = base.copy(
+  override private[npc] def applyTo(base: NpcConfig): NpcConfig = base.copy(
     operators = base.operators.copy(mulDiv = base.operators.mulDiv.copy(completionCycles = cycles))
   )
 }

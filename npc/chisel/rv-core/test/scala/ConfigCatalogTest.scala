@@ -1,4 +1,4 @@
-package scpu
+package npc
 
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path, Paths}
@@ -21,9 +21,9 @@ class ConfigCatalogTest extends AnyFlatSpec {
 
   "ConfigCatalog" should "resolve both a short name and its canonical FQCN" in {
     val byShortName = ConfigCatalog.resolve("SimulationConfig", Set("npc"))
-    val byClassName = ConfigCatalog.resolve("scpu.SimulationConfig", Set("npc"))
+    val byClassName = ConfigCatalog.resolve("npc.SimulationConfig", Set("npc"))
     assert(byShortName == byClassName)
-    assert(byShortName.className == "scpu.SimulationConfig")
+    assert(byShortName.className == "npc.SimulationConfig")
   }
 
   it should "reject unknown entries and scope mismatches" in {
@@ -44,8 +44,9 @@ class ConfigCatalogTest extends AnyFlatSpec {
     assert(names.contains("Zcu102Rv32OperatorSimulationConfig"))
     assert(names.contains("U55cRv32OperatorSimulationConfig"))
     assert(names.contains("U55cRv64OperatorSimulationConfig"))
-    assert(names.contains("U55cFullIsa64NpcFpgaConfig"))
-    assert(names.contains("U55cFullIsa64Npc250MHzFpgaConfig"))
+    assert(names.contains("U55cRv64NpcFpgaConfig"))
+    assert(names.contains("U55cRv64Npc250MHzFpgaConfig"))
+    assert(!names.contains("U55cFullIsa64NpcFpgaConfig"))
     assert(!names.contains("FpgaConfig"))
     assert(!names.contains("ExternalAxiConfig"))
     assert(!names.contains("YsyxElaborateConfig"))
@@ -65,7 +66,7 @@ class ConfigCatalogTest extends AnyFlatSpec {
 
   it should "ignore Config-shaped text in comments and string literals" in {
     val source =
-      """package scpu
+      """package npc
         |/** class CommentConfig extends ConstructionConfig */
         |val example = "class StringConfig extends ConstructionConfig"
         |class RealConfig extends ConstructionConfig
@@ -81,12 +82,12 @@ class ConfigCatalogTest extends AnyFlatSpec {
     val directory = Files.createTempDirectory("config-layout-test-")
     try {
       Files.writeString(directory.resolve("Configs.scala"),
-        "package scpu\nclass GoodConfig extends ConstructionConfig with LocalNpcTerminal\n",
+        "package npc\nclass GoodConfig extends ConstructionConfig with LocalNpcTerminal\n",
         StandardCharsets.UTF_8)
       val core = Files.createDirectories(directory.resolve("core"))
       val misplaced = core.resolve("Misplaced.scala")
       Files.writeString(misplaced,
-        "package scpu\nclass MisplacedConfig extends ConstructionConfig with LocalNpcTerminal\n",
+        "package npc\nclass MisplacedConfig extends ConstructionConfig with LocalNpcTerminal\n",
         StandardCharsets.UTF_8)
 
       val misplacedError = intercept[IllegalArgumentException] {
@@ -96,7 +97,7 @@ class ConfigCatalogTest extends AnyFlatSpec {
 
       Files.delete(misplaced)
       Files.writeString(directory.resolve("Configs.scala"),
-        "package scpu\nclass UnmarkedConfig extends ConstructionConfig\n",
+        "package npc\nclass UnmarkedConfig extends ConstructionConfig\n",
         StandardCharsets.UTF_8)
       val unmarkedError = intercept[IllegalArgumentException] {
         ConfigCatalogGenerator.validateTerminalLayout(directory)
@@ -104,7 +105,7 @@ class ConfigCatalogTest extends AnyFlatSpec {
       assert(unmarkedError.getMessage.contains("只能包含挂载 terminal 层 trait 的 Config"))
 
       Files.writeString(directory.resolve("Configs.scala"),
-        "package scpu\nclass AmbiguousConfig extends ConstructionConfig " +
+        "package npc\nclass AmbiguousConfig extends ConstructionConfig " +
           "with LocalNpcTerminal with U55cNpcTerminal\n",
         StandardCharsets.UTF_8)
       val ambiguousError = intercept[IllegalArgumentException] {
@@ -113,14 +114,14 @@ class ConfigCatalogTest extends AnyFlatSpec {
       assert(ambiguousError.getMessage.contains("挂载了多个 terminal 层 trait"))
 
       Files.writeString(directory.resolve("Configs.scala"),
-        "package scpu\nclass ManualRecipeConfig extends ConstructionConfig with LocalNpcTerminal {\n" +
+        "package npc\nclass ManualRecipeConfig extends ConstructionConfig with LocalNpcTerminal {\n" +
           "  override protected val configuredNemu = NemuHostConfig.LocalBase\n}\n",
         StandardCharsets.UTF_8)
       assert(ConfigCatalogGenerator.validateTerminalLayout(directory) ==
         directory.resolve("Configs.scala").toAbsolutePath.normalize)
 
       Files.writeString(directory.resolve("Configs.scala"),
-        "package scpu\nclass LayerViolationConfig extends ConstructionConfig " +
+        "package npc\nclass LayerViolationConfig extends ConstructionConfig " +
           "with LocalNpcTerminal with NemuSimulationConstruction\n",
         StandardCharsets.UTF_8)
       val layeringError = intercept[IllegalArgumentException] {
@@ -133,7 +134,7 @@ class ConfigCatalogTest extends AnyFlatSpec {
   "ConfigResolver" should "instantiate only registered complete NPC configurations" in {
     withConfig("PipelineSimulationConfig") {
       val (entry, construction) = ConfigResolver.resolve("SimulationConfig")
-      assert(entry.className == "scpu.PipelineSimulationConfig")
+      assert(entry.className == "npc.PipelineSimulationConfig")
       assert(construction.config.pipeline.enablePipeline)
       assert(construction.capability == "run")
     }

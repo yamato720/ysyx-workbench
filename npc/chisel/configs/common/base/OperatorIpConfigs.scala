@@ -1,75 +1,59 @@
-package scpu
+package npc
 
 import npc.ip.arithmetic.ArithmeticIpTiming
 
-/** 回退服务所属的架构算术域。该编码也是 FPGA mailbox ABI 的稳定字段。 */
-sealed abstract class ArithmeticRouteDomain(val id: Int, val profileName: String)
-object ArithmeticRouteDomain {
-  case object Integer extends ArithmeticRouteDomain(0, "integer")
-  case object Floating extends ArithmeticRouteDomain(1, "floating")
-}
-
-/** 主机回退的可诊断原因。不能把厂商能力缺失伪装成 RISC-V 异常。 */
-sealed abstract class OperatorFallbackReason(val id: Int, val profileName: String)
-object OperatorFallbackReason {
-  case object None extends OperatorFallbackReason(0, "none")
-  case object FpoRiscvIncompatible extends OperatorFallbackReason(1, "fpo-riscv-incompatible")
-  case object VendorIpUnavailable extends OperatorFallbackReason(2, "vendor-ip-unavailable")
-  case object Unselected extends OperatorFallbackReason(3, "unselected")
-}
-
 /** 每个 RISC-V M/F 指令在构造期使用的稳定路由标识。 */
 sealed abstract class ArithmeticRouteOperation(
-  val domain: ArithmeticRouteDomain,
   val profileName: String,
+  val isFloating: Boolean = false,
   val isMultiply: Boolean = false,
   val isDivide: Boolean = false,
   val isDirectFloating: Boolean = false
 )
 
 object ArithmeticRouteOperation {
-  case object Mul extends ArithmeticRouteOperation(ArithmeticRouteDomain.Integer, "m_mul", isMultiply = true)
-  case object Mulh extends ArithmeticRouteOperation(ArithmeticRouteDomain.Integer, "m_mulh", isMultiply = true)
-  case object Mulhsu extends ArithmeticRouteOperation(ArithmeticRouteDomain.Integer, "m_mulhsu", isMultiply = true)
-  case object Mulhu extends ArithmeticRouteOperation(ArithmeticRouteDomain.Integer, "m_mulhu", isMultiply = true)
-  case object Mulw extends ArithmeticRouteOperation(ArithmeticRouteDomain.Integer, "m_mulw", isMultiply = true)
-  case object Div extends ArithmeticRouteOperation(ArithmeticRouteDomain.Integer, "m_div", isDivide = true)
-  case object Divu extends ArithmeticRouteOperation(ArithmeticRouteDomain.Integer, "m_divu", isDivide = true)
-  case object Rem extends ArithmeticRouteOperation(ArithmeticRouteDomain.Integer, "m_rem", isDivide = true)
-  case object Remu extends ArithmeticRouteOperation(ArithmeticRouteDomain.Integer, "m_remu", isDivide = true)
-  case object Divw extends ArithmeticRouteOperation(ArithmeticRouteDomain.Integer, "m_divw", isDivide = true)
-  case object Divuw extends ArithmeticRouteOperation(ArithmeticRouteDomain.Integer, "m_divuw", isDivide = true)
-  case object Remw extends ArithmeticRouteOperation(ArithmeticRouteDomain.Integer, "m_remw", isDivide = true)
-  case object Remuw extends ArithmeticRouteOperation(ArithmeticRouteDomain.Integer, "m_remuw", isDivide = true)
+  case object Mul extends ArithmeticRouteOperation("m_mul", isMultiply = true)
+  case object Mulh extends ArithmeticRouteOperation("m_mulh", isMultiply = true)
+  case object Mulhsu extends ArithmeticRouteOperation("m_mulhsu", isMultiply = true)
+  case object Mulhu extends ArithmeticRouteOperation("m_mulhu", isMultiply = true)
+  case object Mulw extends ArithmeticRouteOperation("m_mulw", isMultiply = true)
+  case object Div extends ArithmeticRouteOperation("m_div", isDivide = true)
+  case object Divu extends ArithmeticRouteOperation("m_divu", isDivide = true)
+  case object Rem extends ArithmeticRouteOperation("m_rem", isDivide = true)
+  case object Remu extends ArithmeticRouteOperation("m_remu", isDivide = true)
+  case object Divw extends ArithmeticRouteOperation("m_divw", isDivide = true)
+  case object Divuw extends ArithmeticRouteOperation("m_divuw", isDivide = true)
+  case object Remw extends ArithmeticRouteOperation("m_remw", isDivide = true)
+  case object Remuw extends ArithmeticRouteOperation("m_remuw", isDivide = true)
 
-  case object Fadd extends ArithmeticRouteOperation(ArithmeticRouteDomain.Floating, "f_fadd")
-  case object Fsub extends ArithmeticRouteOperation(ArithmeticRouteDomain.Floating, "f_fsub")
-  case object Fmul extends ArithmeticRouteOperation(ArithmeticRouteDomain.Floating, "f_fmul")
-  case object Fdiv extends ArithmeticRouteOperation(ArithmeticRouteDomain.Floating, "f_fdiv")
-  case object Fsqrt extends ArithmeticRouteOperation(ArithmeticRouteDomain.Floating, "f_fsqrt")
-  case object Fmadd extends ArithmeticRouteOperation(ArithmeticRouteDomain.Floating, "f_fmadd")
-  case object Fmsub extends ArithmeticRouteOperation(ArithmeticRouteDomain.Floating, "f_fmsub")
-  case object Fnmsub extends ArithmeticRouteOperation(ArithmeticRouteDomain.Floating, "f_fnmsub")
-  case object Fnmadd extends ArithmeticRouteOperation(ArithmeticRouteDomain.Floating, "f_fnmadd")
-  case object Fsgnj extends ArithmeticRouteOperation(ArithmeticRouteDomain.Floating, "f_fsgnj", isDirectFloating = true)
-  case object Fsgnjn extends ArithmeticRouteOperation(ArithmeticRouteDomain.Floating, "f_fsgnjn", isDirectFloating = true)
-  case object Fsgnjx extends ArithmeticRouteOperation(ArithmeticRouteDomain.Floating, "f_fsgnjx", isDirectFloating = true)
-  case object Fmin extends ArithmeticRouteOperation(ArithmeticRouteDomain.Floating, "f_fmin", isDirectFloating = true)
-  case object Fmax extends ArithmeticRouteOperation(ArithmeticRouteDomain.Floating, "f_fmax", isDirectFloating = true)
-  case object Feq extends ArithmeticRouteOperation(ArithmeticRouteDomain.Floating, "f_feq", isDirectFloating = true)
-  case object Flt extends ArithmeticRouteOperation(ArithmeticRouteDomain.Floating, "f_flt", isDirectFloating = true)
-  case object Fle extends ArithmeticRouteOperation(ArithmeticRouteDomain.Floating, "f_fle", isDirectFloating = true)
-  case object FcvtW extends ArithmeticRouteOperation(ArithmeticRouteDomain.Floating, "f_fcvt_w")
-  case object FcvtWu extends ArithmeticRouteOperation(ArithmeticRouteDomain.Floating, "f_fcvt_wu")
-  case object FcvtL extends ArithmeticRouteOperation(ArithmeticRouteDomain.Floating, "f_fcvt_l")
-  case object FcvtLu extends ArithmeticRouteOperation(ArithmeticRouteDomain.Floating, "f_fcvt_lu")
-  case object FcvtSW extends ArithmeticRouteOperation(ArithmeticRouteDomain.Floating, "f_fcvt_s_w")
-  case object FcvtSWu extends ArithmeticRouteOperation(ArithmeticRouteDomain.Floating, "f_fcvt_s_wu")
-  case object FcvtSL extends ArithmeticRouteOperation(ArithmeticRouteDomain.Floating, "f_fcvt_s_l")
-  case object FcvtSLu extends ArithmeticRouteOperation(ArithmeticRouteDomain.Floating, "f_fcvt_s_lu")
-  case object FmvXW extends ArithmeticRouteOperation(ArithmeticRouteDomain.Floating, "f_fmv_x_w", isDirectFloating = true)
-  case object Fclass extends ArithmeticRouteOperation(ArithmeticRouteDomain.Floating, "f_fclass", isDirectFloating = true)
-  case object FmvWX extends ArithmeticRouteOperation(ArithmeticRouteDomain.Floating, "f_fmv_w_x", isDirectFloating = true)
+  case object Fadd extends ArithmeticRouteOperation("f_fadd", isFloating = true)
+  case object Fsub extends ArithmeticRouteOperation("f_fsub", isFloating = true)
+  case object Fmul extends ArithmeticRouteOperation("f_fmul", isFloating = true)
+  case object Fdiv extends ArithmeticRouteOperation("f_fdiv", isFloating = true)
+  case object Fsqrt extends ArithmeticRouteOperation("f_fsqrt", isFloating = true)
+  case object Fmadd extends ArithmeticRouteOperation("f_fmadd", isFloating = true)
+  case object Fmsub extends ArithmeticRouteOperation("f_fmsub", isFloating = true)
+  case object Fnmsub extends ArithmeticRouteOperation("f_fnmsub", isFloating = true)
+  case object Fnmadd extends ArithmeticRouteOperation("f_fnmadd", isFloating = true)
+  case object Fsgnj extends ArithmeticRouteOperation("f_fsgnj", isFloating = true, isDirectFloating = true)
+  case object Fsgnjn extends ArithmeticRouteOperation("f_fsgnjn", isFloating = true, isDirectFloating = true)
+  case object Fsgnjx extends ArithmeticRouteOperation("f_fsgnjx", isFloating = true, isDirectFloating = true)
+  case object Fmin extends ArithmeticRouteOperation("f_fmin", isFloating = true, isDirectFloating = true)
+  case object Fmax extends ArithmeticRouteOperation("f_fmax", isFloating = true, isDirectFloating = true)
+  case object Feq extends ArithmeticRouteOperation("f_feq", isFloating = true, isDirectFloating = true)
+  case object Flt extends ArithmeticRouteOperation("f_flt", isFloating = true, isDirectFloating = true)
+  case object Fle extends ArithmeticRouteOperation("f_fle", isFloating = true, isDirectFloating = true)
+  case object FcvtW extends ArithmeticRouteOperation("f_fcvt_w", isFloating = true)
+  case object FcvtWu extends ArithmeticRouteOperation("f_fcvt_wu", isFloating = true)
+  case object FcvtL extends ArithmeticRouteOperation("f_fcvt_l", isFloating = true)
+  case object FcvtLu extends ArithmeticRouteOperation("f_fcvt_lu", isFloating = true)
+  case object FcvtSW extends ArithmeticRouteOperation("f_fcvt_s_w", isFloating = true)
+  case object FcvtSWu extends ArithmeticRouteOperation("f_fcvt_s_wu", isFloating = true)
+  case object FcvtSL extends ArithmeticRouteOperation("f_fcvt_s_l", isFloating = true)
+  case object FcvtSLu extends ArithmeticRouteOperation("f_fcvt_s_lu", isFloating = true)
+  case object FmvXW extends ArithmeticRouteOperation("f_fmv_x_w", isFloating = true, isDirectFloating = true)
+  case object Fclass extends ArithmeticRouteOperation("f_fclass", isFloating = true, isDirectFloating = true)
+  case object FmvWX extends ArithmeticRouteOperation("f_fmv_w_x", isFloating = true, isDirectFloating = true)
 
   val mOperations: Vector[ArithmeticRouteOperation] = Vector(
     Mul, Mulh, Mulhsu, Mulhu, Mulw, Div, Divu, Rem, Remu, Divw, Divuw, Remw, Remuw)
@@ -87,7 +71,6 @@ object OperatorRouteTarget {
   case object Model extends OperatorRouteTarget("model")
   case object VendorIp extends OperatorRouteTarget("vendor-ip")
   case object DirectLogic extends OperatorRouteTarget("direct-logic")
-  case object HostFallback extends OperatorRouteTarget("host-fallback")
   case object Unselected extends OperatorRouteTarget("unselected")
 }
 
@@ -97,21 +80,16 @@ final case class OperatorRoute(
   moduleName: String,
   operandWidth: Int,
   latency: Int,
-  initiationInterval: Int,
-  fallbackReason: OperatorFallbackReason = OperatorFallbackReason.None
+  initiationInterval: Int
 ) {
   require(operandWidth == 32 || operandWidth == 64,
     s"Operator route operand width must be RV32 or RV64, got $operandWidth")
   require(latency >= 1, s"Operator route latency must be positive, got $latency")
   require(initiationInterval >= 1, s"Operator route II must be positive, got $initiationInterval")
   require(moduleName.nonEmpty, "Operator route module name must not be empty")
-  require(
-    (target == OperatorRouteTarget.HostFallback) == (fallbackReason != OperatorFallbackReason.None),
-    s"Operator route $moduleName must declare a fallback reason exactly for host fallback"
-  )
-
+  // 末尾的 none 保持已发布的 M vendor-IP 文本合同；它不再表示 host fallback 原因。
   def profileValue: String =
-    s"${target.profileName}:$moduleName:$operandWidth:$latency:$initiationInterval:${fallbackReason.profileName}"
+    s"${target.profileName}:$moduleName:$operandWidth:$latency:$initiationInterval:none"
 }
 
 /** M/F 指令到实现合同的完整路由表。 */
@@ -119,8 +97,7 @@ final case class OperatorRouteConfig(routes: Map[ArithmeticRouteOperation, Opera
   import ArithmeticRouteOperation._
 
   def route(operation: ArithmeticRouteOperation): OperatorRoute = routes.getOrElse(operation,
-    OperatorRoute(OperatorRouteTarget.Unselected, "unselected", 32, 1, 1,
-      OperatorFallbackReason.None))
+    OperatorRoute(OperatorRouteTarget.Unselected, "unselected", 32, 1, 1))
 
   def overlay(overrides: OperatorRouteConfig): OperatorRouteConfig =
     OperatorRouteConfig(routes ++ overrides.routes)
@@ -128,10 +105,12 @@ final case class OperatorRouteConfig(routes: Map[ArithmeticRouteOperation, Opera
   def fillMissing(defaults: Map[ArithmeticRouteOperation, OperatorRoute]): OperatorRouteConfig =
     OperatorRouteConfig(defaults ++ routes)
 
-  def requiresHostFallback: Boolean = routes.values.exists(_.target == OperatorRouteTarget.HostFallback)
+  def without(operations: Iterable[ArithmeticRouteOperation]): OperatorRouteConfig =
+    OperatorRouteConfig(routes -- operations)
 
   def validate(isa: ISAConfig): Unit = {
-    val enabled = (if (isa.M) mOperations else Vector.empty) ++ (if (isa.F) fOperations else Vector.empty)
+    val enabled = (if (isa.M) mOperations else Vector.empty) ++
+      (if (isa.F) fOperations else Vector.empty)
     enabled.foreach { operation =>
       val selected = routes.getOrElse(operation,
         throw new IllegalArgumentException(s"启用的算子 ${operation.profileName} 没有路由"))
@@ -139,7 +118,7 @@ final case class OperatorRouteConfig(routes: Map[ArithmeticRouteOperation, Opera
         s"算子 ${operation.profileName} 的路由宽度 ${selected.operandWidth} 与 RV${isa.xlen} 不一致")
       require(selected.target != OperatorRouteTarget.Unselected,
         s"启用的算子 ${operation.profileName} 未选择实现")
-      require(operation.domain != ArithmeticRouteDomain.Floating ||
+      require(!operation.isFloating ||
         selected.target != OperatorRouteTarget.DirectLogic || operation.isDirectFloating,
         s"浮点数值算子 ${operation.profileName} 不能走 DirectLogic")
     }
@@ -147,7 +126,8 @@ final case class OperatorRouteConfig(routes: Map[ArithmeticRouteOperation, Opera
 
   def profileValues(isa: ISAConfig): Seq[(String, String)] = {
     validate(isa)
-    val enabled = (if (isa.M) mOperations else Vector.empty) ++ (if (isa.F) fOperations else Vector.empty)
+    val enabled = (if (isa.M) mOperations else Vector.empty) ++
+      (if (isa.F) fOperations else Vector.empty)
     enabled.map(operation => s"OPERATOR_ROUTE_${operation.profileName.toUpperCase}" -> route(operation).profileValue)
   }
 }
@@ -178,6 +158,19 @@ object OperatorRouteConfig {
   }
 }
 
+/** 单个算子 IP 的接口时序。
+  *
+  * `latency` 是请求握手到响应可见的拍数，`initiationInterval` 是连续独立请求
+  * 之间的最小间隔。两者分开建模，避免把“流水级数”和“吞吐率”混为同一个参数。
+  */
+final case class OperatorIpTiming(
+  latency: Int,
+  initiationInterval: Int = 1
+) {
+  require(latency >= 1, s"Operator IP latency must be positive, got $latency")
+  require(initiationInterval >= 1, s"Operator IP II must be positive, got $initiationInterval")
+}
+
 /** 可由 CPU、SoC 外设或专用加速器复用的算子 IP 时序。
   *
   * 此类只描述算子接口的延迟、启动间隔和响应 FIFO 深度；不包含 NPC 的 ISA、
@@ -185,31 +178,20 @@ object OperatorRouteConfig {
   */
 final case class OperatorIpTimingConfig(
   outputFifoDepth: Int = 4,
-  multiplyCycles: Int = 3,
-  multiplyInitiationInterval: Int = 1,
-  divCycles: Int = 37,
-  divInitiationInterval: Int = 1,
-  floatingAddSubCycles: Int = 3,
-  floatingAddSubInitiationInterval: Int = 1,
-  floatingMultiplyCycles: Int = 4,
-  floatingMultiplyInitiationInterval: Int = 1,
-  floatingDivideCycles: Int = 29,
-  floatingDivideInitiationInterval: Int = 1,
-  floatingFmaCycles: Int = 4,
-  floatingFmaInitiationInterval: Int = 1,
-  floatingSqrtCycles: Int = 29,
-  floatingSqrtInitiationInterval: Int = 1,
-  floatingConvertCycles: Int = 7,
-  floatingConvertInitiationInterval: Int = 1,
-  floatingCompareCycles: Int = 3,
-  floatingCompareInitiationInterval: Int = 1
+  multiply: OperatorIpTiming = OperatorIpTiming(latency = 3),
+  divide: OperatorIpTiming = OperatorIpTiming(latency = 37),
+  floatingAddSub: OperatorIpTiming = OperatorIpTiming(latency = 3),
+  floatingMultiply: OperatorIpTiming = OperatorIpTiming(latency = 4),
+  floatingDivide: OperatorIpTiming = OperatorIpTiming(latency = 29),
+  floatingFma: OperatorIpTiming = OperatorIpTiming(latency = 4),
+  floatingSqrt: OperatorIpTiming = OperatorIpTiming(latency = 29),
+  floatingConvert: OperatorIpTiming = OperatorIpTiming(latency = 7),
+  floatingCompare: OperatorIpTiming = OperatorIpTiming(latency = 3)
 ) {
   require(outputFifoDepth >= 1, s"Operator IP output FIFO depth must be positive, got $outputFifoDepth")
-  require(multiplyCycles >= 1, s"Operator IP multiply latency must be positive, got $multiplyCycles")
-  require(divCycles >= 1, s"Operator IP divide latency must be positive, got $divCycles")
 
-  private[scpu] def timing(cycles: Int, initiationInterval: Int): ArithmeticIpTiming =
-    ArithmeticIpTiming(cycles, initiationInterval, outputFifoDepth)
+  private[npc] def timing(schedule: OperatorIpTiming): ArithmeticIpTiming =
+    ArithmeticIpTiming(schedule.latency, schedule.initiationInterval, outputFifoDepth)
 }
 
 object OperatorIpTimingConfig {

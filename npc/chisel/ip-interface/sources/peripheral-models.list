@@ -1,0 +1,17 @@
+# ysyxSoC 本地仿真使用的 UART/SPI/flash 功能模型。
+chisel/ip-interface/resources/npc/ip/peripheral/bitrev/bitrev.v
+chisel/ip-interface/resources/npc/ip/peripheral/flash/flash.v
+chisel/ip-interface/resources/npc/ip/peripheral/spi/rtl/spi_clgen.v
+chisel/ip-interface/resources/npc/ip/peripheral/spi/rtl/spi_defines.v
+chisel/ip-interface/resources/npc/ip/peripheral/spi/rtl/spi_shift.v
+chisel/ip-interface/resources/npc/ip/peripheral/spi/rtl/spi_top.v
+chisel/ip-interface/resources/npc/ip/peripheral/spi/rtl/spi_top_apb.v
+chisel/ip-interface/resources/npc/ip/peripheral/uart16550/rtl/raminfr.v
+chisel/ip-interface/resources/npc/ip/peripheral/uart16550/rtl/uart_defines.v
+chisel/ip-interface/resources/npc/ip/peripheral/uart16550/rtl/uart_receiver.v
+chisel/ip-interface/resources/npc/ip/peripheral/uart16550/rtl/uart_regs.v
+chisel/ip-interface/resources/npc/ip/peripheral/uart16550/rtl/uart_rfifo.v
+chisel/ip-interface/resources/npc/ip/peripheral/uart16550/rtl/uart_sync_flops.v
+chisel/ip-interface/resources/npc/ip/peripheral/uart16550/rtl/uart_tfifo.v
+chisel/ip-interface/resources/npc/ip/peripheral/uart16550/rtl/uart_top_apb.v
+chisel/ip-interface/resources/npc/ip/peripheral/uart16550/rtl/uart_transmitter.v

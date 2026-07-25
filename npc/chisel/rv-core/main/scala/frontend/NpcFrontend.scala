@@ -1,10 +1,10 @@
-package scpu
+package npc
 
 import npc.ip.memory.MemoryFault
 
 import chisel3._
 import chisel3.util._
-import scpu.protocol._
+import npc.protocol._
 
 /** NPC 的取指、译码与架构派发。
   *

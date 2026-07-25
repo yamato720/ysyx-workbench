@@ -1,4 +1,4 @@
-package scpu
+package npc
 
 /** 写入 mcause 的同步异常原因码。 */
 object CsrCause {

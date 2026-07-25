@@ -1,9 +1,9 @@
-package scpu
+package npc
 
 import chisel3._
 import chisel3.util._
 import npc.ip.memory.{DpiMemoryFaultSink, MemoryFault}
-import scpu.protocol._
+import npc.protocol._
 
 /**
   * NPC 顶层组装。
@@ -36,9 +36,6 @@ class NpcCore(
     val interrupt = Input(Bool())
     val master = new Axi4FullMasterIO(axiConfig.addrWidth, axiConfig.dataWidth, axiConfig.idWidth)
     val memoryFault = Output(new MemoryFault(axiConfig.addrWidth))
-    val arithmeticAssist = if (components.exposesArithmeticAssist(config)) {
-      Some(new ArithmeticAssistPort(cfg.xlen))
-    } else None
     val putch = if (axiConfig.useExternalMaster) Some(Decoupled(UInt(8.W))) else None
     val debug = if (debugEnabled) {
       Some(Output(new NpcCoreDebugBundle(cfg, axiConfig.addrWidth, axiConfig.dataWidth)))
@@ -87,16 +84,6 @@ class NpcCore(
     faultDpi.io.reason := io.memoryFault.reason
   }
   (io.putch zip memoryFabric.io.putch).foreach { case (external, event) => external <> event }
-  (io.arithmeticAssist zip backend.io.arithmeticAssist).foreach { case (external, assist) =>
-    external.request.valid := assist.request.valid
-    external.request.bits := assist.request.bits
-    assist.request.ready := external.request.ready
-    assist.response.valid := external.response.valid
-    assist.response.bits := external.response.bits
-    external.response.ready := assist.response.ready
-    external.busy := assist.busy
-  }
-
   if (debugEnabled) {
     val debug = io.debug.get
     debug.frontend := frontend.io.debug

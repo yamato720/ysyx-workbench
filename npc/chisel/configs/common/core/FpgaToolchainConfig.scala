@@ -1,4 +1,4 @@
-package scpu
+package npc
 
 /** 由 FPGA 终端直接挂载的完整工具链与运行配方。 */
 final case class FpgaToolchainConfig(
@@ -44,7 +44,6 @@ final case class FpgaToolchainConfig(
       "FPGA_REPORT_METHODOLOGY" -> bit(reports.reportMethodology),
       "FPGA_REPORT_QOR_SUGGESTIONS" -> bit(reports.reportQorSuggestions),
       "FPGA_MEMORY_KIND" -> runtime.memoryKind,
-      "FPGA_FLOATING_FALLBACK" -> runtime.floatingFallback,
       "FPGA_NOTIFICATION_MODE" -> runtime.notificationMode,
       "FPGA_PL_GIC_SPI" -> runtime.plGicSpi.toString
     )
@@ -85,7 +84,6 @@ object FpgaToolchainConfig {
     runtime = FpgaRuntimeConfig(
       memoryKind = "hbm",
       plGicSpi = 0,
-      floatingFallback = "host-mailbox",
       notificationMode = "xrt-poll"
     )
   )
@@ -123,7 +121,6 @@ object FpgaToolchainConfig {
     runtime = FpgaRuntimeConfig(
       memoryKind = "ps-ddr",
       plGicSpi = 89,
-      floatingFallback = "host-mailbox",
       notificationMode = "ps-uio-irq"
     )
   )

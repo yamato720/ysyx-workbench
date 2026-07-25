@@ -1,11 +1,11 @@
-package scpu
+package npc
 
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 
 /** 为 Make 的 `host-config-list` 写出显式登记的 NEMU Base。 */
 object DescribeNemuConfigCatalog extends App {
-  require(args.length == 1, "用法：scpu.DescribeNemuConfigCatalog <output.tsv>")
+  require(args.length == 1, "用法：npc.DescribeNemuConfigCatalog <output.tsv>")
   val output = Path.of(args(0)).toAbsolutePath.normalize
   val rows = NemuHostConfig.registeredPresets.map { preset =>
     val settings = preset.config
@@ -26,7 +26,7 @@ object DescribeNemuConfigCatalog extends App {
     s"${preset.name}\t${settings.backend.id}\t$policy"
   }
   Option(output.getParent).foreach(Files.createDirectories(_))
-  val content = ("# 此文件由 scpu.DescribeNemuConfigCatalog 自动生成；不要手工编辑。" +: rows)
+  val content = ("# 此文件由 npc.DescribeNemuConfigCatalog 自动生成；不要手工编辑。" +: rows)
     .mkString("\n") + "\n"
   Files.writeString(output, content, StandardCharsets.UTF_8)
 }

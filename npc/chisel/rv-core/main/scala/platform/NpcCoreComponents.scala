@@ -1,4 +1,4 @@
-package scpu
+package npc
 
 import npc.ip.arithmetic.{ArithmeticIpProvider, SimulationIpComponents}
 
@@ -12,7 +12,6 @@ trait NpcCoreComponents {
   def name: String
   def arithmeticIp: ArithmeticIpProvider
 
-  def exposesArithmeticAssist(config: NpcConfig): Boolean = false
   def exposesDispatchControl(config: NpcConfig): Boolean = false
 }
 

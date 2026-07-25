@@ -11,9 +11,9 @@ usage() {
 npc_root=$(realpath "$1")
 request=$2
 output=$3
-catalog="$npc_root/chisel/configs/resources/scpu-config-catalog.tsv"
+catalog="$npc_root/chisel/configs/resources/npc-config-catalog.tsv"
 
-if [[ ${SCPU_CONFIG_CATALOG_READY:-0} != 1 ]]; then
+if [[ ${NPC_CONFIG_CATALOG_READY:-0} != 1 ]]; then
   "$npc_root/scripts/generate-config-catalog.sh" "$npc_root"
 fi
 resolved=$("$npc_root/scripts/resolve-config.sh" "$catalog" "$request" 'npc,soc,fpga')
@@ -28,7 +28,7 @@ trap 'rm -f "$temporary" "$log"' EXIT
 case "$scope" in
   npc)
     if ! (cd "$npc_root" && NPC_SCALA_CONFIG="$fqcn" sbt \
-      "root/runMain scpu.DescribeNpcConfig $temporary") >"$log" 2>&1; then
+      "root/runMain npc.DescribeNpcConfig $temporary") >"$log" 2>&1; then
       echo "生成 $fqcn profile 失败：" >&2
       cat "$log" >&2
       exit 1

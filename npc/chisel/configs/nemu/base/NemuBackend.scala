@@ -1,4 +1,4 @@
-package scpu
+package npc
 
 /** NEMU host 的固定后端。硬件终端直接选择其中之一，不由 Make 推断。 */
 sealed abstract class NemuBackend(val id: String, val kconfigSymbol: String)

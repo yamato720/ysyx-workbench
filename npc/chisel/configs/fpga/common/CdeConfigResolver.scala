@@ -1,7 +1,7 @@
-package scpu
+package npc
 
 import org.chipsalliance.cde.config.{Config => CDEConfig, Parameters}
-import scpu.fpga.FpgaConfigParameters
+import npc.fpga.FpgaConfigParameters
 
 /** 反射加载自动发现的完整 CDE 构造。 */
 object CdeConfigResolver {
@@ -22,8 +22,9 @@ object CdeConfigResolver {
         require(config.constructionScope == entry.scope && config.constructionTarget == entry.target,
           s"CDE configuration ${entry.className} terminal trait conflicts with catalog metadata")
         entry.scope match {
-          case "soc" => require(config.isInstanceOf[LocalSocTerminal],
-            s"SoC configuration ${entry.className} must directly mount LocalSocTerminal")
+          case "soc" => require(config.isInstanceOf[LocalSocTerminal] &&
+            config.isInstanceOf[NemuSimulationIpTerminal],
+            s"SoC configuration ${entry.className} must directly mount LocalSocTerminal and NemuSimulationIpTerminal")
           case "fpga" =>
             val matchesPreset = (entry.board, entry.target) match {
               case (Some("u55c"), "NPC") => config.isInstanceOf[U55cNpcTerminal]
@@ -32,8 +33,9 @@ object CdeConfigResolver {
               case (Some("zcu102"), "SOC") => config.isInstanceOf[Zcu102SocTerminal]
               case _ => false
             }
-            require(config.isInstanceOf[FpgaConstruction] && matchesPreset,
-              s"FPGA configuration ${entry.className} must mount its matching board/target terminal preset")
+            require(config.isInstanceOf[FpgaConstruction] && matchesPreset &&
+              config.isInstanceOf[FpgaIpTerminal],
+              s"FPGA configuration ${entry.className} must mount its matching board/target terminal preset and FpgaIpTerminal")
           case scope => throw new IllegalArgumentException(s"Unsupported CDE terminal scope $scope")
         }
         entry -> config
@@ -50,9 +52,7 @@ final case class CdeFpgaPlatformProfile(
   clockMHz: Int,
   memoryHostBase: Long,
   controlBase: Long,
-  mailboxBase: Long,
-  dividerIpCycles: Int,
-  dividerAdapterCycles: Int
+  mailboxBase: Long
 )
 
 object CdeConstructionParameters {
@@ -66,9 +66,10 @@ object CdeConstructionParameters {
         clockMHz = platform.clockMHz,
         memoryHostBase = platform.memoryHostBase,
         controlBase = platform.controlBase,
-        mailboxBase = platform.mailboxBase,
-        dividerIpCycles = platform.dividerIpCycles,
-        dividerAdapterCycles = platform.dividerAdapterCycles
+        mailboxBase = platform.mailboxBase
       )
     }
+
+  def fpgaIpAttachment(implicit parameters: Parameters): Option[FpgaIpAttachment] =
+    FpgaConfigParameters.board.map(_ => FpgaConfigParameters.ipAttachment)
 }

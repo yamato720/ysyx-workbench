@@ -1,7 +1,7 @@
 package ysyx
 
 import org.chipsalliance.cde.config.{Field, Parameters}
-import _root_.scpu.fpga.FpgaConfigParameters
+import _root_.npc.fpga.FpgaConfigParameters
 
 /** ysyxSoC 的 CDE 参数键和查询接口。
   *

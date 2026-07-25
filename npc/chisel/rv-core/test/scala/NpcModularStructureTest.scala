@@ -1,4 +1,4 @@
-package scpu
+package npc
 
 import org.scalatest.flatspec.AnyFlatSpec
 

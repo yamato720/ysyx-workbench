@@ -1,7 +1,7 @@
-package scpu.fpga
+package npc.fpga
 
 import org.chipsalliance.cde.config.{Field, Parameters}
-import _root_.scpu.{NpcConfig, NpcCoreConfigKey}
+import _root_.npc.{FpgaIpAttachment, FpgaIpAttachmentKey, NpcConfig, NpcCoreConfigKey}
 
 /** 裸 NPC 和 ysyxSoC FPGA 生成共享的 CDE 键与只读查询接口。 */
 case object FpgaPlatformSettingsKey extends Field[Option[FpgaPlatformSettings]](None)
@@ -25,4 +25,10 @@ object FpgaConfigParameters {
   }
 
   def board(implicit parameters: Parameters): Option[FpgaBoard] = parameters(FpgaBoardKey)
+
+  /** 取得 NPC/SoC 共同消费的 FPGA IP attachment。 */
+  def ipAttachment(implicit parameters: Parameters): FpgaIpAttachment =
+    parameters(FpgaIpAttachmentKey).getOrElse(
+      throw new IllegalArgumentException("FPGA CDE configuration requires WithFpgaIpAttachmentConfig")
+    )
 }

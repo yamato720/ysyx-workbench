@@ -1,85 +1,10 @@
 #ifndef NEMU_FPGA_MAILBOX_H
 #define NEMU_FPGA_MAILBOX_H
 
-#include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
-enum nemu_fpga_floating_operation {
-  NEMU_FPGA_FADD = 0,
-  NEMU_FPGA_FSUB,
-  NEMU_FPGA_FMUL,
-  NEMU_FPGA_FDIV,
-  NEMU_FPGA_FSQRT,
-  NEMU_FPGA_FMADD,
-  NEMU_FPGA_FMSUB,
-  NEMU_FPGA_FNMSUB,
-  NEMU_FPGA_FNMADD,
-  NEMU_FPGA_FSGNJ,
-  NEMU_FPGA_FSGNJN,
-  NEMU_FPGA_FSGNJX,
-  NEMU_FPGA_FMIN,
-  NEMU_FPGA_FMAX,
-  NEMU_FPGA_FEQ,
-  NEMU_FPGA_FLT,
-  NEMU_FPGA_FLE,
-  NEMU_FPGA_FCVT_W,
-  NEMU_FPGA_FCVT_WU,
-  NEMU_FPGA_FCVT_L,
-  NEMU_FPGA_FCVT_LU,
-  NEMU_FPGA_FCVT_S_W,
-  NEMU_FPGA_FCVT_S_WU,
-  NEMU_FPGA_FCVT_S_L,
-  NEMU_FPGA_FCVT_S_LU,
-  NEMU_FPGA_FMV_X_W,
-  NEMU_FPGA_FCLASS,
-  NEMU_FPGA_FMV_W_X,
-};
-
-/* 与 rv-core 中 NpcAluOp.MulDiv 的声明顺序保持一致。 */
-enum nemu_fpga_integer_operation {
-  NEMU_FPGA_MUL = 0,
-  NEMU_FPGA_MULH,
-  NEMU_FPGA_MULHSU,
-  NEMU_FPGA_MULHU,
-  NEMU_FPGA_DIV,
-  NEMU_FPGA_DIVU,
-  NEMU_FPGA_REM,
-  NEMU_FPGA_REMU,
-  NEMU_FPGA_MULW,
-  NEMU_FPGA_DIVW,
-  NEMU_FPGA_DIVUW,
-  NEMU_FPGA_REMW,
-  NEMU_FPGA_REMUW,
-};
-
-enum nemu_fpga_arithmetic_domain {
-  NEMU_FPGA_DOMAIN_INTEGER = 0,
-  NEMU_FPGA_DOMAIN_FLOATING = 1,
-};
-
-enum nemu_fpga_fallback_reason {
-  NEMU_FPGA_FALLBACK_NONE = 0,
-  NEMU_FPGA_FALLBACK_FPO_RISCV_INCOMPATIBLE = 1,
-  NEMU_FPGA_FALLBACK_VENDOR_IP_UNAVAILABLE = 2,
-  NEMU_FPGA_FALLBACK_UNSELECTED = 3,
-};
-
-enum nemu_fpga_mailbox_register {
-  NEMU_FPGA_MB_STATUS = 0x00,
-  NEMU_FPGA_MB_REQUEST_SEQUENCE = 0x04,
-  NEMU_FPGA_MB_REQUEST_PC_LOW = 0x08,
-  NEMU_FPGA_MB_REQUEST_PC_HIGH = 0x0c,
-  NEMU_FPGA_MB_REQUEST_INSTRUCTION = 0x10,
-  NEMU_FPGA_MB_REQUEST_OPERATION_RM = 0x14,
-  NEMU_FPGA_MB_REQUEST_FCSR = 0x18,
-  NEMU_FPGA_MB_REQUEST_DOMAIN_REASON = 0x1c,
-  NEMU_FPGA_MB_REQUEST_A_LOW = 0x20,
-  NEMU_FPGA_MB_REQUEST_A_HIGH = 0x24,
-  NEMU_FPGA_MB_REQUEST_B_LOW = 0x28,
-  NEMU_FPGA_MB_REQUEST_B_HIGH = 0x2c,
-  NEMU_FPGA_MB_REQUEST_C_LOW = 0x30,
-  NEMU_FPGA_MB_REQUEST_C_HIGH = 0x34,
-  NEMU_FPGA_MB_TIMEOUT_CYCLES = 0x38,
+enum nemu_fpga_runtime_register {
   NEMU_FPGA_DEBUG_CAPABILITIES = 0x3c,
   NEMU_FPGA_DEBUG_COMMAND_SEQUENCE = 0x40,
   NEMU_FPGA_DEBUG_COMMAND = 0x44,
@@ -89,14 +14,6 @@ enum nemu_fpga_mailbox_register {
   NEMU_FPGA_DEBUG_STOP_PC_HIGH = 0x54,
   NEMU_FPGA_DEBUG_STOP_REASON = 0x58,
   NEMU_FPGA_DEBUG_CSR_INDEX = 0x5c,
-  NEMU_FPGA_MB_RESPONSE_SEQUENCE = 0x60,
-  NEMU_FPGA_MB_RESPONSE_RESULT_LOW = 0x64,
-  NEMU_FPGA_MB_RESPONSE_RESULT_HIGH = 0x68,
-  NEMU_FPGA_MB_RESPONSE_FLAGS = 0x6c,
-  NEMU_FPGA_MB_RESPONSE_COMMIT = 0x70,
-  NEMU_FPGA_MB_RESPONSE_DOMAIN_REASON = 0x74,
-  NEMU_FPGA_MB_FALLBACK_COUNT = 0x78,
-  NEMU_FPGA_MB_LAST_FALLBACK = 0x7c,
   NEMU_FPGA_RT_CONTROL = 0x80,
   NEMU_FPGA_RT_STATUS = 0x84,
   NEMU_FPGA_RT_INFO = 0x88,
@@ -131,13 +48,6 @@ enum nemu_fpga_mailbox_register {
   NEMU_FPGA_DEBUG_PROTOCOL = 0xfc,
 };
 
-enum nemu_fpga_mailbox_status_bits {
-  NEMU_FPGA_MB_REQUEST_PENDING = 1u << 0,
-  NEMU_FPGA_MB_RESPONSE_PENDING = 1u << 1,
-  NEMU_FPGA_MB_CORE_BUSY = 1u << 2,
-  NEMU_FPGA_MB_PROTOCOL_ERROR = 1u << 3,
-};
-
 enum nemu_fpga_runtime_control_bits {
   NEMU_FPGA_RT_CORE_RESET = 1u << 0,
   NEMU_FPGA_RT_CLEAR_HALT = 1u << 1,
@@ -151,7 +61,7 @@ enum nemu_fpga_runtime_status_bits {
   NEMU_FPGA_RT_PROTOCOL_ERROR = 1u << 3,
 };
 
-#define NEMU_FPGA_DEBUG_PROTOCOL_V3 UINT32_C(0x4e504303)
+#define NEMU_FPGA_DEBUG_PROTOCOL_V5 UINT32_C(0x4e504305)
 
 enum nemu_fpga_debug_capability_bits {
   NEMU_FPGA_DEBUG_CAP_HALT_STEP = 1u << 0,
@@ -190,42 +100,10 @@ enum nemu_fpga_debug_csr {
   NEMU_FPGA_CSR_PC = 5,
 };
 
-struct nemu_fpga_fallback_request {
-  uint32_t sequence;
-  uint64_t pc;
-  uint32_t instruction;
-  uint64_t operand_a;
-  uint64_t operand_b;
-  uint64_t operand_c;
-  uint8_t fcsr;
-  uint8_t operation;
-  uint8_t rounding_mode;
-  uint8_t domain;
-  uint8_t fallback_reason;
-};
-
-struct nemu_fpga_fallback_response {
-  uint32_t sequence;
-  uint64_t result;
-  uint8_t exception_flags;
-  bool illegal;
-  uint8_t domain;
-  uint8_t fallback_reason;
-};
-
 struct nemu_fpga_mailbox_io {
   void *opaque;
   uint32_t (*read32)(void *opaque, uint32_t offset);
   void (*write32)(void *opaque, uint32_t offset, uint32_t value);
-  uint32_t max_request_cycles;
-};
-
-enum nemu_fpga_mailbox_service_result {
-  NEMU_FPGA_MB_IDLE = 0,
-  NEMU_FPGA_MB_RESPONDED = 1,
-  NEMU_FPGA_MB_STALE = 2,
-  NEMU_FPGA_MB_TIMEOUT = -1,
-  NEMU_FPGA_MB_IO_ERROR = -2,
 };
 
 enum nemu_fpga_runtime_event_type {
@@ -241,20 +119,11 @@ struct nemu_fpga_runtime_event {
   int error;
 };
 
-void nemu_fpga_fallback_execute(const struct nemu_fpga_fallback_request *request,
-                                unsigned xlen,
-                                struct nemu_fpga_fallback_response *response);
-void nemu_fpga_fallback_summary_reset(void);
-void nemu_fpga_fallback_summary_print(void);
-
-enum nemu_fpga_mailbox_service_result
-nemu_fpga_mailbox_service_once(const struct nemu_fpga_mailbox_io *io, unsigned xlen);
-
 int nemu_fpga_runtime_hold_reset(const struct nemu_fpga_mailbox_io *io);
 int nemu_fpga_runtime_start(const struct nemu_fpga_mailbox_io *io);
 int nemu_fpga_runtime_start_halted(const struct nemu_fpga_mailbox_io *io);
 struct nemu_fpga_runtime_event
-nemu_fpga_runtime_service_once(const struct nemu_fpga_mailbox_io *io, unsigned xlen);
+nemu_fpga_runtime_service_once(const struct nemu_fpga_mailbox_io *io);
 uint64_t nemu_fpga_runtime_read_counter(const struct nemu_fpga_mailbox_io *io,
                                         uint32_t low_offset, uint32_t high_offset);
 

@@ -1,9 +1,8 @@
-package scpu
+package npc
 
 import chisel3._
 import chisel3.util._
 import npc.ip.arithmetic._
-import scpu.protocol.ArithmeticAssistPort
 
 /** RV32M/RV64M 执行外壳。它译码架构 ALU 操作，发射可复用乘除法算子并汇聚响应。
   * 算子本身位于 `compute/`，可供其他模块复用。
@@ -50,7 +49,6 @@ class MulDivAlu(
   val io = IO(new Bundle {
     val req = Flipped(Decoupled(new AluRequest(width, config.tagWidth)))
     val resp = Decoupled(new ArithmeticResponse(width, config.tagWidth))
-    val assist = new ArithmeticAssistPort(width)
   })
 
   private val routeEnabled = routes.routes.nonEmpty
@@ -71,8 +69,6 @@ class MulDivAlu(
     ArithmeticRouteOperation.Remw -> NpcAluOp.MulDiv.REMW,
     ArithmeticRouteOperation.Remuw -> NpcAluOp.MulDiv.REMUW
   )
-  private val allRoutes = multiplyRoutes ++ divideRoutes
-
   private def selectedFor(
     candidates: Seq[(ArithmeticRouteOperation, NpcAluOp.MulDiv.Type)],
     targets: Set[OperatorRouteTarget]
@@ -97,12 +93,10 @@ class MulDivAlu(
 
   private val vendorTargets: Set[OperatorRouteTarget] = Set(OperatorRouteTarget.VendorIp)
   private val directTargets: Set[OperatorRouteTarget] = Set(OperatorRouteTarget.Model, OperatorRouteTarget.DirectLogic)
-  private val fallbackTargets: Set[OperatorRouteTarget] = Set(OperatorRouteTarget.HostFallback)
   private val vendorMultiplySelected = if (routeEnabled) selectedFor(multiplyRoutes, vendorTargets) else MulDivAlu.isMultiply(io.req.bits.aluOp)
   private val vendorDivideSelected = if (routeEnabled) selectedFor(divideRoutes, vendorTargets) else MulDivAlu.isDivide(io.req.bits.aluOp)
   private val directMultiplySelected = if (routeEnabled) selectedFor(multiplyRoutes, directTargets) else false.B
   private val directDivideSelected = if (routeEnabled) selectedFor(divideRoutes, directTargets) else false.B
-  private val fallbackSelected = if (routeEnabled) selectedFor(allRoutes, fallbackTargets) else false.B
 
   private def legacySpec(moduleName: String): ArithmeticEndpointSpec = config.implementation.backend match {
     case ComputeBackend.IP | ComputeBackend.FPGA =>
@@ -125,13 +119,6 @@ class MulDivAlu(
   private val directDivider = if (routeEnabled && hasRoute(divideRoutes, directTargets)) Some(
     provider.makeIntegerDivider(width, config.tagWidth, config.divideTiming,
       ArithmeticEndpointSpec(ArithmeticEndpointImplementation.IntegerReference))) else None
-  private val fallback = if (routeEnabled && hasRoute(allRoutes, fallbackTargets)) {
-    val reason = allRoutes.collectFirst {
-      case (operation, _) if routes.route(operation).target == OperatorRouteTarget.HostFallback =>
-        routes.route(operation).fallbackReason
-    }.get
-    Some(Module(new HostFallbackOperator(width, config.tagWidth, ArithmeticRouteDomain.Integer, reason)))
-  } else None
   private val multiplySelected = MulDivAlu.isMultiply(io.req.bits.aluOp)
   private val divideSelected = MulDivAlu.isDivide(io.req.bits.aluOp)
   private val multiplyOperation = MuxLookup(io.req.bits.aluOp, 0.U(ArithmeticOperation.width.W))(Seq(
@@ -168,36 +155,18 @@ class MulDivAlu(
   vendorDivider.foreach(endpoint => forwardRequest(endpoint.io, vendorDivideSelected, divideOperation))
   directMultiplier.foreach(endpoint => forwardRequest(endpoint.io, directMultiplySelected, multiplyOperation))
   directDivider.foreach(endpoint => forwardRequest(endpoint.io, directDivideSelected, divideOperation))
-  fallback.foreach(endpoint => forwardRequest(endpoint.io.arithmetic, fallbackSelected, io.req.bits.aluOp))
   io.req.ready := MuxCase(false.B, Seq(
     vendorMultiplier.map(endpoint => vendorMultiplySelected -> endpoint.io.req.ready),
     vendorDivider.map(endpoint => vendorDivideSelected -> endpoint.io.req.ready),
     directMultiplier.map(endpoint => directMultiplySelected -> endpoint.io.req.ready),
-    directDivider.map(endpoint => directDivideSelected -> endpoint.io.req.ready),
-    fallback.map(endpoint => fallbackSelected -> endpoint.io.arithmetic.req.ready)
+    directDivider.map(endpoint => directDivideSelected -> endpoint.io.req.ready)
   ).flatten)
 
   private val responseSources = Seq(
     vendorMultiplier.map(_.io.resp), vendorDivider.map(_.io.resp),
-    directMultiplier.map(_.io.resp), directDivider.map(_.io.resp), fallback.map(_.io.arithmetic.resp)
+    directMultiplier.map(_.io.resp), directDivider.map(_.io.resp)
   ).flatten
   private val responses = Module(new RRArbiter(new ArithmeticResponse(width, config.tagWidth), responseSources.size))
   responseSources.zipWithIndex.foreach { case (source, index) => responses.io.in(index) <> source }
   io.resp <> responses.io.out
-
-  fallback match {
-    case Some(endpoint) =>
-      io.assist.request.valid := endpoint.io.assist.request.valid
-      io.assist.request.bits := endpoint.io.assist.request.bits
-      endpoint.io.assist.request.ready := io.assist.request.ready
-      endpoint.io.assist.response.valid := io.assist.response.valid
-      endpoint.io.assist.response.bits := io.assist.response.bits
-      io.assist.response.ready := endpoint.io.assist.response.ready
-      io.assist.busy := endpoint.io.assist.busy
-    case None =>
-      io.assist.request.valid := false.B
-      io.assist.request.bits := 0.U.asTypeOf(io.assist.request.bits)
-      io.assist.response.ready := true.B
-      io.assist.busy := false.B
-  }
 }

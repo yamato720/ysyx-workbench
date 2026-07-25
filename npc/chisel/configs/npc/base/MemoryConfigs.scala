@@ -1,10 +1,10 @@
-package scpu
+package npc
 
 /** 固定主存窗口和复位向量。 */
 class WithMainMemoryConfig(base: Long, size: Long) extends ConfigFragment {
   require(size > 0, s"NPC main-memory size must be positive, got $size")
 
-  override private[scpu] def applyTo(config: NpcConfig): NpcConfig = config.copy(
+  override private[npc] def applyTo(config: NpcConfig): NpcConfig = config.copy(
     memory = config.memory.copy(
       resetVector = BigInt(base & 0xffffffffL),
       mainMemoryBase = base,

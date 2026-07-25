@@ -1,9 +1,9 @@
-package scpu
+package npc
 import chisel3._
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 
-private[scpu] object ElaborateOutput {
+private[npc] object ElaborateOutput {
   private val blackBoxFileListMarker = """// ----- 8< ----- FILE "firrtl_black_box_resource_files.f" ----- 8< -----"""
 
   def stripBlackBoxFileList(path: String): Unit = {

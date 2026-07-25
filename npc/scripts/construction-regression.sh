@@ -21,12 +21,12 @@ export CONSTRUCTION_TEST_ROOT="$work/constructions"
 export CONSTRUCTION_DRY_RUN=1
 export CONSTRUCTION_ID_PREFIX=20260718153042
 "$npc_root/scripts/generate-config-catalog.sh" "$npc_root"
-export SCPU_CONFIG_CATALOG_READY=1
+export NPC_CONFIG_CATALOG_READY=1
 
 "$manager" build "$npc_root" SimulationConfig 0
 "$manager" build "$npc_root" PipelineSimulationConfig 0
-dpi="$CONSTRUCTION_TEST_ROOT/scpu.SimulationConfig"
-pipeline="$CONSTRUCTION_TEST_ROOT/scpu.PipelineSimulationConfig"
+dpi="$CONSTRUCTION_TEST_ROOT/npc.SimulationConfig"
+pipeline="$CONSTRUCTION_TEST_ROOT/npc.PipelineSimulationConfig"
 [[ $(value "$dpi/construction.env" CONSTRUCTION_ID) == 2026071815304200 ]] || fail '首个编号不是 00'
 [[ $(value "$pipeline/construction.env" CONSTRUCTION_ID) == 2026071815304201 ]] || fail '同秒编号没有递增'
 [[ $(value "$dpi/construction.env" VERSION_INDEX) == 1 ]] || fail '首个版本序号不是 1'
@@ -46,13 +46,13 @@ pipeline="$CONSTRUCTION_TEST_ROOT/scpu.PipelineSimulationConfig"
 
 # 旧 L1 Config 去掉了冗余的 Npc 前缀；保存构造必须迁移到当前目录名，且不能
 # 改变用户引用的版本序号。profile 与 construction.env 需要作为同一引用单元更新。
-legacy_dpi="$CONSTRUCTION_TEST_ROOT/scpu.NpcDpiConfig"
+legacy_dpi="$CONSTRUCTION_TEST_ROOT/npc.NpcDpiConfig"
 mv "$dpi" "$legacy_dpi"
 sed -i -e 's/^CONFIG_SHORT_NAME=SimulationConfig$/CONFIG_SHORT_NAME=NpcDpiConfig/' \
-  -e 's/^CONFIG_FQCN=scpu.SimulationConfig$/CONFIG_FQCN=scpu.NpcDpiConfig/' "$legacy_dpi/profile.env"
-sed -i 's/^CONFIG_FQCN=scpu.SimulationConfig$/CONFIG_FQCN=scpu.NpcDpiConfig/' "$legacy_dpi/construction.env"
+  -e 's/^CONFIG_FQCN=npc.SimulationConfig$/CONFIG_FQCN=npc.NpcDpiConfig/' "$legacy_dpi/profile.env"
+sed -i 's/^CONFIG_FQCN=npc.SimulationConfig$/CONFIG_FQCN=npc.NpcDpiConfig/' "$legacy_dpi/construction.env"
 legacy_resolution=$("$manager" resolve "$npc_root" '' 1)
-[[ $legacy_resolution == scpu.SimulationConfig\|* ]] || fail '旧 Config FQCN 没有规范化'
+[[ $legacy_resolution == npc.SimulationConfig\|* ]] || fail '旧 Config FQCN 没有规范化'
 [[ -d $dpi && ! -d $legacy_dpi ]] || fail '旧 Config 构造目录没有迁移'
 [[ $(value "$dpi/construction.env" VERSION_INDEX) == 1 ]] || fail 'Config 迁移改变了版本序号'
 [[ $(value "$dpi/profile.env" CONFIG_SHORT_NAME) == SimulationConfig ]] || fail 'Config 迁移没有更新短名'
@@ -145,12 +145,12 @@ host_before=$(sha256sum "$dpi/abi/nemu/nemu-exec" | cut -d' ' -f1)
 
 sed -i -e 's/^PROFILE_FORMAT=.*/PROFILE_FORMAT=2/' -e 's/^CAPABILITY=run$/CAPABILITY=verilator/' "$dpi/profile.env"
 sed -i -e 's/^CAPABILITY=run$/CAPABILITY=verilator/' \
-  -e 's/^NEMU_PRESET=LocalPipelineTrace$/NEMU_CONFIG_FQCN=scpu.nemu.LocalVerilatorPipelineTraceConfig/' \
+  -e 's/^NEMU_PRESET=LocalPipelineTrace$/NEMU_CONFIG_FQCN=npc.nemu.LocalVerilatorPipelineTraceConfig/' \
   "$dpi/construction.env"
-sed -i 's/^NEMU_PRESET=LocalPipelineTrace$/NEMU_CONFIG_FQCN=scpu.nemu.LocalVerilatorPipelineTraceConfig/' \
+sed -i 's/^NEMU_PRESET=LocalPipelineTrace$/NEMU_CONFIG_FQCN=npc.nemu.LocalVerilatorPipelineTraceConfig/' \
   "$dpi/profile.env"
 sed -i -e 's/^HOST_FORMAT=.*/HOST_FORMAT=4/' \
-  -e 's/^NEMU_PRESET=LocalPipelineTrace$/NEMU_CONFIG_FQCN=scpu.nemu.LocalVerilatorPipelineTraceConfig/' \
+  -e 's/^NEMU_PRESET=LocalPipelineTrace$/NEMU_CONFIG_FQCN=npc.nemu.LocalVerilatorPipelineTraceConfig/' \
   "$dpi/abi/nemu/host.env"
 "$manager" ensure "$npc_root" SimulationConfig 0 0 0
 [[ $(value "$dpi/profile.env" PROFILE_FORMAT) == 10 && $(value "$dpi/profile.env" CAPABILITY) == run ]] ||
@@ -164,7 +164,7 @@ sed -i -e 's/^HOST_FORMAT=.*/HOST_FORMAT=4/' \
   $(value "$dpi/profile.env" NEMU_BACKEND) == local &&
   $(value "$dpi/profile.env" NEMU_PERFORMANCE_HTML) == 1 ]] ||
   fail '历史仿真 profile 升级时改变了已保存 NEMU host 预设'
-if rg -q '^NEMU_CONFIG_FQCN=' "$dpi/profile.env" "$dpi/construction.env" "$dpi/abi/nemu/host.env"; then
+if grep -q '^NEMU_CONFIG_FQCN=' "$dpi/profile.env" "$dpi/construction.env" "$dpi/abi/nemu/host.env"; then
   fail '历史 NEMU 配置类名迁移后仍残留在保存元数据中'
 fi
 mkdir -p "$dpi/runtime/preserve"; printf 'keep\n' > "$dpi/runtime/preserve/trace"
@@ -201,7 +201,7 @@ done
 if find "$dpi" -name '.profile-host-previous.*' -o -name '.construction-host-previous.*' -o \
   -name '.nemu-host-previous.*' -o -name '.profile-host-staging.*' -o \
   -name '.construction-host-staging.*' -o -name '.nemu-host-staging.*' -o \
-  -name '.host-staging-*' -o -name '.host-previous-*' | rg -q .; then
+  -name '.host-staging-*' -o -name '.host-previous-*' | grep -q .; then
   fail 'host 发布故障回滚后残留 staging 或 backup'
 fi
 
@@ -209,12 +209,12 @@ before=$(sha256sum "$dpi/construction.env" | cut -d' ' -f1)
 if failure=$(CONSTRUCTION_TEST_FAIL=1 "$manager" build "$npc_root" SimulationConfig 1 2>&1); then
   fail '模拟失败的重构意外成功'
 fi
-[[ $failure == *"make -C $npc_root build config=scpu.SimulationConfig rebuild=1"* ]] ||
-  fail '失败重构未提示可复制的 rebuild=1 命令'
+[[ $failure == *"make -C $npc_root rebuild config=SimulationConfig"* ]] ||
+  fail '失败重构未提示可复制的 rebuild 命令'
 [[ $failure == *'失败原因（关键日志）：'* && $failure == *'按测试请求模拟构造失败'* ]] ||
   fail '失败重构未输出关键日志片段'
 [[ $(sha256sum "$dpi/construction.env" | cut -d' ' -f1) == "$before" ]] || fail '失败重构破坏了旧构造'
-[[ -s "$CONSTRUCTION_TEST_ROOT/.failed/scpu.SimulationConfig/build/all.log" ]] ||
+[[ -s "$CONSTRUCTION_TEST_ROOT/.failed/npc.SimulationConfig/build/all.log" ]] ||
   fail '失败重构没有保存日志'
 
 if "$manager" resolve "$npc_root" SimulationConfig "$pipeline_version" >/dev/null 2>&1; then
@@ -224,7 +224,7 @@ if "$manager" delete "$npc_root" "$pipeline_version" 0 </dev/null >/dev/null 2>&
   fail '非交互删除未要求 yes=1'
 fi
 
-u55c="$CONSTRUCTION_TEST_ROOT/scpu.fpga.u55c.U55cYsyxSocFpgaConfig"
+u55c="$CONSTRUCTION_TEST_ROOT/npc.fpga.u55c.U55cYsyxSocFpgaConfig"
 if "$manager" ensure "$npc_root" U55cYsyxSocFpgaConfig 0 0 0 >/dev/null 2>&1; then
   fail '缺失 FPGA 构造未要求 build=1'
 fi
@@ -232,7 +232,7 @@ fi
 [[ -f $u55c/fpga/artifacts/artifact-manifest.env ]] || fail 'FPGA dry-run 未生成资产清单'
 [[ $(value "$u55c/.complete" FPGA_ARTIFACT) == "fpga/artifacts/npc-$(value "$u55c/profile.env" FPGA_PLATFORM).xclbin" ]] ||
   fail 'FPGA 完成标志没有记录实际 xclbin'
-[[ -s $u55c/fpga/ip/logs/npc_int_multiplier_ip.log && -s $u55c/fpga/ip/logs/npc_int_divider_ip.log ]] ||
+[[ -s $u55c/fpga/ip-generated/logs/npc_int_multiplier_ip.log && -s $u55c/fpga/ip-generated/logs/npc_int_divider_ip.log ]] ||
   fail 'FPGA dry-run 未生成逐 IP 日志'
 
 # host-build 重新读取当前终端的 NEMU case class，但保存 profile 的硬件和 FPGA
@@ -254,12 +254,14 @@ fpga_assets_before=$(find "$u55c/fpga" -type f -print0 | LC_ALL=C sort -z | xarg
 [[ $(find "$u55c/fpga" -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1) == "$fpga_assets_before" ]] ||
   fail 'host-build 修改了 FPGA 资产'
 fpga_before=$(sha256sum "$u55c/construction.env" | cut -d' ' -f1)
-if CONSTRUCTION_TEST_FAIL=1 "$manager" build "$npc_root" U55cYsyxSocFpgaConfig 1 >/dev/null 2>&1; then
+if fpga_failure=$(CONSTRUCTION_TEST_FAIL=1 "$manager" build "$npc_root" U55cYsyxSocFpgaConfig 1 2>&1); then
   fail '模拟失败的 FPGA 重构意外成功'
 fi
-fpga_failed="$CONSTRUCTION_TEST_ROOT/.failed/scpu.fpga.u55c.U55cYsyxSocFpgaConfig/build"
-[[ -f $fpga_failed/profile.env && -s $fpga_failed/fpga/ip/logs/npc_int_multiplier_ip.log &&
-  -s $fpga_failed/fpga/ip/logs/npc_int_divider_ip.log ]] ||
+[[ $fpga_failure == *"make -C $npc_root rebuild config=U55cYsyxSocFpgaConfig"* ]] ||
+  fail '失败的 FPGA 重构未提示 Config 短名'
+fpga_failed="$CONSTRUCTION_TEST_ROOT/.failed/npc.fpga.u55c.U55cYsyxSocFpgaConfig/build"
+[[ -f $fpga_failed/profile.env && -s $fpga_failed/fpga/ip-generated/logs/npc_int_multiplier_ip.log &&
+  -s $fpga_failed/fpga/ip-generated/logs/npc_int_divider_ip.log ]] ||
   fail '失败的 FPGA 重构没有保存 profile 与逐 IP 证据'
 [[ $(sha256sum "$u55c/construction.env" | cut -d' ' -f1) == "$fpga_before" ]] ||
   fail '失败的 FPGA 重构破坏了旧构造'
@@ -285,7 +287,7 @@ fi
 "$manager" delete "$npc_root" "$pipeline_version" 1
 [[ ! -d $pipeline ]] || fail 'yes=1 未删除构造'
 "$manager" build "$npc_root" StandaloneConfig 0
-standalone="$CONSTRUCTION_TEST_ROOT/scpu.StandaloneConfig"
+standalone="$CONSTRUCTION_TEST_ROOT/npc.StandaloneConfig"
 [[ $(value "$standalone/construction.env" VERSION_INDEX) == 4 ]] ||
   fail '删除后新构造复用了已有版本序号'
 printf 'Config 构造生命周期回归通过\n'

@@ -1,4 +1,4 @@
-package scpu
+package npc
 
 /** 由终端直接挂载的完整 NEMU host 配方。
   *

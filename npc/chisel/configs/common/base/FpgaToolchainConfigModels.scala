@@ -1,4 +1,4 @@
-package scpu
+package npc
 
 /** FPGA 器件与平台选择。 */
 final case class FpgaDeviceConfig(
@@ -51,17 +51,14 @@ final case class FpgaReportConfig(
   require(timingPathsPerClock > 0, s"每时钟时序路径数必须为正数：$timingPathsPerClock")
 }
 
-/** FPGA 运行期内存、mailbox 浮点回退和主机通知 ABI。 */
+/** FPGA 运行期内存和主机通知 ABI。 */
 final case class FpgaRuntimeConfig(
   memoryKind: String,
   plGicSpi: Int,
-  floatingFallback: String,
   notificationMode: String
 ) {
   require(memoryKind.nonEmpty, "FPGA memory kind 不能为空")
   require(plGicSpi >= 0, s"FPGA PL GIC SPI 不能为负数：$plGicSpi")
-  require(floatingFallback == "host-mailbox",
-    s"不支持的 FPGA 浮点回退策略：$floatingFallback（当前仅支持 host-mailbox）")
   require(Set("ps-uio-irq", "xrt-poll", "host-poll").contains(notificationMode),
     s"不支持的 FPGA 主机通知模式：$notificationMode")
   require(notificationMode != "ps-uio-irq" || plGicSpi > 0,

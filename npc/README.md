@@ -3,9 +3,9 @@
 NPC 使用命名 Scala Config 固定硬件 ABI、运行宿主和 FPGA 实现策略。Make 不再接受结构参数覆盖，
 也不再维护四位快照；一个完整 Config 在 `constructions/<FQCN>/` 中只保留一份成功构造。
 
-稳定 IP 契约、厂商无关逻辑和仿真模型位于独立的 `chisel/ip/` SBT/Mill 模块。该模块只依赖 Chisel；
-rv-core 保留 ISA 译码与操作码映射，ysyxSoC 保留 Diplomacy node 和地址映射，FPGA harness 只绑定板卡
-provider 与厂商资产。
+稳定 IP 契约、厂商无关逻辑和仿真模型位于独立的 `chisel/ip-interface/` SBT/Mill 模块。该模块只依赖
+Chisel；rv-core 保留 ISA 译码与操作码映射，ysyxSoC 保留 Diplomacy node 和地址映射，`fpga/` 只绑定
+板卡 provider 与物理工程，`fpga-ip-generator/` 保存厂商 IP 配方。
 
 `config=` 只选择硬件终端，不选择 NEMU、DPI 或 Verilator 模式。除只供 Scala/RTL 测试使用的
 `check-only` Config 外，每个可选择终端都绑定一套保存的 NEMU 运行宿主；本地仿真的 DPI 只是该宿主
@@ -19,10 +19,10 @@ provider 与厂商资产。
 make -C npc config-list
 make -C npc build config=SimulationConfig
 make -C npc build config=U55cYsyxSocFpgaConfig
-make -C npc build config=U55cYsyxSocFpgaConfig rebuild=1
+make -C npc rebuild config=U55cYsyxSocFpgaConfig
 make -C npc host-config-list
-make -C npc host-build config=SimulationConfig
-make -C npc host-build all=1 jobs=-1
+make -C npc host-rebuild config=SimulationConfig
+make -C npc host-rebuild all=1 jobs=-1
 
 make -C npc version
 make -C npc version config=SimulationConfig
@@ -57,17 +57,17 @@ make -C am-kernels/tests/cpu-tests run-bat ALL="forwarding matrix-mul fpu" \
 | 构造能力 | 由 `scope` 区分的目标 | 缺失时 | 已有构造的更新方式 |
 | --- | --- | --- | --- |
 | `check-only` | 只做 Scala/RTL 检查 | 不进入公开 Make 构造或运行入口 | 由测试直接调用 |
-| `run` | `npc`/`soc` 为本地仿真，`fpga` 为上板运行（由 `TARGET` 选择裸核或 SoC） | NPC/SoC 首次运行自动生成；FPGA 需 `build=1` | `rebuild=1` 原子重构硬件与运行宿主；仅更新 C/C++ 宿主用 `host-rebuild=1` 或 `host-build` |
+| `run` | `npc`/`soc` 为本地仿真，`fpga` 为上板运行（由 `TARGET` 选择裸核或 SoC） | NPC/SoC 首次运行自动生成；FPGA 需 `build` | `rebuild` 原子重构硬件与运行宿主；仅更新 C/C++ 宿主用 `host-rebuild` |
 
-FPGA 的 `build=1` 只允许首次构造；`rebuild=1` 强制在临时目录完成实现、校验后原子替换，并隐含
-`build=1`。已有 FPGA 构造不会因源码、Config 或工具变化自动重建；需要新硬件时必须显式传入
-`rebuild=1`。旧资产的 SHA-256、终端 FQCN、板卡、XRT 平台、host ABI 或 mailbox 协议不兼容时
+FPGA 的 `build` 只允许首次构造；`rebuild` 强制在临时目录完成实现、校验后原子替换。已有 FPGA
+构造不会因源码、Config 或工具变化自动重建；需要新硬件时必须显式执行 `rebuild`。旧资产的 SHA-256、
+终端 FQCN、板卡、XRT 平台、host ABI 或 mailbox 协议不兼容时
 始终硬失败。
 
 普通 `run`/`run-bat` 只验证并直接执行已保存的 `abi/nemu/nemu-exec`，不会启动 NEMU Make。运行宿主的
-C/C++ 和 menuconfig 增量依赖只在 `host-build` 或 `host-rebuild=1` 时运行，并原子替换
+C/C++ 和 menuconfig 增量依赖只在 `host-rebuild` 或运行入口的 `host-rebuild=1` 时运行，并原子替换
 保存 profile 的 `NEMU_*` 段与 `abi/nemu/`；当前终端的硬件和 `FpgaToolchainConfig` 变化不会被吸收。
-Chisel、生成 RTL、Verilator ABI、`npc/csrc` glue 与 FPGA 文件仍只由 `rebuild=1` 更新。
+Chisel、生成 RTL、Verilator ABI、`npc/csrc` glue 与 FPGA 文件仍只由 `rebuild` 更新。
 每次 elaboration 同时生成 `ip-sources.manifest`。其中 `RTL=` 是工具实际编译的源，`MODEL=` 记录已嵌入
 生成 RTL 的仿真模型；FPGA 另生成 `synthesis-sources.manifest`，只允许 `RTL=` 和 `XCI=`。构造冻结按该
 清单复制源文件，不再递归保存整个 `ysyxSoC/perip/`。
@@ -76,17 +76,17 @@ Chisel、生成 RTL、Verilator ABI、`npc/csrc` glue 与 FPGA 文件仍只由 `
 
 ```text
 constructions/
-  scpu.SimulationConfig/
+  npc.SimulationConfig/
     construction.env
     profile.env
     abi/{rtl,verilator,nemu,softfloat,glue}/
     logs/
     runtime/<test>/<timestamp-ns>-<pid>/{performance.html,instructions.html,pipeline.html,wave-*.vcd}
-  scpu.fpga.u55c.U55cYsyxSocFpgaConfig/
+  npc.fpga.u55c.U55cYsyxSocFpgaConfig/
     construction.env
     profile.env
     abi/{nemu,protocol}/
-    fpga/{rtl,ip,synth,link,artifacts}/
+    fpga/{rtl,ip-generated,synth,link,artifacts}/
     logs/
 ```
 
@@ -97,8 +97,8 @@ FPGA 和 NEMU host 原始输出分别保存在 `logs/build/<阶段>.log` 与 `lo
 原子发布。每类只保留最新日志。失败构造写入 `.failed/<FQCN>/<build|host>/`，旧目录和其 ABI 保持不变。
 所有 Vivado 参与的 FPGA IP、综合和链接阶段仍实时输出；其余历史工具输出只显示阶段进度，并写入对应日志。
 交互终端中，实时阶段若连续一秒没有新输出，会显示不写入日志的流水灯，收到下一条工具输出时立即清除。
-算术 IP 的 Tcl 还会在 `fpga/ip/logs/npc_int_multiplier_ip.log` 与
-`fpga/ip/logs/npc_int_divider_ip.log` 分别保存参数、生成输出和最终属性报告。
+算术 IP 的 Tcl 还会在 `fpga/ip-generated/logs/npc_int_multiplier_ip.log` 与
+`fpga/ip-generated/logs/npc_int_divider_ip.log` 分别保存参数、复用/生成动作和最终属性报告。
 
 构造 staging 目录带 `.incomplete`，host、RTL 和资产校验完成后改写为 `.complete`，随后才原子发布。
 `make version` 只读取完成的正式构造快照，不启动 Scala 目录刷新，也不等待正在进行的长构造；FPGA
@@ -125,7 +125,7 @@ lane 破坏。它不隐含启用 VCD 或普通 instruction trace。SDB 的 `star
 Config 启用 VCD，则在同一运行目录依次写 `wave-001.vcd`、`wave-002.vcd`；直接运行非 construction host
 时回退到当前目录。
 
-`rebuild=1` 发布的是新硬件 ABI，不继承旧构造的 `runtime/`；`host-build` 与 `host-rebuild=1` 只替换 host，
+`rebuild` 发布的是新硬件 ABI，不继承旧构造的 `runtime/`；`host-rebuild` 与运行入口的 `host-rebuild=1` 只替换 host，
 会保留已有运行产物。
 
 批次运行不生成汇总 HTML，仅在会话目录 `log/constructions/runs/<时间>/` 保存最终汇总：`completion.tsv`
@@ -146,11 +146,16 @@ Config 启用 VCD，则在同一运行目录依次写 `wave-001.vcd`、`wave-002
 
 所有配置按 `base -> core -> 根部终端文件` 分层：`base/` 放底层键、数据、原子片段和不可直挂的
 底层 trait，`core/` 形成可复用的具名完整组合，终端级内容直接放在领域根部。公共终端协议位于
-`common/TerminalTraits.scala`，最终无参终端位于各领域根部 `Configs.scala`。每个终端只挂载一个
-terminal 层 trait，不能直接混入 base trait。Make 每次顶层启动都会由 Scala 校验该
+`common/TerminalTraits.scala`；并列的 `common/IpTerminalTraits.scala` 只保留 FPGA 与 NEMU 两种
+计算单元终端，其共享合同位于 `common/base/IpComputeSelectionTraits.scala`，并由运行 Config 显式混入。
+最终无参终端位于
+各领域根部 `Configs.scala`。每个终端只挂载一个 terminal 层 trait，不能直接混入 base trait。Make 每次顶层启动都会由 Scala 校验该
 布局并生成派生 TSV；终端 trait 出现在领域内其他文件或终端直接混入 base trait 都会报错。选中 Config
 后，SBT/Mill 反射实例化并生成 `profile.env`；Make、NEMU 和 Tcl 只消费该描述。新增终端 Config 不需要
 手工登记 CSV。
+
+根部终端文件只声明终端可直接使用的 trait。终端直接需要的子项及其集群放入 `core/`，仅各子项的
+基础依赖、数据模型和原子片段放入 `base/`；终端不直接拼接多个 base trait。
 
 CDE 的 `++` 从右向左建立基础，左侧值优先。例如板卡 SoC Config 依次叠加板卡、完整 NPC 与
 `YsyxElaborateConfig`，就能替换 SoC 默认核心，同时保留 Rocket 和外设。板卡 CDE 键本身就是
@@ -167,12 +172,18 @@ FPGA 分支的唯一来源，无需重复叠加平台标签。
 NPC/SoC 目标精确匹配的 `LocalNpcTerminal`、`LocalSocTerminal`、`U55cNpcTerminal`、
 `U55cSocTerminal`、`Zcu102NpcTerminal` 或 `Zcu102SocTerminal`。这些预设已经提供完整
 `NemuHostConfig` 默认值，FPGA 预设同时提供分组式 `FpgaToolchainConfig` 默认值；当前内置
-`Configs.scala` 均一步挂载，不重复展开配方。显式自定义终端仍可在保持 scope、target 与板卡匹配的
+`Configs.scala` 均一步挂载，不重复展开配方。每个 Config 显式混入一个计算 IP terminal，绝不通过
+Config 构造参数或 CDE `++` 链单独选择。显式自定义终端仍可在保持 scope、target 与板卡匹配的
 前提下重载配方。profile 据此渲染保存的 `host.defconfig` 和现有
 `FPGA_*` 字段。Chisel
 elaboration 生成按模块拆分的 SystemVerilog 和显式 IP source manifest；Verilator 或 Vivado/Vitis 只消费
 清单列出的 RTL/XCI 与同一份 profile。综合清单会硬拒绝 DPI、NEMU MMIO 和其他仅仿真模型。
 运行时 AM 只编译测试镜像，并直接执行冻结的 host、xclbin 或 ZCU102 环境清单。
+
+FPGA profile 固定 `npc-fpga-runtime-v5` 调试和运行控制 ABI：M 由 Xilinx 整数乘除 IP 执行，
+公开 FPGA Config 固定 `F=0`、`D=0`。因此 FPGA 不生成硬件 FPR、本地 FPU、浮点 IP 或 NEMU 指令
+代执行服务；本地 Verilator 构造仍保留既有浮点模型和 FPR，供学习完整 F 扩展。此 ABI 或 FPGA 配置
+变化必须用 `rebuild` 更新，不能只刷新 host。
 
 ## 验证
 
@@ -186,9 +197,9 @@ mill -i ysyxsocTest.test
 
 cd npc
 scripts/construction-regression.sh "$PWD"
-fpga/tests/config-regression.sh "$PWD"
-fpga/tests/release-regression.sh "$PWD"
-fpga/tests/run-fpga-rtl-test.sh "$PWD"
+fpga/common/tests/config-regression.sh "$PWD"
+fpga/common/tests/release-regression.sh "$PWD"
+fpga/common/tests/run-fpga-rtl-test.sh "$PWD"
 ```
 
 回归使用 dry-run 或 RTL 仿真，不会启动完整 Vivado/Vitis 实现。真实 U55C/ZCU102 资产只有在时序

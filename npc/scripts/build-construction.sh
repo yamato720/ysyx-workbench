@@ -95,7 +95,7 @@ dry_run() {
   if [[ $SCOPE == fpga ]]; then
     local artifacts asset
     artifacts="$stage/fpga/artifacts"
-    mkdir -p "$stage/fpga/rtl" "$stage/fpga/ip" "$stage/fpga/synth" "$stage/fpga/link" "$artifacts"
+    mkdir -p "$stage/fpga/rtl" "$stage/fpga/ip-generated" "$stage/fpga/synth" "$stage/fpga/link" "$artifacts"
     printf '%s\n' 'module NpcFpgaTop; endmodule' > "$stage/fpga/rtl/NpcFpgaTop.sv"
     "$npc_root/scripts/ip-source-manifest.sh" write synthesis \
       "$stage/fpga/rtl/ip-sources.manifest" "$npc_root" --absolute \
@@ -103,11 +103,11 @@ dry_run() {
     "$npc_root/scripts/ip-source-manifest.sh" write synthesis \
       "$stage/fpga/synthesis-sources.manifest" "$npc_root" --absolute \
       --rtl "$stage/fpga/rtl/NpcFpgaTop.sv" \
-      --rtl-dir "$npc_root/fpga/boards/$FPGA_BOARD/rtl" \
-      --rtl-dir "$npc_root/fpga/ip/adapters/xilinx"
-    mkdir -p "$stage/fpga/ip/logs"
-    printf '%s\n' 'dry-run Vivado multiplier IP' > "$stage/fpga/ip/logs/npc_int_multiplier_ip.log"
-    printf '%s\n' 'dry-run Vivado divider IP' > "$stage/fpga/ip/logs/npc_int_divider_ip.log"
+      --rtl-dir "$npc_root/fpga/$FPGA_BOARD/rtl" \
+      --rtl-dir "$npc_root/fpga-ip-generator/common/compute/source/sv"
+    mkdir -p "$stage/fpga/ip-generated/logs"
+    printf '%s\n' 'dry-run Vivado multiplier IP' > "$stage/fpga/ip-generated/logs/npc_int_multiplier_ip.log"
+    printf '%s\n' 'dry-run Vivado divider IP' > "$stage/fpga/ip-generated/logs/npc_int_divider_ip.log"
     assets=()
     case "$FPGA_BOARD" in
       u55c)

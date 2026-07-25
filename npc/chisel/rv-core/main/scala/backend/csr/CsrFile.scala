@@ -1,4 +1,4 @@
-package scpu
+package npc
 
 import chisel3._
 import chisel3.util._
@@ -44,12 +44,20 @@ class CsrFile(cfg: ISAConfig = ISAConfig()) extends Module {
     io.externalInterrupt,
     mipSoftware(CsrInterruptBit.meip - 1, 0)
   )
+  private val misaExtensions =
+    (BigInt(1) << ('i' - 'a')) |
+      (if (cfg.M) BigInt(1) << ('m' - 'a') else BigInt(0)) |
+      (if (cfg.F) BigInt(1) << ('f' - 'a') else BigInt(0)) |
+      (if (cfg.D) BigInt(1) << ('d' - 'a') else BigInt(0))
+  private val misaMxl = BigInt(if (cfg.xlen == 64) 2 else 1) << (cfg.xlen - 2)
+  private val misa = (misaMxl | misaExtensions).U(cfg.xlen.W)
 
   io.readData := MuxLookup(io.address, 0.U)(Seq(
     CsrAddress.fflags.U -> fflags,
     CsrAddress.frm.U -> frm,
     CsrAddress.fcsr.U -> Cat(0.U((cfg.xlen - 8).W), frm, fflags),
     CsrAddress.mstatus.U -> mstatus,
+    CsrAddress.misa.U -> misa,
     CsrAddress.mie.U -> mie,
     CsrAddress.mtvec.U -> mtvec,
     CsrAddress.mepc.U -> mepc,

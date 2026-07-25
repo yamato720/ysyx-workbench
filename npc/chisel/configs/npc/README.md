@@ -18,7 +18,7 @@
 | `core/ArchitectureCore.scala` | 完整 XLEN/ISA 架构成品 | 是；`NpcRv...Config` 架构层成品 |
 | `core/PerformCore.scala` | 完整流水线性能成品 | 是；`Npc...PerformConfig` 性能层成品 |
 | `core/SimulationCore.scala` | 与每个本地终端一一对应的完整硬件组合 | 是；终端直接选择一个具名 core |
-| `core/IntegrationCore.scala` | 供 SoC、FPGA 与板卡复用的完整 L1 集成核 | 是；只能放入更高层 CDE `++` 链 |
+| `core/IntegrationCore.scala` | 供 SoC、FPGA 与板卡复用的完整 L1 集成核 | 是；经 `WithTerminalIpCoreConfig` 置入更高层 CDE 图 |
 | `core/CheckCore.scala` | Scala/RTL 检查构造 | 否；不挂载 Make 终端 trait |
 
 ## 可增加的特性
@@ -37,7 +37,7 @@
 | 流水线 ID/EX 双前递 | `new PipelineDualFwdPerformConfig` | `core/PerformCore.scala` | 是；与其他完整性能预设二选一 |
 | 单项性能覆盖 | `new WithPipelineConfig`、`new WithoutPipelineConfig`、`new WithInterlockConfig`、`new WithoutInterlockConfig`、`new WithNpcIdForwardingConfig`、`new WithNpcExecuteForwardingConfig` | `base/PerformConfigs.scala` | 是；用于在完整预设上精确覆盖 |
 | 主存窗口 | `new WithBareMainMemoryConfig`、`new WithSoCMainMemoryConfig`、`new WithFpgaMainMemoryConfig` | `base/MemoryConfigs.scala` | 必需且按目标选择 |
-| 算术后端/时序 | `new WithModelComputeConfig`、`new WithFpgaComputeConfig`、`new WithDefaultArithmeticTimingConfig` | `base/OperatorConfigs.scala` | 必需且按目标选择 |
+| 算术后端/时序 | `NemuSimulationIpTerminal`、`FpgaIpTerminal` | `../common/IpTerminalTraits.scala` | 由公开运行 Config 自身显式挂载；L1 成品与 CDE `++` 链不得选择后端 |
 | 可复用算子 IP 时序数据 | `OperatorIpTimingConfig(...)`、`OperatorIpTimingConfig.Default` | `../common/base/OperatorIpConfigs.scala` | 是；由本文件的算子片段消费 |
 | 外部 AXI 与调试 | `new WithExternalAxiConfig`、`new WithTopDebugConfig`、`new WithDispatchControlConfig` | `base/InterfaceConfigs.scala` | 是 |
 | 乘除法完成延迟 | `new WithMulDivCompletionConfig(37)` | `base/OperatorConfigs.scala` | 是 |
@@ -46,7 +46,7 @@
 | RV64IMF 无流水线本地核心 | `new FullIsa64NoPipelineSimulationCoreConfig` | `core/SimulationCore.scala` | 是；供同名终端直接调用 |
 | RV64IMF 流水线无前递本地核心 | `new FullIsa64PipelineNoForwardingSimulationCoreConfig` | `core/SimulationCore.scala` | 是；供同名终端直接调用 |
 | RV64IMF 流水线双路径前递本地核心 | `new FullIsa64PipelineDualForwardingSimulationCoreConfig` | `core/SimulationCore.scala` | 是；供同名终端直接调用 |
-| RV64IMF FPGA 双路径前递成品 | `new FullIsa64PipelineDualForwardingFpgaConfig` | `core/IntegrationCore.scala` | 是 |
+| RV64IM FPGA 双路径前递成品 | `new Rv64PipelineDualForwardingFpgaConfig` | `core/IntegrationCore.scala` | 是；FPGA 禁用 F/D |
 | 新 NPC 特性 | `class WithMyFeatureConfig`（命名模板，需先实现） | `base/` 的对应领域文件 | 是 |
 | Rocket 外设、板卡引脚 | 无；不在本层添加 | 分别转入 L2/L3/L4 | 不适用 |
 
@@ -57,8 +57,10 @@
 ## 供上层使用的成品
 
 `core/IntegrationCore.scala` 是本层专门放置供上层复用的完整集成核的文件。FPGA 默认选择
-`FpgaConfig`；通用 SoC 默认选择 `ExternalAxiConfig`。完整 L1 Config 自身提供 `NpcCoreConfigKey`，因此更高层可直接
-把它放在 CDE 链最左侧，从而覆盖板卡或 SoC 默认核心。
+`FpgaConfig`；通用 SoC 默认选择 `ExternalAxiConfig`。它们只描述 ISA、流水线、接口与存储；公开
+终端自身显式混入计算 IP trait，`NpcCoreConfigKey` 因而从最终终端读取该选择，不会把 IP 选择作为 CDE
+构造参数或独立的 `++` 配置项。通用 SoC CDE 图通过 `WithTerminalIpCoreConfig` 读取其最终运行 terminal，
+保持本地和 FPGA 的同一份图可复用。
 
 完整 core 并列选择 `core/ArchitectureCore.scala` 的架构成品和
 `core/PerformCore.scala` 的性能成品，再按目标补充存储、计算和接口。未来加入分支预测或乱序时，

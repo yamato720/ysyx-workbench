@@ -1,8 +1,8 @@
-package scpu.protocol
+package npc.protocol
 
 import chisel3._
 import chisel3.util._
-import scpu.{NpcConfig, AxiConfig}
+import npc.{NpcConfig, AxiConfig}
 
 /**
   * NPC 的内存职责边界。

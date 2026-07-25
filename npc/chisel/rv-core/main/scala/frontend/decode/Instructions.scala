@@ -1,7 +1,7 @@
 // 许可证详情见 LICENSE.SiFive。
 // 许可证详情见 LICENSE.Berkeley。
 
-package scpu
+package npc
 
 import chisel3.util._
 

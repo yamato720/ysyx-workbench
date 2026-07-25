@@ -1,4 +1,4 @@
-package scpu
+package npc
 
 import org.chipsalliance.cde.config.{Config => CDEConfig}
 
@@ -9,9 +9,13 @@ import org.chipsalliance.cde.config.{Config => CDEConfig}
   */
 abstract class ConstructionConfig(
   layers: ConfigFragment
-) extends CDEConfig((_, _, _) => {
-  case NpcCoreConfigKey => layers.build
+) extends CDEConfig((site, _, _) => {
+  case NpcCoreConfigKey =>
+    (IpConstruction.selection(site).computeUnitConfig ++ layers).build
 }) with ConfigFragment {
-  override final private[scpu] def applyTo(base: NpcConfig): NpcConfig = layers.applyTo(base)
+  private lazy val mountedLayers: ConfigFragment =
+    IpConstruction.selection(this).computeUnitConfig ++ layers
+
+  override final private[npc] def applyTo(base: NpcConfig): NpcConfig = mountedLayers.applyTo(base)
   final lazy val config: NpcConfig = build
 }

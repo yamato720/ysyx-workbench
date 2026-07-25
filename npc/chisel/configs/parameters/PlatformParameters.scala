@@ -1,4 +1,4 @@
-package scpu
+package npc
 
 /** 流水线旁路通路的开关。 */
 case class ForwardingConfig(
@@ -45,4 +45,9 @@ case class NpcConfig(
   memory: MemoryConfig = MemoryConfig(),
   axi: AxiConfig = AxiConfig(),
   debug: DebugConfig = DebugConfig()
-)
+) {
+  def validated: NpcConfig = {
+    operators.routes.validate(isa)
+    this
+  }
+}

@@ -1,4 +1,4 @@
-package scpu
+package npc
 
 import npc.ip.arithmetic.{ArithmeticIpTiming, FloatingDpiOperator, IntegerMultiplierModel}
 import org.scalatest.flatspec.AnyFlatSpec

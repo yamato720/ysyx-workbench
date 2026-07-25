@@ -1,4 +1,4 @@
-package scpu
+package npc
 
 /** 已完成的 NPC 微架构性能成品。
   *

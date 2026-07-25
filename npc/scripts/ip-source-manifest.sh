@@ -39,7 +39,7 @@ validate_synthesis_source() {
     DPIMem.v|MMIOCore.v|MemoryFaultDpi.v|NpcFloatingPointDpi.sv|SimAPBDpiRam.v|SimAPBDpiMmio.v|SimPutchSink.v)
       fail "synthesis manifest rejects simulation-only source: $path" ;;
   esac
-  if rg -q 'import[[:space:]]+"DPI-C"|pmem_(read|write)|mmio_(read|write)|memory_fault|flash_read|mrom_read' "$path"; then
+  if grep -Eq 'import[[:space:]]+"DPI-C"|pmem_(read|write)|mmio_(read|write)|memory_fault|flash_read|mrom_read' "$path"; then
     fail "synthesis manifest rejects DPI content: $path"
   fi
 }
@@ -106,14 +106,14 @@ write_manifest() {
   done
 
   [[ -s $entries ]] || fail 'manifest has no sources'
-  rg -q '^RTL=' "$entries" || fail 'manifest has no RTL sources'
+  grep -q '^RTL=' "$entries" || fail 'manifest has no RTL sources'
   if [[ $mode == synthesis ]]; then
-    if rg -q '^MODEL=' "$entries"; then fail 'synthesis manifest cannot contain MODEL entries'; fi
+    if grep -q '^MODEL=' "$entries"; then fail 'synthesis manifest cannot contain MODEL entries'; fi
     while IFS='=' read -r option value; do
       [[ $option == RTL ]] || continue
       validate_synthesis_source "$(resolve_entry "$root" "$value")"
     done < "$entries"
-  elif rg -q '^XCI=' "$entries"; then
+  elif grep -q '^XCI=' "$entries"; then
     fail 'simulation manifest cannot contain XCI entries'
   fi
 
@@ -135,7 +135,7 @@ verify_manifest() {
   mode=$(sed -n 's/^MODE=//p' "$manifest")
   [[ $mode == simulation || $mode == synthesis ]] || fail 'invalid mode'
   [[ -z $expected_mode || $mode == "$expected_mode" ]] || fail "expected $expected_mode manifest, got $mode"
-  rg -q '^RTL=' "$manifest" || fail 'manifest has no RTL sources'
+  grep -q '^RTL=' "$manifest" || fail 'manifest has no RTL sources'
   while IFS='=' read -r kind path; do
     case "$kind" in FORMAT|MODE) continue ;; RTL|MODEL|XCI) ;; *) fail "unknown entry: $kind" ;; esac
     path=$(resolve_entry "$root" "$path")

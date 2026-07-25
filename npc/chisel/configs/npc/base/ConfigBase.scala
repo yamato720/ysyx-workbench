@@ -1,4 +1,4 @@
-package scpu
+package npc
 
 import org.chipsalliance.cde.config.{Config => CDEConfig, Field}
 
@@ -18,33 +18,43 @@ class WithNpcCoreConfig(npcConfig: NpcConfig) extends CDEConfig((_, _, _) => {
   case NpcCoreConfigKey => npcConfig
 })
 
+/** 把最终终端主动挂载的计算 IP 应用到一个完整 NPC 核心。
+  *
+  * 该 CDE 桥不携带 IP 选择；它只从顶层 `IpConstruction` trait 读取选择，因此 SoC
+  * 与 FPGA 图不会在各自的 `++` 链里再次指定 NEMU 或 FPGA 计算后端。
+  */
+class WithTerminalIpCoreConfig(layers: ConfigFragment) extends CDEConfig((site, _, _) => {
+  case NpcCoreConfigKey =>
+    (IpConstruction.selection(site).computeUnitConfig ++ layers).build
+})
+
 /** 无依赖 NPC 参数的组合片段。
   *
   * `left ++ right` 先应用右侧，再由左侧覆盖同一参数。
   */
 trait ConfigFragment {
-  private[scpu] def applyTo(base: NpcConfig): NpcConfig
+  private[npc] def applyTo(base: NpcConfig): NpcConfig
 
   final def ++(base: ConfigFragment): ConfigFragment =
     new ConfigComposition(this, base)
 
-  final def build: NpcConfig = applyTo(NpcConfig())
+  final def build: NpcConfig = applyTo(NpcConfig()).validated
 }
 
 private final class ConfigComposition(
   overrideFragment: ConfigFragment,
   baseFragment: ConfigFragment
 ) extends ConfigFragment {
-  override private[scpu] def applyTo(base: NpcConfig): NpcConfig =
+  override private[npc] def applyTo(base: NpcConfig): NpcConfig =
     overrideFragment.applyTo(baseFragment.applyTo(base))
 }
 
 /** 可复用的 NPC 组合成品；可继续置入更高层的 `++` 链。 */
 abstract class ConfigBundle(layers: ConfigFragment) extends ConfigFragment {
-  override final private[scpu] def applyTo(base: NpcConfig): NpcConfig = layers.applyTo(base)
+  override final private[npc] def applyTo(base: NpcConfig): NpcConfig = layers.applyTo(base)
 }
 
 /** NPC 参数的起点，不修改 `NpcConfig()` 的默认值。 */
 class BaseConfig extends ConfigFragment {
-  override private[scpu] def applyTo(base: NpcConfig): NpcConfig = base
+  override private[npc] def applyTo(base: NpcConfig): NpcConfig = base
 }

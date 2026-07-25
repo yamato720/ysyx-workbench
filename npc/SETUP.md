@@ -219,7 +219,7 @@ make config-list
 make build config=SimulationConfig
 ```
 
-正常完成后，`constructions/scpu.SimulationConfig/` 包含 RTL、Verilator ABI 和 NEMU 运行宿主。
+正常完成后，`constructions/npc.SimulationConfig/` 包含 RTL、Verilator ABI 和 NEMU 运行宿主。
 
 ### 7.3 通过统一入口运行 NPC
 

@@ -1,9 +1,8 @@
-package scpu
+package npc
 
 import chisel3._
 import chisel3.util._
 import npc.ip.arithmetic._
-import scpu.protocol.ArithmeticAssistPort
 
 /** 标量 F 执行外壳的架构译码和时序配置。 */
 object FloatingAlu {
@@ -57,7 +56,6 @@ class FloatingAlu(
   val io = IO(new Bundle {
     val req = Flipped(Decoupled(new AluRequest(width, config.tagWidth)))
     val resp = Decoupled(new ArithmeticResponse(width, config.tagWidth))
-    val assist = new ArithmeticAssistPort(width)
   })
 
   private val operatorOperation = MuxLookup(io.req.bits.aluOp, 0.U(ArithmeticOperation.width.W))(Seq(
@@ -159,21 +157,6 @@ class FloatingAlu(
     }
   }
 
-  private val allFloatingOperations = routeGroups.flatMap(_._1)
-  private val fallbackSelected = if (routeEnabled)
-    allFloatingOperations.collect { case (operation, code) if routes.route(operation).target == OperatorRouteTarget.HostFallback =>
-      io.req.bits.aluOp === code.asUInt
-    }.reduceOption(_ || _).getOrElse(false.B)
-  else false.B
-  private val fallback = if (routeEnabled && allFloatingOperations.exists {
-    case (operation, _) => routes.route(operation).target == OperatorRouteTarget.HostFallback
-  }) {
-    val reason = allFloatingOperations.collectFirst {
-      case (operation, _) if routes.route(operation).target == OperatorRouteTarget.HostFallback => routes.route(operation).fallbackReason
-    }.get
-    Some(Module(new HostFallbackOperator(width, config.tagWidth, ArithmeticRouteDomain.Floating, reason)))
-  } else None
-
   endpointEntries.foreach { case (endpoint, selectedOperation) =>
     endpoint.io.req.valid := io.req.valid && selectedOperation
     endpoint.io.req.bits.operandA := io.req.bits.operandA
@@ -186,40 +169,11 @@ class FloatingAlu(
     endpoint.io.req.bits.fcsr := io.req.bits.fcsr
     endpoint.io.req.bits.tag := io.req.bits.tag
   }
-  fallback.foreach { endpoint =>
-    endpoint.io.arithmetic.req.valid := io.req.valid && fallbackSelected
-    endpoint.io.arithmetic.req.bits.operandA := io.req.bits.operandA
-    endpoint.io.arithmetic.req.bits.operandB := io.req.bits.operandB
-    endpoint.io.arithmetic.req.bits.operandC := io.req.bits.operandC
-    endpoint.io.arithmetic.req.bits.operation := io.req.bits.aluOp
-    endpoint.io.arithmetic.req.bits.roundingMode := io.req.bits.roundingMode
-    endpoint.io.arithmetic.req.bits.pc := io.req.bits.pc
-    endpoint.io.arithmetic.req.bits.instruction := io.req.bits.instruction
-    endpoint.io.arithmetic.req.bits.fcsr := io.req.bits.fcsr
-    endpoint.io.arithmetic.req.bits.tag := io.req.bits.tag
-  }
   io.req.ready := MuxCase(false.B,
-    endpointEntries.map { case (endpoint, selectedOperation) => selectedOperation -> endpoint.io.req.ready } ++
-      fallback.map(endpoint => fallbackSelected -> endpoint.io.arithmetic.req.ready))
+    endpointEntries.map { case (endpoint, selectedOperation) => selectedOperation -> endpoint.io.req.ready })
 
-  private val responseSources = endpointEntries.map(_._1.io.resp) ++ fallback.map(_.io.arithmetic.resp)
+  private val responseSources = endpointEntries.map(_._1.io.resp)
   private val responses = Module(new RRArbiter(new ArithmeticResponse(width, config.tagWidth), responseSources.size))
   responseSources.zipWithIndex.foreach { case (source, index) => responses.io.in(index) <> source }
   io.resp <> responses.io.out
-
-  fallback match {
-    case Some(endpoint) =>
-      io.assist.request.valid := endpoint.io.assist.request.valid
-      io.assist.request.bits := endpoint.io.assist.request.bits
-      endpoint.io.assist.request.ready := io.assist.request.ready
-      endpoint.io.assist.response.valid := io.assist.response.valid
-      endpoint.io.assist.response.bits := io.assist.response.bits
-      io.assist.response.ready := endpoint.io.assist.response.ready
-      io.assist.busy := endpoint.io.assist.busy
-    case None =>
-      io.assist.request.valid := false.B
-      io.assist.request.bits := 0.U.asTypeOf(io.assist.request.bits)
-      io.assist.response.ready := true.B
-      io.assist.busy := false.B
-  }
 }

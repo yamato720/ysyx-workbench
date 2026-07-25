@@ -3,7 +3,7 @@
 | 目录 | 编译边界 | 职责 |
 | --- | --- | --- |
 | `rv-core/` | SBT `root` | NPC 流水线、公共协议、DPI 组件和单元测试 |
-| `fpga-harness/` | SBT `fpga` 或 Mill `ysyxsoc` | 裸 NPC/ysyxSoC 的 FPGA 系统与板卡 shell |
+| `../fpga/{common,u55c,zcu102}/scala/` | Mill `ysyxsoc` | 裸 NPC/ysyxSoC 的 FPGA 系统与板卡 shell |
 | `ysyxSoC/` | Mill `ysyxsoc` | Rocket/CDE/Diplomacy SoC 与教学外设 |
 | `configs/` | 按使用范围编入上述目标 | L1-L4 命名 Config、片段和参数数据 |
 
@@ -26,7 +26,7 @@ class U55cYsyxSocFpgaConfig extends CDEConfig(
   new U55cBoardConfig ++
     new FpgaConfig ++
     new YsyxElaborateConfig
-) with _root_.scpu.U55cSocTerminal
+) with _root_.npc.U55cSocTerminal
 ```
 
 若要替换 SoC 内 NPC，只需将完成的 L1 Config 置于已有 SoC Config 左侧。板卡、频率、地址与算子

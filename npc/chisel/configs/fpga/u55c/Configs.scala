@@ -1,8 +1,8 @@
-package scpu.fpga.u55c
+package npc.fpga.u55c
 
 import org.chipsalliance.cde.config.{Config => CDEConfig}
-import _root_.scpu.{FpgaConfig, FullIsa64PipelineDualForwardingFpgaConfig}
-import _root_.scpu.{U55cNpcTerminal, U55cSocTerminal}
+import _root_.npc.{FpgaConfig, FpgaIpTerminal, Rv64PipelineDualForwardingFpgaConfig}
+import _root_.npc.{U55cNpcTerminal, U55cSocTerminal}
 import _root_.ysyx.YsyxElaborateConfig
 
 /** U55C 的所有可运行终端构造。
@@ -16,27 +16,27 @@ import _root_.ysyx.YsyxElaborateConfig
 class U55cNpcFpgaConfig extends CDEConfig(
   new U55cBoardConfig ++
     new FpgaConfig
-) with U55cNpcTerminal
+) with U55cNpcTerminal with FpgaIpTerminal
 
-/** U55C 的 RV64IMF_Zicsr 裸 NPC 终端构造。
+/** U55C 的 RV64IM_Zicsr 裸 NPC 终端构造。
   *
-  * ID/EX 前递保留在核心；PL 只实现无舍入浮点操作，其余 F 操作经 mailbox 交给
-  * NEMU。当前 XRT 没有可消费的 IRQ 文件描述符，因此宿主以轮询完成同一序号的响应。
+  * FPGA 构造显式禁用 F/D 与指令 assist；浮点学习仅由本地仿真终端提供。
   */
-class U55cFullIsa64NpcFpgaConfig extends CDEConfig(
+class U55cRv64NpcFpgaConfig extends CDEConfig(
   new U55cBoardConfig ++
-    new FullIsa64PipelineDualForwardingFpgaConfig
-) with U55cNpcTerminal
+    new Rv64PipelineDualForwardingFpgaConfig
+) with U55cNpcTerminal with FpgaIpTerminal
 
-/** U55C RV64IMF 裸 NPC 的 250 MHz 时序实验终端。
+/** U55C RV64IM 裸 NPC 的 250 MHz 时序实验终端。
   *
   * 保持完整运行 ABI 与单实现策略，便于将结果和 125 MHz 终端逐项比较；频率仅属于
-  * 板卡物理策略，整数 IP 宽度仍由右侧 RV64 核自动推导。
+  * 板卡物理策略，整数 IP 宽度仍由右侧 RV64 核自动推导。为切分 RV64 乘法器的 DSP
+  * 组合链，整数乘法固定为 5 级流水且保持 II=1；其余算术 IP 时序维持 U55C 默认值。
   */
-class U55cFullIsa64Npc250MHzFpgaConfig extends CDEConfig(
-  new U55cBoardConfig(250) ++
-    new FullIsa64PipelineDualForwardingFpgaConfig
-) with U55cNpcTerminal
+class U55cRv64Npc250MHzFpgaConfig extends CDEConfig(
+  new U55c250MHzBoardConfig ++
+    new Rv64PipelineDualForwardingFpgaConfig
+) with U55cNpcTerminal with FpgaIpTerminal
 
 /** U55C 的 ysyxSoC FPGA 终端构造。
   *
@@ -48,4 +48,4 @@ class U55cYsyxSocFpgaConfig extends CDEConfig(
   new U55cBoardConfig ++
     new FpgaConfig ++
     new YsyxElaborateConfig
-) with U55cSocTerminal
+) with U55cSocTerminal with FpgaIpTerminal

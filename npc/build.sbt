@@ -20,14 +20,19 @@ def chiselSettings = Seq(
   addCompilerPlugin("org.chipsalliance" % "chisel-plugin" % chiselVersion cross CrossVersion.full)
 )
 
-lazy val ip = (project in file("./chisel/ip"))
+lazy val ip = (project in file("./chisel/ip-interface"))
+  .settings(
+    Compile / scalaSource := baseDirectory.value / "scala",
+    Compile / resourceDirectory := baseDirectory.value / "resources",
+    Test / scalaSource := baseDirectory.value / "test"
+  )
   .settings(chiselSettings)
   .settings(name := "npc-ip")
 
 lazy val root = (project in file("./chisel"))
   .dependsOn(ip)
   .settings(
-    name := "scpu",
+    name := "npc",
     Compile / scalaSource := baseDirectory.value / "rv-core/main/scala",
     Compile / resourceDirectory := baseDirectory.value / "rv-core/main/resources",
     Test / scalaSource := baseDirectory.value / "rv-core/test/scala",

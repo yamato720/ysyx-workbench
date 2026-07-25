@@ -31,11 +31,6 @@ static bool runtime_interactive;
 static uint32_t debug_capabilities;
 static uint32_t debug_sequence;
 static uint32_t debug_timeout_ms = 5000;
-#ifdef CONFIG_RV64
-static const unsigned runtime_xlen = 64;
-#else
-static const unsigned runtime_xlen = 32;
-#endif
 #ifdef CONFIG_FPGA_BACKEND_ZCU102
 static struct nemu_fpga_zcu102_uio zcu102;
 #endif
@@ -68,9 +63,8 @@ static uint64_t read64(uint32_t low, uint32_t high) {
   return nemu_fpga_runtime_read_counter(runtime_io, low, high);
 }
 
-static void select_registers(unsigned gpr, unsigned fpr) {
-  runtime_io->write32(runtime_io->opaque, NEMU_FPGA_RT_REGISTER_INDEX,
-                      (gpr & 31) | ((fpr & 31) << 8));
+static void select_register(unsigned gpr) {
+  runtime_io->write32(runtime_io->opaque, NEMU_FPGA_RT_REGISTER_INDEX, gpr & 31);
 }
 
 static uint64_t monotonic_milliseconds(void) {
@@ -138,7 +132,6 @@ uint64_t npc_debug_stop_pc(void) {
 }
 
 void npc_init(void) {
-  nemu_fpga_fallback_summary_reset();
   runtime_interactive = !sdb_is_batch_mode();
   const uint64_t timeout = parse_environment_u64("NEMU_FPGA_DEBUG_TIMEOUT_MS", 5000);
   if (timeout == 0 || timeout > UINT32_MAX) {
@@ -154,19 +147,20 @@ void npc_init(void) {
   const uint64_t control_size = parse_environment_u64("NEMU_FPGA_UIO_SIZE", 4096);
   const uint64_t memory_physical = parse_environment_u64("NEMU_FPGA_DDR_PHYS", 0x70000000);
   const uint64_t memory_size = parse_environment_u64("NEMU_FPGA_DDR_SIZE", 0x08000000);
-  const uint64_t max_request_cycles =
-      parse_environment_u64("NEMU_FPGA_MAILBOX_MAX_CYCLES", 300000000);
-  if (control_size > SIZE_MAX || memory_size > SIZE_MAX || max_request_cycles > UINT32_MAX) {
+  if (control_size > SIZE_MAX || memory_size > SIZE_MAX) {
     fprintf(stderr, "ZCU102 FPGA mapping parameter is too large for this host\n");
     exit(EXIT_FAILURE);
   }
   if (nemu_fpga_zcu102_uio_open(&zcu102, control_device, (size_t)control_size,
-                                memory_device, memory_physical, (size_t)memory_size,
-                                (uint32_t)max_request_cycles) != 0) {
+                                memory_device, memory_physical, (size_t)memory_size) != 0) {
     fprintf(stderr, "cannot open ZCU102 FPGA runtime: %s\n", strerror(errno));
     exit(EXIT_FAILURE);
   }
   runtime_io = &zcu102.mailbox;
+  if (zcu102.guest_memory_size < CONFIG_MSIZE) {
+    fprintf(stderr, "ZCU102 DDR window is smaller than CONFIG_MSIZE\n");
+    exit(EXIT_FAILURE);
+  }
   if (nemu_fpga_runtime_hold_reset(runtime_io) != 0) {
     fprintf(stderr, "cannot hold ZCU102 NPC in reset\n");
     exit(EXIT_FAILURE);
@@ -183,21 +177,21 @@ void npc_init(void) {
   const uint64_t device_index = parse_environment_u64("NEMU_FPGA_DEVICE_INDEX", 0);
   const uint64_t memory_group = parse_environment_u64("NEMU_FPGA_HBM_BANK", 0);
   const uint64_t memory_size = parse_environment_u64("NEMU_FPGA_HBM_SIZE", 0x08000000);
-  const uint64_t max_request_cycles =
-      parse_environment_u64("NEMU_FPGA_MAILBOX_MAX_CYCLES", 300000000);
-  if (device_index > UINT_MAX || memory_group > UINT_MAX || memory_size > SIZE_MAX ||
-      max_request_cycles > UINT32_MAX) {
+  if (device_index > UINT_MAX || memory_group > UINT_MAX || memory_size > SIZE_MAX) {
     fprintf(stderr, "U55C FPGA runtime parameter is too large for this host\n");
     exit(EXIT_FAILURE);
   }
   if (nemu_fpga_u55c_xrt_open(&u55c, (unsigned)device_index, xclbin, kernel,
-                              (unsigned)memory_group, (size_t)memory_size,
-                              (uint32_t)max_request_cycles) != 0) {
+                              (unsigned)memory_group, (size_t)memory_size) != 0) {
     fprintf(stderr, "cannot open U55C FPGA runtime: %s\n",
             nemu_fpga_u55c_xrt_error(&u55c));
     exit(EXIT_FAILURE);
   }
   runtime_io = &u55c.mailbox;
+  if (u55c.memory_size < CONFIG_MSIZE) {
+    fprintf(stderr, "U55C HBM window is smaller than CONFIG_MSIZE\n");
+    exit(EXIT_FAILURE);
+  }
   if (nemu_fpga_runtime_hold_reset(runtime_io) != 0 ||
       nemu_fpga_u55c_xrt_failed(&u55c)) {
     fprintf(stderr, "cannot hold U55C NPC in reset: %s\n",
@@ -210,10 +204,10 @@ void npc_init(void) {
     debug_capabilities = read32(NEMU_FPGA_DEBUG_CAPABILITIES);
     const uint32_t required = NEMU_FPGA_DEBUG_CAP_HALT_STEP |
         NEMU_FPGA_DEBUG_CAP_TARGET_MEMORY | NEMU_FPGA_DEBUG_CAP_CSR_SNAPSHOT;
-    if (protocol != NEMU_FPGA_DEBUG_PROTOCOL_V3 ||
+    if (protocol != NEMU_FPGA_DEBUG_PROTOCOL_V5 ||
         (debug_capabilities & required) != required) {
       fprintf(stderr,
-              "interactive FPGA debugging requires a v3 bitstream/xclbin; rebuild the selected FPGA artifact\n");
+              "interactive FPGA debugging requires a v5 bitstream/xclbin; rebuild=1 is required\n");
       exit(EXIT_FAILURE);
     }
     debug_sequence = read32(NEMU_FPGA_DEBUG_COMPLETED_SEQUENCE);
@@ -258,7 +252,7 @@ int npc_step_cycle(void) {
   }
 #endif
   const struct nemu_fpga_runtime_event event =
-      nemu_fpga_runtime_service_once(runtime_io, runtime_xlen);
+      nemu_fpga_runtime_service_once(runtime_io);
   if (event.type == NEMU_FPGA_RT_EVENT_PUTCH) {
     putchar((int)(event.value & 0xff));
     fflush(stdout);
@@ -320,18 +314,17 @@ uint32_t npc_get_frontend_instruction(void) {
 
 uint64_t npc_get_reg(int index) {
   if (index < 0 || index >= 32) return 0;
-  select_registers((unsigned)index, 0);
+  select_register((unsigned)index);
   return read64(NEMU_FPGA_RT_GPR_LOW, NEMU_FPGA_RT_GPR_HIGH);
 }
 
 uint64_t npc_get_freg(int index) {
-  if (index < 0 || index >= 32) return 0;
-  select_registers(0, (unsigned)index);
-  return read64(NEMU_FPGA_RT_FPR_LOW, NEMU_FPGA_RT_FPR_HIGH);
+  (void)index;
+  return 0;
 }
 
 uint32_t npc_get_fcsr(void) {
-  return read32(NEMU_FPGA_RT_FCSR) & 0xff;
+  return 0;
 }
 
 uint64_t npc_get_mstatus(void) {
@@ -408,7 +401,6 @@ void npc_display_mem_access(void) { puts("FPGA memory accesses are handled in lo
 void npc_cleanup(void) {
   if (runtime_interactive && runtime_started && !runtime_failed && !debug_is_halted())
     (void)npc_debug_halt();
-  nemu_fpga_fallback_summary_print();
 #ifdef CONFIG_FPGA_BACKEND_ZCU102
   nemu_fpga_zcu102_uio_close(&zcu102);
 #elif defined(CONFIG_FPGA_BACKEND_U55C)

@@ -56,8 +56,7 @@ static void u55c_write32(void *opaque, uint32_t offset, uint32_t value) {
 extern "C" int nemu_fpga_u55c_xrt_open(struct nemu_fpga_u55c_xrt *runtime,
                                          unsigned device_index, const char *xclbin,
                                          const char *kernel_name, unsigned memory_group,
-                                         size_t memory_size,
-                                         uint32_t max_request_cycles) {
+                                         size_t memory_size) {
   if (runtime == nullptr || xclbin == nullptr || *xclbin == '\0' ||
       kernel_name == nullptr || *kernel_name == '\0' || memory_size == 0) {
     errno = EINVAL;
@@ -82,7 +81,6 @@ extern "C" int nemu_fpga_u55c_xrt_open(struct nemu_fpga_u55c_xrt *runtime,
     runtime->mailbox.opaque = runtime;
     runtime->mailbox.read32 = u55c_read32;
     runtime->mailbox.write32 = u55c_write32;
-    runtime->mailbox.max_request_cycles = max_request_cycles;
 
     auto *opened = static_cast<u55c_xrt_implementation *>(runtime->implementation);
     const uint64_t memory_address = opened->memory->address();
@@ -143,6 +141,30 @@ extern "C" int nemu_fpga_u55c_xrt_read(struct nemu_fpga_u55c_xrt *runtime,
   try {
     implementation->memory->sync(XCL_BO_SYNC_BO_FROM_DEVICE, size, offset);
     std::memcpy(destination, implementation->mapped_memory + offset, size);
+    return 0;
+  } catch (const std::exception &error) {
+    record_error(runtime, error.what());
+    errno = EIO;
+    return -1;
+  }
+}
+
+extern "C" int nemu_fpga_u55c_xrt_write(struct nemu_fpga_u55c_xrt *runtime,
+                                          size_t offset, const void *source,
+                                          size_t size) {
+  if (runtime == nullptr || source == nullptr || offset > runtime->memory_size ||
+      size > runtime->memory_size - offset) {
+    errno = EINVAL;
+    return -1;
+  }
+  auto *implementation = static_cast<u55c_xrt_implementation *>(runtime->implementation);
+  if (implementation == nullptr || implementation->mapped_memory == nullptr) {
+    errno = ENODEV;
+    return -1;
+  }
+  try {
+    std::memcpy(implementation->mapped_memory + offset, source, size);
+    implementation->memory->sync(XCL_BO_SYNC_BO_TO_DEVICE, size, offset);
     return 0;
   } catch (const std::exception &error) {
     record_error(runtime, error.what());

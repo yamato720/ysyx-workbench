@@ -1,4 +1,4 @@
-package scpu
+package npc
 
 /**
   * 为 L2 SoC、L3 FPGA 和 L4 板卡复用而准备的完整 L1 NPC 核。
@@ -8,40 +8,34 @@ package scpu
   * `Configs.scala`。
   */
 
-/** RV64IMF_Zicsr FPGA 核心成品：外部 AXI、派发控制和 NEMU mailbox F 回退。 */
-class FullIsa64PipelineDualForwardingFpgaConfig extends ConstructionConfig(
-  new Rv64IMFZicsrConfig ++
+/** RV64IM_Zicsr FPGA 核心成品：外部 AXI、派发控制和 FPGA 主存。 */
+class Rv64PipelineDualForwardingFpgaConfig extends ConstructionConfig(
+  new Rv64IMZicsrConfig ++
     new PipelineDualFwdPerformConfig ++
     new WithExternalAxiConfig ++
     new WithDispatchControlConfig ++
     new WithTopDebugConfig ++
-    new WithFpgaComputeConfig ++
-    new WithDefaultArithmeticTimingConfig ++
     new WithFpgaMainMemoryConfig ++
     new BaseConfig
 )
 
 /** 裸核 FPGA 默认 NPC：外部 AXI、调试派发控制、M 扩展和顶层调试 IO。 */
 class FpgaConfig extends ConstructionConfig(
-  new Rv32IMFZicsrConfig ++
+  new Rv32IMZicsrConfig ++
     new PipelineDualFwdPerformConfig ++
     new WithExternalAxiConfig ++
     new WithDispatchControlConfig ++
     new WithTopDebugConfig ++
-    new WithFpgaComputeConfig ++
-    new WithDefaultArithmeticTimingConfig ++
     new WithFpgaMainMemoryConfig ++
     new BaseConfig
 )
 
 /** 供 SoC 或其他外部系统集成的 NPC，导出 AXI master 而不启用 FPGA 派发控制。 */
-class ExternalAxiConfig extends ConstructionConfig(
+class ExternalAxiConfig extends ConfigBundle(
   new Rv32IMZicsrConfig ++
     new PipelineDualFwdPerformConfig ++
     new WithExternalAxiConfig ++
     new WithTopDebugConfig ++
-    new WithModelComputeConfig ++
-    new WithDefaultArithmeticTimingConfig ++
     new WithSoCMainMemoryConfig ++
     new BaseConfig
 )

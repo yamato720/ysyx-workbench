@@ -20,17 +20,17 @@ workspace=$(realpath "$npc_root/..")
 root=${CONSTRUCTION_TEST_ROOT:-$npc_root/constructions}
 mkdir -p "$root"
 root=$(realpath "$root")
-catalog="$npc_root/chisel/configs/resources/scpu-config-catalog.tsv"
+catalog="$npc_root/chisel/configs/resources/npc-config-catalog.tsv"
 profile_tool="$npc_root/scripts/generate-config-profile.sh"
 build_tool="$npc_root/scripts/build-construction.sh"
 refresh_simulation_host_tool="$npc_root/scripts/refresh-simulation-host.sh"
 phase_log_tool="$npc_root/scripts/phase-log.sh"
 artifact_tool="$npc_root/fpga/common/scripts/artifact-manifest.sh"
 mkdir -p "$root/.profiles" "$root/.failed"
-catalog_ready=${SCPU_CONFIG_CATALOG_READY:-0}
+catalog_ready=${NPC_CONFIG_CATALOG_READY:-0}
 profile_format=10
 profile_inputs_fingerprint_cache=''
-[[ $catalog_ready == 0 || $catalog_ready == 1 ]] || { echo "SCPU_CONFIG_CATALOG_READY 只能是 0 或 1" >&2; exit 2; }
+[[ $catalog_ready == 0 || $catalog_ready == 1 ]] || { echo "NPC_CONFIG_CATALOG_READY 只能是 0 或 1" >&2; exit 2; }
 
 value() {
   sed -n "s/^${2}=//p" "$1" | tail -n 1
@@ -48,7 +48,7 @@ expected_protocol_abi() {
   case "$1" in
     npc) printf '%s\n' npc-dpi-v1 ;;
     soc) printf '%s\n' ysyx-dpi-v1 ;;
-    fpga) printf '%s\n' npc-fpga-mailbox-v3 ;;
+    fpga) printf '%s\n' npc-fpga-runtime-v5 ;;
     *) printf '%s\n' none ;;
   esac
 }
@@ -74,11 +74,11 @@ normalize_scope() {
 canonical_nemu_preset() {
   case "$1" in
     LocalBase|LocalPerformance|LocalPipelineTrace|U55cBase|Zcu102Base|Custom|none) printf '%s\n' "$1" ;;
-    scpu.nemu.DpiConfig|scpu.nemu.LocalVerilatorConfig) printf '%s\n' LocalBase ;;
-    scpu.nemu.LocalVerilatorPerformanceConfig) printf '%s\n' LocalPerformance ;;
-    scpu.nemu.LocalVerilatorPipelineTraceConfig) printf '%s\n' LocalPipelineTrace ;;
-    scpu.nemu.U55cConfig) printf '%s\n' U55cBase ;;
-    scpu.nemu.Zcu102Config) printf '%s\n' Zcu102Base ;;
+    npc.nemu.DpiConfig|npc.nemu.LocalVerilatorConfig) printf '%s\n' LocalBase ;;
+    npc.nemu.LocalVerilatorPerformanceConfig) printf '%s\n' LocalPerformance ;;
+    npc.nemu.LocalVerilatorPipelineTraceConfig) printf '%s\n' LocalPipelineTrace ;;
+    npc.nemu.U55cConfig) printf '%s\n' U55cBase ;;
+    npc.nemu.Zcu102Config) printf '%s\n' Zcu102Base ;;
     '') printf '\n' ;;
     *) printf '%s\n' Custom ;;
   esac
@@ -89,18 +89,17 @@ canonical_nemu_preset() {
 # Config 名称。未知名称仍由 catalog 严格拒绝，避免把拼写错误当作历史构造。
 canonical_config_fqcn() {
   case "$1" in
-    scpu.NpcStandaloneConfig) printf '%s\n' scpu.StandaloneConfig ;;
-    scpu.NpcDpiConfig|scpu.DpiConfig) printf '%s\n' scpu.SimulationConfig ;;
-    scpu.NpcPipelineDpiConfig|scpu.PipelineDpiConfig) printf '%s\n' scpu.PipelineSimulationConfig ;;
-    scpu.NpcFullIsa64NoPipelineDpiConfig|scpu.FullIsa64NoPipelineDpiConfig) printf '%s\n' scpu.FullIsa64NoPipelineSimulationConfig ;;
-    scpu.NpcFullIsa64PipelineNoForwardingDpiConfig|scpu.FullIsa64PipelineNoForwardingDpiConfig) printf '%s\n' scpu.FullIsa64PipelineNoForwardingSimulationConfig ;;
-    scpu.NpcFullIsa64PipelineDualForwardingDpiConfig|scpu.FullIsa64PipelineDualForwardingDpiConfig) printf '%s\n' scpu.FullIsa64PipelineDualForwardingSimulationConfig ;;
-    scpu.NpcFullIsa64PipelineDualForwardingFpgaConfig) printf '%s\n' scpu.FullIsa64PipelineDualForwardingFpgaConfig ;;
-    scpu.NpcFpgaConfig) printf '%s\n' scpu.FpgaConfig ;;
-    scpu.NpcExternalAxiConfig) printf '%s\n' scpu.ExternalAxiConfig ;;
-    scpu.NpcPipelineCheckConfig) printf '%s\n' scpu.PipelineCheckConfig ;;
-    scpu.NpcFloatingCheckConfig) printf '%s\n' scpu.FloatingCheckConfig ;;
-    scpu.NpcMulDivCheckConfig) printf '%s\n' scpu.MulDivCheckConfig ;;
+    npc.NpcStandaloneConfig) printf '%s\n' npc.StandaloneConfig ;;
+    npc.NpcDpiConfig|npc.DpiConfig) printf '%s\n' npc.SimulationConfig ;;
+    npc.NpcPipelineDpiConfig|npc.PipelineDpiConfig) printf '%s\n' npc.PipelineSimulationConfig ;;
+    npc.NpcFullIsa64NoPipelineDpiConfig|npc.FullIsa64NoPipelineDpiConfig) printf '%s\n' npc.FullIsa64NoPipelineSimulationConfig ;;
+    npc.NpcFullIsa64PipelineNoForwardingDpiConfig|npc.FullIsa64PipelineNoForwardingDpiConfig) printf '%s\n' npc.FullIsa64PipelineNoForwardingSimulationConfig ;;
+    npc.NpcFullIsa64PipelineDualForwardingDpiConfig|npc.FullIsa64PipelineDualForwardingDpiConfig) printf '%s\n' npc.FullIsa64PipelineDualForwardingSimulationConfig ;;
+    npc.NpcFpgaConfig) printf '%s\n' npc.FpgaConfig ;;
+    npc.NpcExternalAxiConfig) printf '%s\n' npc.ExternalAxiConfig ;;
+    npc.NpcPipelineCheckConfig) printf '%s\n' npc.PipelineCheckConfig ;;
+    npc.NpcFloatingCheckConfig) printf '%s\n' npc.FloatingCheckConfig ;;
+    npc.NpcMulDivCheckConfig) printf '%s\n' npc.MulDivCheckConfig ;;
     *) printf '%s\n' "$1" ;;
   esac
 }
@@ -124,7 +123,7 @@ replace_config_metadata() {
 }
 
 # 此函数必须持有 $root/.lock。目录名、profile 和 construction.env 是同一个
-# 不可分割的引用单元，三者一起迁移才能让 version= 和 rebuild=1 始终命中同一构造。
+# 不可分割的引用单元，三者一起迁移才能让 version= 和 rebuild 始终命中同一构造。
 migrate_config_names_locked() {
   local construction directory profile saved_fqcn profile_fqcn canonical_fqcn target
   while IFS= read -r construction; do
@@ -309,7 +308,7 @@ preserve_fpga_failure_evidence() {
   [[ -d $stage/fpga ]] || return 0
   copy_failure_file "$stage" "$failed_dir" "$stage/profile.env"
 
-  for directory in "$stage/fpga/ip/logs" "$stage/fpga/vitis-logs" "$stage/fpga/vitis-reports"; do
+  for directory in "$stage/fpga/ip-generated/logs" "$stage/fpga/vitis-logs" "$stage/fpga/vitis-reports"; do
     [[ -d $directory ]] || continue
     mkdir -p "$failed_dir/${directory#"$stage/"}"
     cp -a "$directory/." "$failed_dir/${directory#"$stage/"}/"
@@ -511,6 +510,30 @@ resolve_catalog() {
   printf '%s\n' "$resolved"
 }
 
+# FQCN 是构造目录和 metadata 的稳定内部标识；公开 Make 命令始终使用 catalog
+# 注册的短名，避免把包路径泄漏为用户需要复制的参数。
+config_short_name() {
+  local fqcn=$1 short_name class_name scope board target extra matched=''
+  while IFS=$'\t' read -r short_name class_name scope board target extra; do
+    [[ -z ${short_name:-} || $short_name == \#* ]] && continue
+    [[ -z ${extra:-} ]] || {
+      echo "配置目录格式错误：$catalog" >&2
+      return 1
+    }
+    [[ $class_name == "$fqcn" ]] || continue
+    [[ -z $matched ]] || {
+      echo "配置目录中存在重复完整类名：$fqcn" >&2
+      return 1
+    }
+    matched=$short_name
+  done < "$catalog"
+  [[ -n $matched ]] || {
+    echo "配置目录中缺少完整类名：$fqcn" >&2
+    return 1
+  }
+  printf '%s\n' "$matched"
+}
+
 # profile 是当前源码 Config 的可再生描述缓存，不是已保存构造的一部分。缓存命中
 # 必须同时绑定生成它的 Scala 输入；否则 Config 已调频而 `resolve` 仍返回旧频率，
 # 直到下一次 build 才会暴露漂移。一个 manager 进程内可复用同一指纹。
@@ -525,7 +548,8 @@ profile_inputs_fingerprint() {
       for input in scripts/generate-config-profile.sh build.sbt chisel/ysyxSoC/build.sc; do
         [[ -f $input ]] && printf '%s\0' "$input"
       done
-      find chisel/configs chisel/fpga-harness/src chisel/rv-core/main/scala chisel/ysyxSoC/src \
+      find chisel/configs fpga/common/scala fpga/u55c/scala fpga/zcu102/scala \
+        chisel/rv-core/main/scala chisel/ysyxSoC/src \
         -type f -name '*.scala' -print0
     } | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | awk '{print $1}'
   )
@@ -559,7 +583,7 @@ profile_for() {
   # 运行行为、scope 和 target。旧缓存里的 generate-only/check-only profile
   # 不能继续代表同名终端，必须从当前 Scala Config 重建。
   if [[ $refresh == 1 || ! -f $output || $cached_fingerprint != "$inputs_fingerprint" || $(value "$output" CONFIG_FQCN) != "$fqcn" || $(value "$output" PROFILE_FORMAT) != "$profile_format" || $(value "$output" PROTOCOL_ABI) != "$protocol_abi" || $(value "$output" CAPABILITY) != run ]]; then
-    SCPU_CONFIG_CATALOG_READY=1 "$profile_tool" "$npc_root" "$fqcn" "$output"
+    NPC_CONFIG_CATALOG_READY=1 "$profile_tool" "$npc_root" "$fqcn" "$output"
     write_profile_inputs_fingerprint "$inputs_file" "$inputs_fingerprint"
   fi
   printf '%s\n' "$output"
@@ -665,7 +689,7 @@ next_id() {
   [[ $prefix =~ ^[0-9]{14}$ ]] || { echo "内部构造编号时间前缀必须是 14 位数字" >&2; exit 2; }
   for sequence in $(seq -w 0 99); do
     candidate="$prefix$sequence"
-    if ! rg -q "^CONSTRUCTION_ID=$candidate$" "$root" -g construction.env 2>/dev/null; then
+    if ! grep -R -q --include=construction.env "^CONSTRUCTION_ID=$candidate$" "$root" 2>/dev/null; then
       printf '%s\n' "$candidate"
       return
     fi
@@ -675,7 +699,7 @@ next_id() {
 }
 
 do_build_locked() {
-  local request=$1 force=$2 resolved scope board target profile fqcn capability final stage old_id version_index created rebuild_count now log backup failed_dir
+  local request=$1 force=$2 resolved scope board target profile fqcn retry_config capability final stage old_id version_index created rebuild_count now log backup failed_dir
   migrate_version_indexes_locked
   resolved=$(resolve_catalog "$request")
   IFS='|' read -r fqcn scope board target <<< "$resolved"
@@ -684,7 +708,7 @@ do_build_locked() {
     if [[ $scope == fpga ]]; then
       verify_assets "$final"
     fi
-    echo "复用已保存构造：$fqcn；需要重新生成请添加 rebuild=1。"
+    echo "复用已保存构造：$fqcn；需要重新生成请执行 make -C $npc_root rebuild config=$(config_short_name "$fqcn")。"
     return 0
   fi
   profile=$(profile_for "$fqcn" 1)
@@ -729,7 +753,8 @@ do_build_locked() {
     echo '失败原因（关键日志）：' >&2
     failure_excerpt "$failed_dir/all.log"
     echo "完整日志目录：$failed_dir" >&2
-    echo "需要重试并在成功后原子覆盖时，请执行：make -C $npc_root build config=$fqcn rebuild=1" >&2
+    retry_config=$(config_short_name "$fqcn")
+    echo "需要重试并在成功后原子覆盖时，请执行：make -C $npc_root rebuild config=$retry_config" >&2
     exit 1
   fi
   now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -933,12 +958,13 @@ do_host_build_directory() {
 }
 
 do_host_build() {
-  local request=$1 resolved fqcn directory
+  local request=$1 resolved fqcn short_config directory
   resolved=$(resolve_catalog "$request")
   IFS='|' read -r fqcn _ <<< "$resolved"
   directory="$root/$fqcn"
   [[ -d $directory ]] || {
-    echo "构造不存在：$fqcn；host-build 不会隐式生成硬件，请先执行 make -C $npc_root build config=$fqcn" >&2
+    short_config=$(config_short_name "$fqcn")
+    echo "构造不存在：$fqcn；host-build 不会隐式生成硬件，请先执行 make -C $npc_root build config=$short_config" >&2
     return 1
   }
   do_host_build_directory "$directory"

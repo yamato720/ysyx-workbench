@@ -1,4 +1,4 @@
-package scpu
+package npc
 
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path, Paths, StandardCopyOption}
@@ -12,8 +12,10 @@ import scala.util.matching.Regex
   * 后缀猜测作用域或目标。
   */
 object ConfigCatalogGenerator {
-  private val CatalogRelativePath = Path.of("chisel", "configs", "resources", "scpu-config-catalog.tsv")
+  private val CatalogRelativePath = Path.of("chisel", "configs", "resources", "npc-config-catalog.tsv")
   private val ConfigRelativePath = Path.of("chisel", "configs")
+  private val FpgaRelativePath = Path.of("fpga")
+  private val FpgaConfigRelativePath = ConfigRelativePath.resolve("fpga")
   private val PackagePattern: Regex = raw"(?m)^package\s+([A-Za-z_][A-Za-z0-9_.]*)\s*$$".r
   private val ClassPattern: Regex = raw"(?m)^\s*class\s+([A-Za-z_][A-Za-z0-9_]*Config)\s+extends\s+([A-Za-z_][A-Za-z0-9_.]*)".r
   private val BoardPattern: Regex = raw"WithFpgaBoardConfig\(FpgaBoard\.([A-Za-z0-9_]+)\)".r
@@ -28,17 +30,24 @@ object ConfigCatalogGenerator {
     "Zcu102NpcTerminal" -> ("fpga", "NPC"),
     "Zcu102SocTerminal" -> ("fpga", "SOC")
   )
+  private val ipTerminalForScope = Map(
+    "npc" -> "NemuSimulationIpTerminal",
+    "soc" -> "NemuSimulationIpTerminal",
+    "fpga" -> "FpgaIpTerminal"
+  )
+  private val ipTerminalNames = Vector("NemuSimulationIpTerminal", "FpgaIpTerminal")
   private val baseConstructionTraits = Vector(
     "HostConstruction",
     "NemuSimulationConstruction",
     "FpgaConstruction",
     "MakeTerminal"
   )
-  /** 寻找包含 `chisel/configs` 的 NPC 根目录；无法找到时返回 `None`，供安装后的
+  /** 寻找同时包含通用 Config 与 FPGA 板卡 Config 的 NPC 根目录；无法找到时返回 `None`，供安装后的
     * classpath resource 回退路径使用。
     */
   def locateNpcRoot(start: Path = Paths.get("").toAbsolutePath.normalize): Option[Path] = {
-    def isNpcRoot(path: Path): Boolean = Files.isDirectory(path.resolve(ConfigRelativePath))
+    def isNpcRoot(path: Path): Boolean =
+      Files.isDirectory(path.resolve(ConfigRelativePath)) && Files.isDirectory(path.resolve(FpgaRelativePath))
 
     Iterator.iterate(Option(start))(_.flatMap(path => Option(path.getParent))).flatten
       .flatMap(path => Seq(path, path.resolve("npc")))
@@ -52,7 +61,7 @@ object ConfigCatalogGenerator {
     * 自动目录不能把文档中的示例类或注释掉的历史 Config 视为真实构造；同时保留换行，避免
     * 多行类声明的匹配位置发生偏移。
     */
-  private[scpu] def codeOnly(source: String): String = {
+  private[npc] def codeOnly(source: String): String = {
     val masked = source.toCharArray
 
     def mask(index: Int): Unit =
@@ -142,7 +151,7 @@ object ConfigCatalogGenerator {
     * `base/` 与 `core/` 仍由 Scala 编译器递归加载，但终端 trait 一旦出现在这些层或其他文件中，
     * 目录生成立即失败，避免可复用组合被意外暴露为 Make 入口。
     */
-  private[scpu] def validateTerminalLayout(directory: Path): Path = {
+  private[npc] def validateTerminalLayout(directory: Path): Path = {
     val terminalPath = directory.resolve("Configs.scala").toAbsolutePath.normalize
     require(Files.isRegularFile(terminalPath), s"终端目录 $directory 缺少根部 Configs.scala")
 
@@ -188,6 +197,28 @@ object ConfigCatalogGenerator {
     found.headOption.map(_._2)
   }
 
+  /** 运行终端必须在根部 Config 中直接写出唯一的计算 IP terminal。
+    *
+    * 这与 NEMU/FPGA host 配方同样是终端 ABI 的一部分；核心和 CDE `++` 链不能
+    * 隐式选择或重复挂载它。
+    */
+  private def validateIpTerminal(block: ClassBlock, scope: String): Unit = {
+    val expected = ipTerminalForScope(scope)
+    val mounted = ipTerminalNames.flatMap { name =>
+      val occurrences = raw"\b$name\b".r.findAllMatchIn(block.body).size
+      Option.when(occurrences > 0)(name -> occurrences)
+    }
+    require(mounted == Vector(expected -> 1),
+      s"Config ${block.name} 必须直接且唯一地挂载 $expected，实际为 " +
+        mounted.map { case (name, count) => s"$name x$count" }.mkString(", "))
+    val nested = ipTerminalNames.filter { name =>
+      raw"(?s)\bnew\s+[^()]*?\bwith\s+$name\b".r.findFirstIn(block.body).nonEmpty
+    }
+    require(nested.isEmpty,
+      s"Config ${block.name} 只能在公开终端自身挂载计算 IP，不能在 CDE ++ 链中挂载：" +
+        nested.mkString(", "))
+  }
+
   private def discoverTerminals(
     directory: Path,
     expectedScope: String,
@@ -202,6 +233,7 @@ object ConfigCatalogGenerator {
       )
       require(scope == expectedScope,
         s"Config ${block.name} 的终端 trait 作用域 $scope 与目录 $directory 不一致")
+      validateIpTerminal(block, scope)
       val expectedParent = if (scope == "npc") "ConstructionConfig" else "CDEConfig"
       require(block.parent == expectedParent,
         s"Config ${block.name} 的终端 trait 要求继承 $expectedParent，实际为 ${block.parent}")
@@ -221,12 +253,12 @@ object ConfigCatalogGenerator {
   private def discoverSoc(configRoot: Path): Vector[ConfigCatalog.Entry] =
     discoverTerminals(configRoot.resolve("ysyx"), "soc", None)
 
-  private def boardMetadata(directory: Path): String = {
-    val source = scalaFiles(directory).map(read).mkString("\n")
+  private def boardMetadata(boardDirectory: Path, configDirectory: Path): String = {
+    val source = scalaFiles(configDirectory).map(read).mkString("\n")
     val board = BoardPattern.findFirstMatchIn(source).map(_.group(1)).map(_.toLowerCase).getOrElse(
-      throw new IllegalArgumentException(s"Missing WithFpgaBoardConfig in $directory")
+      throw new IllegalArgumentException(s"Missing WithFpgaBoardConfig in $configDirectory")
     )
-    directory.getFileName.toString match {
+    boardDirectory.getFileName.toString match {
       case name if name == board => board
       case name => throw new IllegalArgumentException(
         s"FPGA directory $name conflicts with its FpgaBoard.$board declaration"
@@ -234,16 +266,16 @@ object ConfigCatalogGenerator {
     }
   }
 
-  private def discoverFpga(configRoot: Path): Vector[ConfigCatalog.Entry] = {
-    val fpgaRoot = configRoot.resolve("fpga")
-    if (!Files.isDirectory(fpgaRoot)) Vector.empty
+  private def discoverFpga(npcRoot: Path): Vector[ConfigCatalog.Entry] = {
+    val fpgaConfigRoot = npcRoot.resolve(FpgaConfigRelativePath)
+    if (!Files.isDirectory(fpgaConfigRoot)) Vector.empty
     else {
-      val directories = Files.list(fpgaRoot)
-      try directories.iterator.asScala.filter(Files.isDirectory(_)).toVector.flatMap { directory =>
-        if (directory.getFileName.toString == "common") Vector.empty
+      val directories = Files.list(fpgaConfigRoot)
+      try directories.iterator.asScala.filter(Files.isDirectory(_)).toVector.flatMap { boardDirectory =>
+        if (boardDirectory.getFileName.toString == "common") Vector.empty
         else {
-          val board = boardMetadata(directory)
-          discoverTerminals(directory, "fpga", Some(board))
+          val board = boardMetadata(boardDirectory, boardDirectory)
+          discoverTerminals(boardDirectory, "fpga", Some(board))
         }
       }
       finally directories.close()
@@ -265,7 +297,7 @@ object ConfigCatalogGenerator {
   def discover(npcRoot: Path): Vector[ConfigCatalog.Entry] = {
     val configRoot = npcRoot.resolve(ConfigRelativePath)
     require(Files.isDirectory(configRoot), s"Missing Scala Config root $configRoot")
-    validate(discoverNpc(configRoot) ++ discoverSoc(configRoot) ++ discoverFpga(configRoot))
+    validate(discoverNpc(configRoot) ++ discoverSoc(configRoot) ++ discoverFpga(npcRoot))
   }
 
   private def render(entries: Vector[ConfigCatalog.Entry]): String = {
@@ -274,7 +306,7 @@ object ConfigCatalogGenerator {
       s"${entry.shortName}\t${entry.className}\t${entry.scope}\t$board\t${entry.target}"
     }
     (Vector(
-      "# 此文件由 scpu.GenerateConfigCatalog 自动生成；不要手工编辑。",
+      "# 此文件由 npc.GenerateConfigCatalog 自动生成；不要手工编辑。",
       "# 短名\t完整类名\t作用域\t板卡\t目标"
     ) ++ rows).mkString("\n") + "\n"
   }
@@ -286,7 +318,7 @@ object ConfigCatalogGenerator {
     val previous = Option.when(Files.isRegularFile(destination))(read(destination))
     if (!previous.contains(content)) {
       Files.createDirectories(destination.getParent)
-      val temporary = Files.createTempFile(destination.getParent, ".scpu-config-catalog-", ".tsv")
+      val temporary = Files.createTempFile(destination.getParent, ".npc-config-catalog-", ".tsv")
       try {
         Files.writeString(temporary, content, StandardCharsets.UTF_8)
         Files.move(temporary, destination, StandardCopyOption.REPLACE_EXISTING)

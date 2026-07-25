@@ -1,4 +1,4 @@
-package scpu
+package npc
 
 import org.chipsalliance.cde.config.Parameters
 import org.scalatest.flatspec.AnyFlatSpec
@@ -9,12 +9,13 @@ class NpcConfigCompositionTest extends AnyFlatSpec {
     assert(new PipelineCheckConfig().capability == "check-only")
     assert(new SimulationConfig().capability == "run")
     assert(new SimulationConfig().nemuConfig == NemuHostConfig.LocalPipelineTrace)
-    assert(!new FpgaConfig().isInstanceOf[MakeTerminal])
+    val fpgaCore: Any = new FpgaConfig with FpgaIpTerminal
+    assert(!fpgaCore.isInstanceOf[MakeTerminal])
     assert(!new ExternalAxiConfig().isInstanceOf[MakeTerminal])
   }
 
   "ConstructionConfig" should "directly provide its completed core through the CDE key" in {
-    val construction = new FpgaConfig
+    val construction = new FpgaConfig with FpgaIpTerminal
     implicit val parameters: Parameters = construction
 
     assert(parameters(NpcCoreConfigKey) == construction.config)
@@ -35,11 +36,12 @@ class NpcConfigCompositionTest extends AnyFlatSpec {
   }
 
   "FpgaConfig" should "compose explicit architecture, performance, memory, and compute fragments" in {
-    val config = new FpgaConfig().config
+    val config = (new FpgaConfig with FpgaIpTerminal).config
 
     assert(config.isa.xlen == 32)
     assert(config.isa.M)
-    assert(config.isa.F)
+    assert(!config.isa.F)
+    assert(!config.isa.D)
     assert(config.pipeline.enablePipeline)
     assert(config.pipeline.forwarding.enableIdForwarding)
     assert(config.pipeline.forwarding.enableExecuteForwarding)
@@ -50,8 +52,15 @@ class NpcConfigCompositionTest extends AnyFlatSpec {
     assert(config.axi.useExternalMaster)
     assert(config.axi.dataWidth == 32)
     assert(config.operators.routes.route(ArithmeticRouteOperation.Mul).target == OperatorRouteTarget.Model)
-    assert(config.operators.routes.route(ArithmeticRouteOperation.Fadd).target == OperatorRouteTarget.Model)
+    assert(!config.operators.routes.routes.contains(ArithmeticRouteOperation.Fadd))
     config.operators.routes.validate(config.isa)
+  }
+
+  "Local floating-point Config" should "retain its model routes" in {
+    val localFloating = new FloatingCheckConfig().config
+    assert(localFloating.isa.F)
+    assert(localFloating.operators.routes.route(ArithmeticRouteOperation.Fadd).target ==
+      OperatorRouteTarget.Model)
   }
 
   "Operator route defaults" should "cover every enabled M/F operation and reject an unselected check route" in {
@@ -60,20 +69,19 @@ class NpcConfigCompositionTest extends AnyFlatSpec {
     assert(model.operators.routes.profileValues(model.isa).size ==
       ArithmeticRouteOperation.mOperations.size + ArithmeticRouteOperation.fOperations.size)
 
-    val unselected = (
+    assertThrows[IllegalArgumentException]((
       new WithOperatorRoutesConfig(OperatorRouteConfig(Map(
         ArithmeticRouteOperation.Mul -> OperatorRoute(
           OperatorRouteTarget.Unselected, "unselected", 64, 1, 1)
       ))) ++
         new Rv64IMZicsrConfig
-    ).build
-    assertThrows[IllegalArgumentException](unselected.operators.routes.validate(unselected.isa))
+    ).build)
   }
 
   it should "remain composable when an integration adds a later fragment" in {
     val config = (
       new ScalarPerformConfig ++
-        new FpgaConfig
+        (new FpgaConfig with FpgaIpTerminal)
     ).build
 
     assert(config.isa.xlen == 32)
@@ -100,6 +108,30 @@ class NpcConfigCompositionTest extends AnyFlatSpec {
     assert(config.operators.floating.implementation.ip.outputFifoDepth == 8)
     assert(config.operators.mulDiv.multiplyTiming.responseFifoDepth == 8)
     assert(config.operators.floating.divideTiming.responseFifoDepth == 8)
+  }
+
+  "IP terminal traits" should "reuse one timing contract for FPGA and NEMU functional simulation" in {
+    val defaults = OperatorIpTimingConfig.Default
+    val timing = defaults.copy(
+      outputFifoDepth = 8,
+      multiply = defaults.multiply.copy(latency = 5),
+      floatingDivide = defaults.floatingDivide.copy(latency = 31)
+    )
+    val fpga = new FpgaIpTerminal {
+      override val operatorTiming: OperatorIpTimingConfig = timing
+    }
+
+    val fpgaConfig = (fpga.computeUnitConfig ++ new Rv64IMZicsrConfig).build
+    val nemuConfig = (NemuSimulationIpTerminal.from(fpga).computeUnitConfig ++ new Rv64IMFZicsrConfig).build
+
+    assert(fpgaConfig.operators.mulDiv.implementation.backend == ComputeBackend.FPGA)
+    assert(fpgaConfig.operators.mulDiv.multiplyTiming.latency == 5)
+    assert(fpgaConfig.operators.mulDiv.multiplyTiming.responseFifoDepth == 8)
+    assert(nemuConfig.operators.mulDiv.implementation.backend == ComputeBackend.Builtin)
+    assert(nemuConfig.operators.floating.implementation.backend == ComputeBackend.Builtin)
+    assert(nemuConfig.operators.mulDiv.multiplyTiming.latency == 5)
+    assert(nemuConfig.operators.floating.divideTiming.latency == 31)
+    assert(nemuConfig.operators.floating.divideTiming.responseFifoDepth == 8)
   }
 
   "Zicsr fragments" should "make the extension explicit and preserve left precedence" in {
@@ -167,6 +199,8 @@ class NpcConfigCompositionTest extends AnyFlatSpec {
         new U55cRv64OperatorSimulationCoreConfig().build
     )
 
-    terminalAndCore.foreach { case (terminal, core) => assert(terminal == core) }
+    terminalAndCore.foreach { case (terminal, core) =>
+      assert(terminal == NemuSimulationIpTerminal.computeUnitConfig.applyTo(core).validated)
+    }
   }
 }

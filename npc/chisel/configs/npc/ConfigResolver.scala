@@ -1,4 +1,4 @@
-package scpu
+package npc
 
 /** 反射加载自动发现的完整 NPC 构造。 */
 object ConfigResolver {
@@ -12,12 +12,12 @@ object ConfigResolver {
         throw new IllegalArgumentException(s"Cannot construct NPC configuration ${entry.className}: ${error.getMessage}", error)
     }
     instance match {
-      case config: ConstructionConfig with LocalNpcTerminal =>
+      case config: ConstructionConfig with LocalNpcTerminal with NemuSimulationIpTerminal =>
         require(config.constructionScope == entry.scope && config.constructionTarget == entry.target,
           s"NPC configuration ${entry.className} terminal trait conflicts with catalog metadata")
         entry -> config
       case _ => throw new IllegalArgumentException(
-        s"NPC configuration ${entry.className} must directly mount LocalNpcTerminal"
+        s"NPC configuration ${entry.className} must directly mount LocalNpcTerminal and NemuSimulationIpTerminal"
       )
     }
   }

@@ -1,8 +1,8 @@
-package scpu.protocol
+package npc.protocol
 
 import chisel3._
 import chisel3.util._
-import scpu.{ISAConfig, NpcAluOp, NpcExecutionUnit}
+import npc.{ISAConfig, NpcAluOp, NpcExecutionUnit}
 
 // PipelineRegister 是一个通用的就绪/有效流水寄存器。
 //

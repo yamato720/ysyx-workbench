@@ -1,7 +1,7 @@
-package scpu.fpga.zcu102
+package npc.fpga.zcu102
 
 import org.chipsalliance.cde.config.{Config => CDEConfig}
-import _root_.scpu.{FpgaConfig, Zcu102NpcTerminal, Zcu102SocTerminal}
+import _root_.npc.{FpgaConfig, FpgaIpTerminal, Zcu102NpcTerminal, Zcu102SocTerminal}
 import _root_.ysyx.YsyxElaborateConfig
 
 /** ZCU102 的所有可运行终端构造。
@@ -14,7 +14,7 @@ import _root_.ysyx.YsyxElaborateConfig
 class Zcu102NpcFpgaConfig extends CDEConfig(
   new Zcu102BoardConfig ++
     new FpgaConfig
-) with Zcu102NpcTerminal
+) with Zcu102NpcTerminal with FpgaIpTerminal
 
 /** ZCU102 的 ysyxSoC FPGA 终端构造。
   *
@@ -25,4 +25,4 @@ class Zcu102YsyxSocFpgaConfig extends CDEConfig(
   new Zcu102BoardConfig ++
     new FpgaConfig ++
     new YsyxElaborateConfig
-) with Zcu102SocTerminal
+) with Zcu102SocTerminal with FpgaIpTerminal

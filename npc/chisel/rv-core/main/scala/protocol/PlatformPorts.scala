@@ -1,47 +1,7 @@
-package scpu.protocol
+package npc.protocol
 
 import chisel3._
 import chisel3.util._
-import npc.ip.arithmetic.ArithmeticOperation
-
-/** mailbox ABI v3 的域与回退原因位宽；数值与 Scala 路由配置保持一致。 */
-object ArithmeticAssistAbi {
-  val domainWidth = 1
-  val fallbackReasonWidth = 3
-}
-
-/** 平台为无法在核内完成的标量算术提供的请求。该协议不绑定 FPGA、DPI 或总线实现。 */
-class ArithmeticAssistRequest(width: Int) extends Bundle {
-  val sequence = UInt(32.W)
-  val pc = UInt(width.W)
-  val instruction = UInt(32.W)
-  val operandA = UInt(width.W)
-  val operandB = UInt(width.W)
-  val operandC = UInt(width.W)
-  val fcsr = UInt(8.W)
-  val operation = UInt(ArithmeticOperation.width.W)
-  val roundingMode = UInt(3.W)
-  val domain = UInt(ArithmeticAssistAbi.domainWidth.W)
-  val fallbackReason = UInt(ArithmeticAssistAbi.fallbackReasonWidth.W)
-}
-
-/** 平台回传的算术结果；sequence 防止过期响应错误完成当前架构槽位。 */
-class ArithmeticAssistResponse(width: Int) extends Bundle {
-  val sequence = UInt(32.W)
-  val result = UInt(width.W)
-  val exceptionFlags = UInt(5.W)
-  val illegal = Bool()
-  val domain = UInt(ArithmeticAssistAbi.domainWidth.W)
-  val fallbackReason = UInt(ArithmeticAssistAbi.fallbackReasonWidth.W)
-}
-
-/** 面向宿主服务、协处理器或板级邮箱的中立算术辅助端口。 */
-class ArithmeticAssistPort(width: Int) extends Bundle {
-  val request = Decoupled(new ArithmeticAssistRequest(width))
-  val response = Flipped(Decoupled(new ArithmeticAssistResponse(width)))
-  val busy = Output(Bool())
-}
-
 /** 平台调试器使用的派发门控。核心只认识许可和实际派发，不依赖具体调试协议。 */
 class NpcDispatchControlPort extends Bundle {
   val dispatchPermit = Input(Bool())
