@@ -35,7 +35,7 @@
 | 流水线仅 ID 前递 | `new PipelineIdFwdPerformConfig` | `core/PerformCore.scala` | 是；与其他完整性能预设二选一 |
 | 流水线仅 EX 前递 | `new PipelineExFwdPerformConfig` | `core/PerformCore.scala` | 是；与其他完整性能预设二选一 |
 | 流水线 ID/EX 双前递 | `new PipelineDualFwdPerformConfig` | `core/PerformCore.scala` | 是；与其他完整性能预设二选一 |
-| 单项性能覆盖 | `new WithPipelineConfig`、`new WithoutPipelineConfig`、`new WithInterlockConfig`、`new WithoutInterlockConfig`、`new WithNpcIdForwardingConfig`、`new WithNpcExecuteForwardingConfig` | `base/PerformConfigs.scala` | 是；用于在完整预设上精确覆盖 |
+| 单项性能覆盖 | `new WithPipelineConfig`、`new WithoutPipelineConfig`、`new WithInterlockConfig`、`new WithoutInterlockConfig`、`new WithNpcIdForwardingConfig`、`new WithNpcExecuteForwardingConfig`、`new WithTwoStageIntegerExecuteConfig`、`new WithSerialExecuteAdditionalStagesConfig(1|2)`、`new WithRegisteredInitialFetchRequestConfig`、`new WithSeparateSerialIntegerAluConfig` | `base/PerformConfigs.scala` | 是；用于在完整预设上精确覆盖 |
 | 主存窗口 | `new WithBareMainMemoryConfig`、`new WithSoCMainMemoryConfig`、`new WithFpgaMainMemoryConfig` | `base/MemoryConfigs.scala` | 必需且按目标选择 |
 | 算术后端/时序 | `NemuSimulationIpTerminal`、`FpgaIpTerminal` | `../common/IpTerminalTraits.scala` | 由公开运行 Config 自身显式挂载；L1 成品与 CDE `++` 链不得选择后端 |
 | 可复用算子 IP 时序数据 | `OperatorIpTimingConfig(...)`、`OperatorIpTimingConfig.Default` | `../common/base/OperatorIpConfigs.scala` | 是；由本文件的算子片段消费 |
@@ -49,6 +49,10 @@
 | RV64IM FPGA 双路径前递成品 | `new Rv64PipelineDualForwardingFpgaConfig` | `core/IntegrationCore.scala` | 是；FPGA 禁用 F/D |
 | 新 NPC 特性 | `class WithMyFeatureConfig`（命名模板，需先实现） | `base/` 的对应领域文件 | 是 |
 | Rocket 外设、板卡引脚 | 无；不在本层添加 | 分别转入 L2/L3/L4 | 不适用 |
+
+`WithTwoStageIntegerExecuteConfig`、`WithSerialExecuteAdditionalStagesConfig(1|2)`、`WithRegisteredInitialFetchRequestConfig` 和
+`WithSeparateSerialIntegerAluConfig` 是彼此独立的生成时开关。不组合串行片段时保持总一拍；片段参数表示在基线路径后额外插入的级数：`1` 为总两拍、`2` 为总三拍。频率终端必须显式选择所需组合；不能根据
+`clockMHz` 隐式开启或关闭它们，因此 250 MHz 可逐项保留任意组合。
 
 新增局部片段后，稳定的架构/性能组合必须提升到 `core/`；供上层复用的完整集成核放入
 `core/IntegrationCore.scala`，本地运行硬件放入 `core/SimulationCore.scala`。终端不得重新展开

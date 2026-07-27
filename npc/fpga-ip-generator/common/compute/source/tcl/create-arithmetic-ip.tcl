@@ -66,6 +66,7 @@ set div_lat [require_profile $profile DIV_CYCLES]
 set div_ii [require_profile $profile DIV_II]
 set div_ip_lat [require_profile $profile FPGA_DIV_IP_CYCLES]
 set div_adapter_lat [require_profile $profile FPGA_DIV_ADAPTER_CYCLES]
+set div_non_blocking [require_profile $profile FPGA_DIVIDER_NON_BLOCKING]
 
 foreach {name value} [list XLEN $xlen MUL_CYCLES $mul_lat MUL_II $mul_ii \
     DIV_CYCLES $div_lat DIV_II $div_ii FPGA_DIV_IP_CYCLES $div_ip_lat] {
@@ -73,6 +74,9 @@ foreach {name value} [list XLEN $xlen MUL_CYCLES $mul_lat MUL_II $mul_ii \
 }
 if {![string is integer -strict $div_adapter_lat] || $div_adapter_lat < 0} {
   fail "FPGA_DIV_ADAPTER_CYCLES must be a nonnegative integer, got $div_adapter_lat"
+}
+if {$div_non_blocking ne "0" && $div_non_blocking ne "1"} {
+  fail "FPGA_DIVIDER_NON_BLOCKING must be 0 or 1, got $div_non_blocking"
 }
 require_equal DIV_CYCLES $div_lat [expr {$div_ip_lat + $div_adapter_lat}]
 require_equal MUL_II $mul_ii 1
@@ -126,7 +130,7 @@ proc append_ip_property {log ip property} {
   }
 }
 
-proc expected_properties {kind width latency} {
+proc expected_properties {kind width latency divider_non_blocking} {
   if {$kind eq "multiply"} {
     return [list \
       CONFIG.PortAWidth $width \
@@ -139,6 +143,12 @@ proc expected_properties {kind width latency} {
       CONFIG.Multiplier_Construction Use_Mults \
       CONFIG.PipeStages $latency]
   }
+  set flow_control Blocking
+  set out_tready true
+  if {$divider_non_blocking} {
+    set flow_control NonBlocking
+    set out_tready false
+  }
   return [list \
     CONFIG.dividend_and_quotient_width $width \
     CONFIG.divisor_width $width \
@@ -147,8 +157,8 @@ proc expected_properties {kind width latency} {
     CONFIG.latency_configuration Manual \
     CONFIG.latency $latency \
     CONFIG.clocks_per_division 1 \
-    CONFIG.FlowControl Blocking \
-    CONFIG.OutTready true \
+    CONFIG.FlowControl $flow_control \
+    CONFIG.OutTready $out_tready \
     CONFIG.ARESETN true]
 }
 
@@ -162,7 +172,7 @@ proc properties_match {ip expected} {
   return true
 }
 
-proc configure_integer_ip {ip kind width latency} {
+proc configure_integer_ip {ip kind width latency divider_non_blocking} {
   if {$kind eq "multiply"} {
     # mult_gen 的单输入上限为 64 位。适配器基于无符号 XLEN 乘积修正高半部。
     set_required_property $ip CONFIG.PortAWidth $width
@@ -175,6 +185,12 @@ proc configure_integer_ip {ip kind width latency} {
     set_required_property $ip CONFIG.Multiplier_Construction Use_Mults
     set_required_property $ip CONFIG.PipeStages $latency
   } else {
+    set flow_control Blocking
+    set out_tready true
+    if {$divider_non_blocking} {
+      set flow_control NonBlocking
+      set out_tready false
+    }
     set_required_property $ip CONFIG.dividend_and_quotient_width $width
     set_required_property $ip CONFIG.divisor_width $width
     set_required_property $ip CONFIG.operand_sign Unsigned
@@ -182,19 +198,20 @@ proc configure_integer_ip {ip kind width latency} {
     set_required_property $ip CONFIG.latency_configuration Manual
     set_required_property $ip CONFIG.latency $latency
     set_required_property $ip CONFIG.clocks_per_division 1
-    set_required_property $ip CONFIG.FlowControl Blocking
-    set_required_property $ip CONFIG.OutTready true
+    set_required_property $ip CONFIG.FlowControl $flow_control
+    set_required_property $ip CONFIG.OutTready $out_tready
     set_required_property $ip CONFIG.ARESETN true
   }
 }
 
-proc create_or_reuse_integer_ip {name kind width latency generated_root log_dir} {
+proc create_or_reuse_integer_ip {name kind width latency divider_non_blocking generated_root log_dir} {
   set log [file join $log_dir "$name.log"]
   set ip_dir [file join $generated_root $name]
   set xci [file join $ip_dir "$name.xci"]
-  set expected [expected_properties $kind $width $latency]
+  set expected [expected_properties $kind $width $latency $divider_non_blocking]
   set ip ""
   write_ip_log_header $log $name $kind $width $latency
+  if {$kind eq "divide"} { append_ip_log $log DIV_NON_BLOCKING $divider_non_blocking }
 
   if {[file isfile $xci]} {
     read_ip $xci
@@ -219,7 +236,7 @@ proc create_or_reuse_integer_ip {name kind width latency generated_root log_dir}
     }
     set ip [get_ips $name]
   }
-  configure_integer_ip $ip $kind $width $latency
+  configure_integer_ip $ip $kind $width $latency $divider_non_blocking
   catch {reset_target all $ip}
   append_ip_log $log ACTION generate_target_all
   generate_target all $ip
@@ -252,11 +269,11 @@ proc collect_files {directory} {
 }
 
 set multiplier_ip [create_or_reuse_integer_ip npc_int_multiplier_ip multiply \
-  $xlen $mul_lat $generated_root $ip_log_dir]
+  $xlen $mul_lat 0 $generated_root $ip_log_dir]
 set divider_ip [create_or_reuse_integer_ip npc_int_divider_ip divide \
-  $xlen $div_ip_lat $generated_root $ip_log_dir]
-assert_properties $multiplier_ip [expected_properties multiply $xlen $mul_lat]
-assert_properties $divider_ip [expected_properties divide $xlen $div_ip_lat]
+  $xlen $div_ip_lat $div_non_blocking $generated_root $ip_log_dir]
+assert_properties $multiplier_ip [expected_properties multiply $xlen $mul_lat 0]
+assert_properties $divider_ip [expected_properties divide $xlen $div_ip_lat $div_non_blocking]
 
 # RTL 适配器依赖 DivGen 文档规定的 AXIS 商/余数打包顺序；用输出产品再次确认。
 set divider_layout_ok false
@@ -280,6 +297,7 @@ set manifest [open $actual_manifest w]
 puts $manifest "BOARD=$board"
 puts $manifest "DIV_II=$div_ii"
 puts $manifest "DIV_IP_LATENCY=[get_property CONFIG.latency $divider_ip]"
+puts $manifest "DIV_NON_BLOCKING=$div_non_blocking"
 puts $manifest "MUL_II=$mul_ii"
 puts $manifest "MUL_LATENCY=[get_property CONFIG.PipeStages $multiplier_ip]"
 puts $manifest "PART=[get_property PART [current_project]]"

@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | `ConfigBase.scala` | L1 组合协议与 CDE 核心键 | `ConfigFragment`、`ConfigBundle`、`BaseConfig` |
 | `ArchitectureConfigs.scala` | XLEN/M/F/Zicsr 的局部片段 | `WithXlenConfig`、`WithMExtensionConfig`、`WithFloatingPointConfig` |
-| `PerformConfigs.scala` | 流水线/互锁/前递局部片段 | `WithPipelineConfig`、`WithNpcIdForwardingConfig`、`WithNpcExecuteForwardingConfig` |
+| `PerformConfigs.scala` | 流水线/互锁/前递与时序切分局部片段 | `WithPipelineConfig`、`WithNpcIdForwardingConfig`、`WithNpcExecuteForwardingConfig`、`WithTwoStageIntegerExecuteConfig`、`WithSerialExecuteAdditionalStagesConfig(1|2)`、`WithRegisteredInitialFetchRequestConfig`、`WithSeparateSerialIntegerAluConfig`、`WithoutSerialExecuteResultForwardingConfig` |
 | `MemoryConfigs.scala` | 主存窗口与复位向量 | `WithBareMainMemoryConfig`、`WithSoCMainMemoryConfig`、`WithFpgaMainMemoryConfig` |
 | `OperatorConfigs.scala` | 算术后端与 IP 时序 | `WithModelComputeConfig`、`WithFpgaComputeConfig`、`WithDefaultArithmeticTimingConfig` |
 | `InterfaceConfigs.scala` | 顶层调试、派发控制和 AXI | `WithTopDebugConfig`、`WithDispatchControlConfig`、`WithExternalAxiConfig` |

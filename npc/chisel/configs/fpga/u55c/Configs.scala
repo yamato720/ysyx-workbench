@@ -1,7 +1,12 @@
 package npc.fpga.u55c
 
 import org.chipsalliance.cde.config.{Config => CDEConfig}
-import _root_.npc.{FpgaConfig, FpgaIpTerminal, Rv64PipelineDualForwardingFpgaConfig}
+import _root_.npc.{
+  FpgaConfig,
+  FpgaIpTerminal,
+  Rv64PipelineDualForwardingFpgaConfig,
+  Rv64PipelineDualForwardingTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecuteFpgaConfig
+}
 import _root_.npc.{U55cNpcTerminal, U55cSocTerminal}
 import _root_.ysyx.YsyxElaborateConfig
 
@@ -35,7 +40,7 @@ class U55cRv64NpcFpgaConfig extends CDEConfig(
   */
 class U55cRv64Npc300MHzFpgaConfig extends CDEConfig(
   new U55c300MHzBoardConfig ++
-    new Rv64PipelineDualForwardingFpgaConfig
+    new Rv64PipelineDualForwardingTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecuteFpgaConfig
 ) with U55cNpcTerminal with FpgaIpTerminal
 
 /** U55C 的 ysyxSoC FPGA 终端构造。

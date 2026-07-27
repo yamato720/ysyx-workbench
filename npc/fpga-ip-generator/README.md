@@ -18,7 +18,7 @@ generated/{sv,v}/
 板卡目录增加文件。
 
 当前通用 compute 生成器直接解析完整 `profile.env`，校验 `FPGA_BOARD`、`FPGA_PART`、XLEN、
-乘除 latency/II 和所有 `OPERATOR_ROUTE_M_*` 合同。它读取已有 XCI 的实际属性：一致时复用，
+乘除 latency/II、Divider 的 `FPGA_DIVIDER_NON_BLOCKING` 和所有 `OPERATOR_ROUTE_M_*` 合同。它读取已有 XCI 的实际属性：一致时复用，
 不一致时只重新生成对应的 `npc_int_multiplier_ip` 或 `npc_int_divider_ip`。
 
 整数乘法器固定为无符号 XLEN x XLEN。Xilinx `mult_gen` 的单输入最大宽度为 64 位；适配器以

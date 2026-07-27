@@ -91,7 +91,8 @@ class NpcCore(
 
     val coreBusy = debug.frontend.fetchBusy || debug.backend.coreBusy
     val knownBackpressure = debug.frontend.fetchBusy || debug.frontend.dispatchBackpressured ||
-      debug.backend.idExBackpressured || debug.backend.exMemBackpressured ||
+      debug.backend.idExBackpressured || debug.backend.integerExecuteBackpressured ||
+      debug.backend.exMemBackpressured ||
       debug.backend.memoryWaitingForLsu || debug.backend.lsuTransactionActive ||
       debug.backend.serialExecuteActive || backend.io.redirectValid
     debug.backpressureReasons := Cat(
@@ -100,7 +101,7 @@ class NpcCore(
       debug.backend.serialExecuteActive,
       debug.backend.lsuTransactionActive,
       debug.backend.memoryWaitingForLsu,
-      debug.backend.exMemBackpressured,
+      debug.backend.exMemBackpressured || debug.backend.integerExecuteBackpressured,
       debug.backend.idExBackpressured,
       debug.frontend.dispatchBackpressured,
       debug.frontend.fetchBusy

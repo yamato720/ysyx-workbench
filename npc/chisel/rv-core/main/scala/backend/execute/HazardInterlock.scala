@@ -25,7 +25,7 @@ class ForwardingCandidate(xlen: Int) extends Bundle {
 
 /** RAW 检测器：仅当启用的前递路径可提供数值时，才放行最新的匹配写者。
   */
-class HazardUnit(producerCount: Int = 5) extends Module {
+class HazardUnit(producerCount: Int = 7) extends Module {
   val io = IO(new Bundle {
     val enableInterlock = Input(Bool())
     val enableIdForwarding = Input(Bool())
@@ -81,7 +81,7 @@ class HazardUnit(producerCount: Int = 5) extends Module {
 }
 
 /** ID 与 EX 的 GPR 前递 mux；候选项按由新到旧排序。 */
-class ForwardingUnit(xlen: Int, candidateCount: Int = 5) extends Module {
+class ForwardingUnit(xlen: Int, candidateCount: Int = 7) extends Module {
   val io = IO(new Bundle {
     val enableIdForwarding = Input(Bool())
     val enableExecuteForwarding = Input(Bool())

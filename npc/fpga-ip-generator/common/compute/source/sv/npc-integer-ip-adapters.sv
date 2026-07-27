@@ -123,7 +123,8 @@ endmodule
 module npc_int_divider_adapter #(
   parameter integer WIDTH = 32,
   parameter integer TAG_WIDTH = 4,
-  parameter integer LATENCY = 37
+  parameter integer LATENCY = 37,
+  parameter integer NON_BLOCKING = 0
 ) (
   input  wire                 clock,
   input  wire                 reset,
@@ -147,6 +148,7 @@ module npc_int_divider_adapter #(
 );
   localparam integer VENDOR_LATENCY = 34;
   localparam integer PAD_LATENCY = LATENCY - VENDOR_LATENCY;
+  localparam bit NON_BLOCKING_ENABLED = NON_BLOCKING != 0;
   localparam [4:0] DIV = 0, DIVU = 1, REM = 2, REMU = 3;
   localparam [4:0] DIVW = 4, DIVUW = 5, REMW = 6, REMUW = 7;
 
@@ -245,28 +247,44 @@ module npc_int_divider_adapter #(
   // 固定 padding 流水寄存器把 DivGen 输出对齐到配置时延；它不是请求或完成 FIFO。
   wire pad_advance = !pad_valid[PAD_LATENCY-1] || arithmetic_resp_ready;
   wire issue = arithmetic_req_valid && arithmetic_req_ready;
-  wire ip_result_fire = result_valid && in_flight && pad_advance;
+  wire vendor_request_ready = NON_BLOCKING_ENABLED ? 1'b1 : (divisor_ready && dividend_ready);
+  wire ip_result_fire = result_valid && in_flight && (NON_BLOCKING_ENABLED || pad_advance);
   wire response_fire = pad_valid[PAD_LATENCY-1] && arithmetic_resp_ready;
-  assign arithmetic_req_ready = !in_flight && divisor_ready && dividend_ready;
+  assign arithmetic_req_ready = !in_flight && vendor_request_ready;
   assign arithmetic_resp_valid = pad_valid[PAD_LATENCY-1];
   assign arithmetic_resp_bits_result = pad_result[PAD_LATENCY-1];
   assign arithmetic_resp_bits_exceptionFlags = 0;
   assign arithmetic_resp_bits_illegal = 1'b0;
   assign arithmetic_resp_bits_tag = pad_tag[PAD_LATENCY-1];
 
-  npc_int_divider_ip divider (
-    .aclk(clock),
-    .aresetn(!reset),
-    .s_axis_divisor_tvalid(issue),
-    .s_axis_divisor_tready(divisor_ready),
-    .s_axis_divisor_tdata(request_b_magnitude),
-    .s_axis_dividend_tvalid(issue),
-    .s_axis_dividend_tready(dividend_ready),
-    .s_axis_dividend_tdata(request_a_magnitude),
-    .m_axis_dout_tvalid(result_valid),
-    .m_axis_dout_tready(in_flight && pad_advance),
-    .m_axis_dout_tdata(result_data)
-  );
+  generate
+    if (NON_BLOCKING_ENABLED) begin : nonblocking_divider
+      npc_int_divider_ip divider (
+        .aclk(clock),
+        .aresetn(!reset),
+        .s_axis_divisor_tvalid(issue),
+        .s_axis_divisor_tdata(request_b_magnitude),
+        .s_axis_dividend_tvalid(issue),
+        .s_axis_dividend_tdata(request_a_magnitude),
+        .m_axis_dout_tvalid(result_valid),
+        .m_axis_dout_tdata(result_data)
+      );
+    end else begin : blocking_divider
+      npc_int_divider_ip divider (
+        .aclk(clock),
+        .aresetn(!reset),
+        .s_axis_divisor_tvalid(issue),
+        .s_axis_divisor_tready(divisor_ready),
+        .s_axis_divisor_tdata(request_b_magnitude),
+        .s_axis_dividend_tvalid(issue),
+        .s_axis_dividend_tready(dividend_ready),
+        .s_axis_dividend_tdata(request_a_magnitude),
+        .m_axis_dout_tvalid(result_valid),
+        .m_axis_dout_tready(in_flight && pad_advance),
+        .m_axis_dout_tdata(result_data)
+      );
+    end
+  endgenerate
 
   always @(posedge clock) begin
     if (reset) begin

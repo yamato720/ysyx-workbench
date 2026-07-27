@@ -99,14 +99,27 @@ if $resolver "$catalog" U55cYsyxSocFpgaConfig npc >/dev/null 2>&1; then fail '�
 if $resolver "$catalog" UnknownConfig fpga >/dev/null 2>&1; then fail '未知 Config 未被拒绝'; fi
 
 check_terminal() {
-  local config=$1 expected_board=$2 expected_target=$3 expected_xlen=$4 expected_clock=$5 expected_xrt_mode resolved profile output
+  local config=$1 expected_board=$2 expected_target=$3 expected_xlen=$4 expected_clock=$5 expected_xrt_mode expected_integer_execute_stages=1 expected_serial_execute_stages=1 expected_register_initial_fetch_request=0 expected_separate_serial_integer_alu=0 expected_serial_execute_result_forwarding=1 expected_divider_non_blocking=0 resolved profile output
   case "$config" in
+    U55cRv64Npc300MHzFpgaConfig) expected_xrt_mode=unset; expected_integer_execute_stages=2; expected_serial_execute_stages=3; expected_register_initial_fetch_request=1; expected_separate_serial_integer_alu=1; expected_serial_execute_result_forwarding=0; expected_divider_non_blocking=1 ;;
     U55c*) expected_xrt_mode=unset ;;
     Zcu102*) expected_xrt_mode=inherit ;;
     *) fail "$config 缺少 Vitis XRT 环境策略预期" ;;
   esac
   resolved=$($manager resolve "$npc_root" "$config" '')
   profile=${resolved##*|}
+  grep -qx "INTEGER_EXECUTE_STAGES=$expected_integer_execute_stages" "$profile" ||
+    fail "$config 的整数执行级数 profile 错误"
+  grep -qx "SERIAL_EXECUTE_STAGES=$expected_serial_execute_stages" "$profile" ||
+    fail "$config 的串行执行级数 profile 错误"
+  grep -qx "REGISTER_INITIAL_FETCH_REQUEST=$expected_register_initial_fetch_request" "$profile" ||
+    fail "$config 的首个取指请求寄存器 profile 错误"
+  grep -qx "SEPARATE_SERIAL_INTEGER_ALU=$expected_separate_serial_integer_alu" "$profile" ||
+    fail "$config 的串行整数 ALU 分离 profile 错误"
+  grep -qx "SERIAL_EXECUTE_RESULT_FORWARDING=$expected_serial_execute_result_forwarding" "$profile" ||
+    fail "$config 的串行结果前递 profile 错误"
+  grep -qx "FPGA_DIVIDER_NON_BLOCKING=$expected_divider_non_blocking" "$profile" ||
+    fail "$config 的 Divider 流控 profile 错误"
   output=$(make --no-print-directory -s -C "$npc_root" fpga-config \
     INTERNAL_CONSTRUCTION=1 config="$config" CONSTRUCTION_PROFILE="$profile" FPGA_TOOL_DRY_RUN=1)
   grep -qx "board=$expected_board" <<< "$output" || fail "$config 板卡错误"

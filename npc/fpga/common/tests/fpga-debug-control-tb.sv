@@ -45,7 +45,6 @@ module FpgaDebugControlTb;
     .io_runtime_commitPc(next_pc - 4),
     .io_runtime_commitInstruction(commit_instruction),
     .io_runtime_commitNextPc(next_pc),
-    .io_runtime_fcsr(8'ha5),
     .io_runtime_mstatus(32'h5566_7788),
     .io_runtime_mcause(32'h0506_0708),
     .io_runtime_mepc(32'h4433_2211),
@@ -184,7 +183,7 @@ module FpgaDebugControlTb;
     read_register(32'hb4, value);
     if (value !== 32'h8000_0004) $fatal(1, "ebreak last commit PC mismatch: %h", value);
 
-    $display("FPGA v4 debug control RTL tests passed");
+    $display("FPGA v5 debug control RTL tests passed");
     $finish;
   end
 endmodule

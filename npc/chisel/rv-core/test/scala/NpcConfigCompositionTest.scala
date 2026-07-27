@@ -164,10 +164,20 @@ class NpcConfigCompositionTest extends AnyFlatSpec {
     assert(full.axi.dataWidth == 64)
   }
 
-  "NPC performance presets" should "separate scalar, single-EX forwarding, and dual forwarding" in {
+  "NPC performance presets" should "keep frequency-timing switches independently selectable" in {
     val scalar = new ScalarPerformConfig().build
     val singleEx = new PipelineExFwdPerformConfig().build
     val dual = new PipelineDualFwdPerformConfig().build
+    val twoStage = new PipelineDualFwdTwoStageIntegerExecutePerformConfig().build
+    val registeredFetch = (new WithRegisteredInitialFetchRequestConfig ++
+      new PipelineDualFwdPerformConfig).build
+    val combined = new PipelineDualFwdTwoStageIntegerExecuteRegisteredFetchPerformConfig().build
+    val splitSerialAlu = (new WithSeparateSerialIntegerAluConfig ++
+      new PipelineDualFwdPerformConfig).build
+    val serialOneAdditionalStage = (new WithSerialExecuteAdditionalStagesConfig(1) ++
+      new PipelineDualFwdPerformConfig).build
+    val allTimingCuts =
+      new PipelineDualFwdTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecutePerformConfig().build
 
     assert(!scalar.pipeline.enablePipeline)
     assert(!scalar.pipeline.forwarding.enableIdForwarding)
@@ -178,6 +188,34 @@ class NpcConfigCompositionTest extends AnyFlatSpec {
     assert(dual.pipeline.enablePipeline)
     assert(dual.pipeline.forwarding.enableIdForwarding)
     assert(dual.pipeline.forwarding.enableExecuteForwarding)
+    assert(dual.pipeline.integerExecuteStages == 1)
+    assert(dual.pipeline.serialExecuteStages == 1)
+    assert(!dual.pipeline.registerInitialFetchRequest)
+    assert(!dual.pipeline.separateSerialIntegerAlu)
+    assert(dual.pipeline.serialExecuteResultForwarding)
+    assert(twoStage.pipeline.enablePipeline)
+    assert(twoStage.pipeline.forwarding.enableIdForwarding)
+    assert(twoStage.pipeline.forwarding.enableExecuteForwarding)
+    assert(twoStage.pipeline.integerExecuteStages == 2)
+    assert(twoStage.pipeline.serialExecuteStages == 1)
+    assert(!twoStage.pipeline.registerInitialFetchRequest)
+    assert(!twoStage.pipeline.separateSerialIntegerAlu)
+    assert(twoStage.pipeline.serialExecuteResultForwarding)
+    assert(registeredFetch.pipeline.integerExecuteStages == 1)
+    assert(registeredFetch.pipeline.registerInitialFetchRequest)
+    assert(combined.pipeline.integerExecuteStages == 2)
+    assert(combined.pipeline.registerInitialFetchRequest)
+    assert(!combined.pipeline.separateSerialIntegerAlu)
+    assert(splitSerialAlu.pipeline.integerExecuteStages == 1)
+    assert(splitSerialAlu.pipeline.serialExecuteStages == 1)
+    assert(splitSerialAlu.pipeline.separateSerialIntegerAlu)
+    assert(splitSerialAlu.pipeline.serialExecuteResultForwarding)
+    assert(serialOneAdditionalStage.pipeline.serialExecuteStages == 2)
+    assert(allTimingCuts.pipeline.integerExecuteStages == 2)
+    assert(allTimingCuts.pipeline.serialExecuteStages == 3)
+    assert(allTimingCuts.pipeline.registerInitialFetchRequest)
+    assert(allTimingCuts.pipeline.separateSerialIntegerAlu)
+    assert(!allTimingCuts.pipeline.serialExecuteResultForwarding)
   }
 
   "NPC terminal configurations" should "wrap one complete core before adding the host ABI" in {

@@ -54,7 +54,7 @@ object ConstructionProfile {
       case scope => throw new IllegalArgumentException(s"未知终端作用域：$scope")
     }
     val base = Seq(
-      "PROFILE_FORMAT" -> "10",
+      "PROFILE_FORMAT" -> "16",
       "CONFIG_SHORT_NAME" -> entry.shortName,
       "CONFIG_FQCN" -> entry.className,
       "SCOPE" -> entry.scope,
@@ -85,6 +85,11 @@ object ConstructionProfile {
       "INTERLOCK" -> bit(config.pipeline.enableInterlock),
       "ID_FWD" -> bit(config.pipeline.forwarding.enableIdForwarding),
       "EX_FWD" -> bit(config.pipeline.forwarding.enableExecuteForwarding),
+      "INTEGER_EXECUTE_STAGES" -> config.pipeline.integerExecuteStages.toString,
+      "SERIAL_EXECUTE_STAGES" -> config.pipeline.serialExecuteStages.toString,
+      "REGISTER_INITIAL_FETCH_REQUEST" -> bit(config.pipeline.registerInitialFetchRequest),
+      "SEPARATE_SERIAL_INTEGER_ALU" -> bit(config.pipeline.separateSerialIntegerAlu),
+      "SERIAL_EXECUTE_RESULT_FORWARDING" -> bit(config.pipeline.serialExecuteResultForwarding),
       "ARITH_BACKEND" -> mulDiv.implementation.backend.name,
       "ARITH_OUTPUT_FIFO" -> mulDiv.implementation.ip.outputFifoDepth.toString,
       "MUL_CYCLES" -> mulDiv.multiplyTiming.latency.toString,

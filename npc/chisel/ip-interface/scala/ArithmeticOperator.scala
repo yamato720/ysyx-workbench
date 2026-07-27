@@ -1,6 +1,7 @@
 package npc.ip.arithmetic
 
 import chisel3._
+import chisel3.experimental.IntParam
 import chisel3.util._
 
 /** 算子私有控制码的稳定宽度。 */
@@ -109,7 +110,8 @@ object ArithmeticEndpointImplementation {
 final case class ArithmeticEndpointSpec(
   implementation: ArithmeticEndpointImplementation,
   moduleName: String = "",
-  endpointName: String = ""
+  endpointName: String = "",
+  adapterParameters: Map[String, Int] = Map.empty
 ) {
   require(implementation != ArithmeticEndpointImplementation.External || moduleName.nonEmpty,
     "外部算术端点必须提供模块名")
@@ -145,8 +147,12 @@ private final class ExternalArithmeticAdapter(
   moduleName: String,
   width: Int,
   tagWidth: Int,
-  latency: Int
-) extends BlackBox(Map("WIDTH" -> width, "TAG_WIDTH" -> tagWidth, "LATENCY" -> latency)) {
+  latency: Int,
+  adapterParameters: Map[String, Int]
+) extends BlackBox(
+  Map("WIDTH" -> IntParam(width), "TAG_WIDTH" -> IntParam(tagWidth), "LATENCY" -> IntParam(latency)) ++
+    adapterParameters.map { case (name, value) => name -> IntParam(value) }
+) {
   require(latency >= 1, s"外部算术 adapter latency 必须为正数，实际为 $latency")
   override def desiredName: String = moduleName
   val io = IO(new Bundle {
@@ -157,8 +163,9 @@ private final class ExternalArithmeticAdapter(
 }
 
 trait ExternalEndpointWiring { self: ArithmeticOperatorEndpoint =>
-  protected final def wireExternal(width: Int, tagWidth: Int, timing: ArithmeticIpTiming, moduleName: String): Unit = {
-    val adapter = Module(new ExternalArithmeticAdapter(moduleName, width, tagWidth, timing.latency))
+  protected final def wireExternal(width: Int, tagWidth: Int, timing: ArithmeticIpTiming, spec: ArithmeticEndpointSpec): Unit = {
+    val adapter = Module(new ExternalArithmeticAdapter(spec.moduleName, width, tagWidth, timing.latency,
+      spec.adapterParameters))
     adapter.io.clock := clock
     adapter.io.reset := reset.asBool
     io <> adapter.io.arithmetic
@@ -174,7 +181,7 @@ final class IntegerMultiplierOperator(
 ) extends ArithmeticOperatorEndpoint(width, tagWidth) with ExternalEndpointWiring {
   spec.implementation match {
     case ArithmeticEndpointImplementation.IntegerReference => io <> Module(new IntegerMultiplierModel(width, tagWidth, timing)).io
-    case ArithmeticEndpointImplementation.External => wireExternal(width, tagWidth, timing, spec.moduleName)
+    case ArithmeticEndpointImplementation.External => wireExternal(width, tagWidth, timing, spec)
     case other => throw new IllegalArgumentException(s"乘法 wrapper 不支持 $other")
   }
 }
@@ -188,7 +195,7 @@ final class IntegerDividerOperator(
 ) extends ArithmeticOperatorEndpoint(width, tagWidth) with ExternalEndpointWiring {
   spec.implementation match {
     case ArithmeticEndpointImplementation.IntegerReference => io <> Module(new IntegerDividerModel(width, tagWidth, timing)).io
-    case ArithmeticEndpointImplementation.External => wireExternal(width, tagWidth, timing, spec.moduleName)
+    case ArithmeticEndpointImplementation.External => wireExternal(width, tagWidth, timing, spec)
     case other => throw new IllegalArgumentException(s"除法 wrapper 不支持 $other")
   }
 }
@@ -204,7 +211,7 @@ abstract class FloatingOperatorEndpoint(
     case ArithmeticEndpointImplementation.SoftFloatDpi => io <> Module(new FloatingDpiOperator(width, tagWidth, timing)).io
     case ArithmeticEndpointImplementation.FloatingDirect =>
       io <> Module(new FpgaFloatingDirectOperator(width, tagWidth, timing)).io
-    case ArithmeticEndpointImplementation.External => wireExternal(width, tagWidth, timing, spec.moduleName)
+    case ArithmeticEndpointImplementation.External => wireExternal(width, tagWidth, timing, spec)
     case other => throw new IllegalArgumentException(s"浮点 wrapper 不支持 $other")
   }
 }

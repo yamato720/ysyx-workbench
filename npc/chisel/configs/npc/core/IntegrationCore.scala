@@ -19,6 +19,52 @@ class Rv64PipelineDualForwardingFpgaConfig extends ConstructionConfig(
     new BaseConfig
 )
 
+/** RV64IM_Zicsr FPGA 核心：双前递和两拍普通整数执行路径。 */
+class Rv64PipelineDualForwardingTwoStageIntegerExecuteFpgaConfig extends ConstructionConfig(
+  new Rv64IMZicsrConfig ++
+    new PipelineDualFwdTwoStageIntegerExecutePerformConfig ++
+    new WithExternalAxiConfig ++
+    new WithDispatchControlConfig ++
+    new WithTopDebugConfig ++
+    new WithFpgaMainMemoryConfig ++
+    new BaseConfig
+)
+
+/** RV64IM_Zicsr FPGA 核心：两拍普通整数执行，并寄存首个取指请求。 */
+class Rv64PipelineDualForwardingTwoStageIntegerExecuteRegisteredFetchFpgaConfig extends ConstructionConfig(
+  new Rv64IMZicsrConfig ++
+    new PipelineDualFwdTwoStageIntegerExecuteRegisteredFetchPerformConfig ++
+    new WithExternalAxiConfig ++
+    new WithDispatchControlConfig ++
+    new WithTopDebugConfig ++
+    new WithFpgaMainMemoryConfig ++
+    new BaseConfig
+)
+
+/** RV64IM_Zicsr FPGA 核心：两拍普通整数执行、寄存首个取指请求，并拆分串行整数 ALU。 */
+class Rv64PipelineDualForwardingTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluFpgaConfig
+  extends ConstructionConfig(
+    new Rv64IMZicsrConfig ++
+      new PipelineDualFwdTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluPerformConfig ++
+      new WithExternalAxiConfig ++
+      new WithDispatchControlConfig ++
+      new WithTopDebugConfig ++
+      new WithFpgaMainMemoryConfig ++
+      new BaseConfig
+  )
+
+/** RV64IM_Zicsr FPGA 核心：普通整数两拍，CSR、异常、mret 的串行控制路径三拍。 */
+class Rv64PipelineDualForwardingTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecuteFpgaConfig
+  extends ConstructionConfig(
+    new Rv64IMZicsrConfig ++
+      new PipelineDualFwdTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecutePerformConfig ++
+      new WithExternalAxiConfig ++
+      new WithDispatchControlConfig ++
+      new WithTopDebugConfig ++
+      new WithFpgaMainMemoryConfig ++
+      new BaseConfig
+  )
+
 /** 裸核 FPGA 默认 NPC：外部 AXI、调试派发控制、M 扩展和顶层调试 IO。 */
 class FpgaConfig extends ConstructionConfig(
   new Rv32IMZicsrConfig ++

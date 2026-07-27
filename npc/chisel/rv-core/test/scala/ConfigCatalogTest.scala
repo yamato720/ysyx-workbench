@@ -145,12 +145,17 @@ class ConfigCatalogTest extends AnyFlatSpec {
     val construction = new SimulationConfig
     val values = ConstructionProfile.values(entry, construction, construction.config).toMap
 
-    assert(values("PROFILE_FORMAT") == "10")
+    assert(values("PROFILE_FORMAT") == "16")
     assert(values("HOST_ABI") == "nemu-construction-v1")
     assert(values("NEMU_PRESET") == "LocalPipelineTrace")
     assert(values("NEMU_BACKEND") == "local")
     assert(values("PROTOCOL_ABI") == "npc-dpi-v1")
     assert(values("ISA_STRING") == "rv64im_zicsr")
+    assert(values("INTEGER_EXECUTE_STAGES") == "1")
+    assert(values("SERIAL_EXECUTE_STAGES") == "1")
+    assert(values("REGISTER_INITIAL_FETCH_REQUEST") == "0")
+    assert(values("SEPARATE_SERIAL_INTEGER_ALU") == "0")
+    assert(values("SERIAL_EXECUTE_RESULT_FORWARDING") == "1")
   }
 
   it should "reject a construction behavior that conflicts with the Config scope" in {
@@ -169,6 +174,11 @@ class ConfigCatalogTest extends AnyFlatSpec {
     assert(values("PIPELINE") == "1")
     assert(values("ID_FWD") == "1")
     assert(values("EX_FWD") == "1")
+    assert(values("INTEGER_EXECUTE_STAGES") == "1")
+    assert(values("SERIAL_EXECUTE_STAGES") == "1")
+    assert(values("REGISTER_INITIAL_FETCH_REQUEST") == "0")
+    assert(values("SEPARATE_SERIAL_INTEGER_ALU") == "0")
+    assert(values("SERIAL_EXECUTE_RESULT_FORWARDING") == "1")
   }
 
   it should "enable committed-instruction HTML for every local NPC terminal" in {

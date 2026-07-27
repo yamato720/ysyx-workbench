@@ -8,13 +8,17 @@ import _root_.npc.{FpgaIpAttachment, OperatorIpTimingConfig, WithFpgaIpAttachmen
 
 /** U55C 复用的 Xilinx 整数 IP attachment；板卡 core 可在此基础上覆盖算子时序。 */
 object U55cXilinxIpAttachment {
-  def apply(timing: OperatorIpTimingConfig = OperatorIpTimingConfig.Default): XilinxIntegerIpAttachment =
+  def apply(
+    timing: OperatorIpTimingConfig = OperatorIpTimingConfig.Default,
+    dividerNonBlocking: Boolean = false
+  ): XilinxIntegerIpAttachment =
     XilinxIntegerIpAttachment(
       name = "xilinx-u55c",
       arithmeticIp = U55cIpComponents,
       timing = timing,
       dividerIpCycles = 34,
-      dividerAdapterCycles = 3
+      dividerAdapterCycles = 3,
+      dividerNonBlocking = dividerNonBlocking
     )
 }
 
@@ -37,14 +41,15 @@ class U55cBoardConfig(
 
 /** U55C 的 300 MHz 板卡策略。
   *
-  * RV64 乘法器改用五级流水切分 DSP 组合链；其余 IP 时序保持 U55C 默认值，乘除法
-  * 均维持 II=1。
+  * RV64 乘法器改用六级流水切分 DSP 组合链；除法器改为无输出回压的 fixed-latency
+  * DivGen，以移除其 Blocking 输出 FIFO 的高扇出 CE 网络。乘除法均维持 II=1。
   */
 class U55c300MHzBoardConfig extends U55cBoardConfig(
   clockMHz = 300,
   ipAttachment = U55cXilinxIpAttachment(
     OperatorIpTimingConfig.Default.copy(
-      multiply = OperatorIpTimingConfig.Default.multiply.copy(latency = 5)
-    )
+      multiply = OperatorIpTimingConfig.Default.multiply.copy(latency = 6)
+    ),
+    dividerNonBlocking = true
   )
 )

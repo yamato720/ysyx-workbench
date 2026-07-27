@@ -63,6 +63,7 @@ class NpcBackendDebugBundle(cfg: ISAConfig) extends Bundle {
 
   val dispatchBackpressured = Bool()
   val idExBackpressured = Bool()
+  val integerExecuteBackpressured = Bool()
   val exMemBackpressured = Bool()
   val memoryWaitingForLsu = Bool()
   val lsuTransactionActive = Bool()

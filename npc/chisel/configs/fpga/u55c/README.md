@@ -18,7 +18,7 @@
 | 特性 | 可直接复制到 `++` 链的名称 | 添加位置 | 是否可选 |
 | --- | --- | --- | --- |
 | U55C 板卡层 | `new U55cBoardConfig` | `core/U55cBoardConfig.scala` | U55C 目标必需 |
-| U55C 300 MHz 板卡层 | `new U55c300MHzBoardConfig` | `core/U55cBoardConfig.scala` | 是；乘法延迟 5 拍，II=1 |
+| U55C 300 MHz 板卡层 | `new U55c300MHzBoardConfig` | `core/U55cBoardConfig.scala` | 是；乘法延迟 6 拍，Divider 使用 non-blocking 固定时延接口，II=1 |
 | U55C 裸 NPC 终端 | `new U55cNpcFpgaConfig` | `Configs.scala` | 是 |
 | U55C RV64IM 裸 NPC 终端 | `new U55cRv64NpcFpgaConfig` | `Configs.scala` | 是；F/D 禁用 |
 | U55C RV64IM 300 MHz 时序实验终端 | `new U55cRv64Npc300MHzFpgaConfig` | `Configs.scala` | 是；F/D 禁用 |
@@ -41,6 +41,7 @@
 `MEIP`。
 
 `U55cBoardConfig` 不接收 XLEN：attachment 通过右侧完成的 `NpcCoreConfigKey` 自动生成匹配
-RV32/RV64 的整数 IP 路由。`U55c300MHzBoardConfig` 把物理时钟和乘法 5 拍 attachment 封装为
-命名板卡策略，仍继承 `multiply.initiationInterval = 1`。`U55cRv64Npc300MHzFpgaConfig` 只选择
-该板卡策略与 RV64 核心，ABI 与 125 MHz RV64 终端相同，且默认保持单实现策略以便先观察真实时序缺口。
+RV32/RV64 的整数 IP 路由。`U55c300MHzBoardConfig` 把物理时钟、乘法 6 拍与 non-blocking Divider
+attachment 封装为命名板卡策略，仍保持 `II=1`。`U55cRv64Npc300MHzFpgaConfig` 显式组合该板卡策略与
+普通整数路径两拍、串行控制路径三拍、首拍取指请求寄存器化、串行整数 ALU 分离、串行结果 ID 前递关闭的 RV64 核心。这些均是
+频率对应的独立开关，不会由 `clockMHz` 自动推导，因此未来 250 MHz 终端可逐项选择。

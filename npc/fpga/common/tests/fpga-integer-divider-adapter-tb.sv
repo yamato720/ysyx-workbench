@@ -13,11 +13,15 @@ module npc_int_divider_ip (
 );
   reg result_valid;
   reg [127:0] result_data;
+`ifdef NPC_TEST_DIVIDER_NON_BLOCKING
+  wire issue = s_axis_divisor_tvalid && s_axis_dividend_tvalid;
+`else
   wire issue = s_axis_divisor_tvalid && s_axis_dividend_tvalid &&
     s_axis_divisor_tready && s_axis_dividend_tready;
 
   assign s_axis_divisor_tready = !result_valid;
   assign s_axis_dividend_tready = !result_valid;
+`endif
   assign m_axis_dout_tvalid = result_valid;
   assign m_axis_dout_tdata = result_data;
 
@@ -31,13 +35,20 @@ module npc_int_divider_ip (
       else
         result_data <= {s_axis_dividend_tdata / s_axis_divisor_tdata,
           s_axis_dividend_tdata % s_axis_divisor_tdata};
+`ifdef NPC_TEST_DIVIDER_NON_BLOCKING
+    end else begin
+      result_valid <= 1'b0;
+`else
     end else if (result_valid && m_axis_dout_tready) begin
       result_valid <= 1'b0;
+`endif
     end
   end
 endmodule
 
-module FpgaIntegerDividerAdapterTb;
+module FpgaIntegerDividerAdapterTb #(
+  parameter integer NON_BLOCKING = 0
+);
   localparam [4:0] DIV = 0, DIVU = 1, REM = 2, REMU = 3;
   localparam [4:0] DIVW = 4, DIVUW = 5, REMW = 6, REMUW = 7;
 
@@ -58,7 +69,7 @@ module FpgaIntegerDividerAdapterTb;
 
   always #5 clock = ~clock;
 
-  npc_int_divider_adapter #(.WIDTH(64), .TAG_WIDTH(4), .LATENCY(35)) dut (
+  npc_int_divider_adapter #(.WIDTH(64), .TAG_WIDTH(4), .LATENCY(35), .NON_BLOCKING(NON_BLOCKING)) dut (
     .clock(clock),
     .reset(reset),
     .arithmetic_req_ready(req_ready),

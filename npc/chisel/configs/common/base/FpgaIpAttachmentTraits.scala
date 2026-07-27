@@ -30,7 +30,8 @@ final case class XilinxIntegerIpAttachment(
   arithmeticIp: ArithmeticIpProvider,
   timing: OperatorIpTimingConfig = OperatorIpTimingConfig.Default,
   dividerIpCycles: Int = 34,
-  dividerAdapterCycles: Int = 3
+  dividerAdapterCycles: Int = 3,
+  dividerNonBlocking: Boolean = false
 ) extends FpgaIpAttachment {
   require(name.nonEmpty, "FPGA IP attachment name must not be empty")
   require(dividerIpCycles >= 1, s"Xilinx divider IP latency must be positive, got $dividerIpCycles")
@@ -75,7 +76,8 @@ final case class XilinxIntegerIpAttachment(
         implementation = implementation,
         completionCycles = timing.divide.latency,
         multiplyTiming = timing.timing(timing.multiply),
-        dividerInitiationInterval = timing.divide.initiationInterval
+        dividerInitiationInterval = timing.divide.initiationInterval,
+        dividerAdapterNonBlocking = dividerNonBlocking
       ),
       routes = configured.operators.routes.overlay(routesFor(configured.isa.xlen))
     ))
@@ -84,7 +86,8 @@ final case class XilinxIntegerIpAttachment(
   override def manifestValues: Seq[(String, String)] = Seq(
     "FPGA_IP_ATTACHMENT" -> name,
     "FPGA_DIV_IP_CYCLES" -> dividerIpCycles.toString,
-    "FPGA_DIV_ADAPTER_CYCLES" -> dividerAdapterCycles.toString
+    "FPGA_DIV_ADAPTER_CYCLES" -> dividerAdapterCycles.toString,
+    "FPGA_DIVIDER_NON_BLOCKING" -> (if (dividerNonBlocking) "1" else "0")
   )
 }
 

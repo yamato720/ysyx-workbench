@@ -63,10 +63,16 @@ verilator --binary --timing -Wno-fatal -Wno-PINMISSING --top-module FpgaIntegerM
   "$npc_root/fpga/common/tests/fpga-integer-multiplier-adapter-tb.sv" >/dev/null
 "$work/integer-multiplier/VFpgaIntegerMultiplierAdapterTb"
 
-verilator --binary --timing -Wno-fatal -Wno-PINMISSING --top-module FpgaIntegerDividerAdapterTb \
-  --Mdir "$work/integer-divider" "$npc_root/fpga-ip-generator/common/compute/source/sv/npc-integer-ip-adapters.sv" \
+verilator --binary --timing -Wno-fatal -Wno-PINMISSING --top-module FpgaIntegerDividerAdapterTb -GNON_BLOCKING=0 \
+  --Mdir "$work/integer-divider-blocking" "$npc_root/fpga-ip-generator/common/compute/source/sv/npc-integer-ip-adapters.sv" \
   "$npc_root/fpga/common/tests/fpga-integer-divider-adapter-tb.sv" >/dev/null
-"$work/integer-divider/VFpgaIntegerDividerAdapterTb"
+"$work/integer-divider-blocking/VFpgaIntegerDividerAdapterTb"
+
+verilator --binary --timing -Wno-fatal -Wno-PINMISSING -DNPC_TEST_DIVIDER_NON_BLOCKING \
+  --top-module FpgaIntegerDividerAdapterTb -GNON_BLOCKING=1 \
+  --Mdir "$work/integer-divider-nonblocking" "$npc_root/fpga-ip-generator/common/compute/source/sv/npc-integer-ip-adapters.sv" \
+  "$npc_root/fpga/common/tests/fpga-integer-divider-adapter-tb.sv" >/dev/null
+"$work/integer-divider-nonblocking/VFpgaIntegerDividerAdapterTb"
 
 verilator --binary --timing -Wno-fatal -Wno-PINMISSING --top-module FpgaDebugControlTb \
   --Mdir "$work/debug" "${zcu_npc_rtl[@]}" "$npc_root/fpga/common/tests/fpga-debug-control-tb.sv" >/dev/null

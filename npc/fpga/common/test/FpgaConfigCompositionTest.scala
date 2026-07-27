@@ -4,7 +4,7 @@ import npc.CdeConfigResolver
 import org.chipsalliance.cde.config.Parameters
 import org.scalatest.flatspec.AnyFlatSpec
 import npc.ExternalAxiConfig
-import npc.{ArithmeticRouteOperation, ComputeBackend, ConstructionConfig, FloatingCheckConfig, FpgaIpTerminal, FpgaToolchainConfig, NemuHostConfig, NemuSimulationIpTerminal, NpcConfig, NpcCoreConfigKey, OperatorIpTimingConfig, OperatorRouteTarget, Rv64IMFZicsrConfig, WithNpcCoreConfig}
+import npc.{ArithmeticRouteOperation, ComputeBackend, ConfigCatalog, ConstructionConfig, ConstructionProfile, FloatingCheckConfig, FpgaIpTerminal, FpgaToolchainConfig, NemuHostConfig, NemuSimulationIpTerminal, NpcConfig, NpcCoreConfigKey, OperatorIpTimingConfig, OperatorRouteTarget, Rv64IMFZicsrConfig, WithNpcCoreConfig}
 import npc.fpga.u55c.{U55cNpcFpgaConfig, U55cRv64Npc300MHzFpgaConfig, U55cRv64NpcFpgaConfig, U55cXilinxIpAttachment, U55cYsyxSocFpgaConfig}
 import npc.fpga.zcu102.{Zcu102NpcFpgaConfig, Zcu102YsyxSocFpgaConfig}
 import ysyx.{YsyxPlatformParameters, YsyxSimulationConfig, YsyxSocConfig}
@@ -78,17 +78,34 @@ class FpgaConfigCompositionTest extends AnyFlatSpec {
     assertXilinxRoutes(config, 64)
   }
 
-  "U55cRv64Npc300MHzFpgaConfig" should "use a deeper RV64 multiplier pipeline at 300 MHz" in {
+  "U55cRv64Npc300MHzFpgaConfig" should "use frequency-specific RV64 and divider timing cuts at 300 MHz" in {
     implicit val parameters: Parameters = new U55cRv64Npc300MHzFpgaConfig
     val config = FpgaConfigParameters.npcCoreConfig
     assert(config.isa.xlen == 64)
     assert(FpgaConfigParameters.platform.clockMHz == 300)
     assert(FpgaConfigParameters.ipAttachment.name == "xilinx-u55c")
-    assert(config.operators.mulDiv.multiplyTiming.latency == 5)
+    assert(config.operators.mulDiv.multiplyTiming.latency == 6)
     assert(config.operators.mulDiv.multiplyTiming.initiationInterval == 1)
+    assert(config.pipeline.integerExecuteStages == 2)
+    assert(config.pipeline.serialExecuteStages == 3)
+    assert(config.pipeline.registerInitialFetchRequest)
+    assert(config.pipeline.separateSerialIntegerAlu)
+    assert(!config.pipeline.serialExecuteResultForwarding)
+    assert(config.operators.mulDiv.dividerAdapterNonBlocking)
     ArithmeticRouteOperation.mOperations.filter(_.isMultiply).foreach { operation =>
-      assert(config.operators.routes.route(operation).latency == 5)
+      assert(config.operators.routes.route(operation).latency == 6)
     }
+    val profile = ConstructionProfile.values(
+      ConfigCatalog.resolve("U55cRv64Npc300MHzFpgaConfig", Set("fpga")),
+      new U55cRv64Npc300MHzFpgaConfig,
+      config
+    ).toMap
+    assert(profile("INTEGER_EXECUTE_STAGES") == "2")
+    assert(profile("SERIAL_EXECUTE_STAGES") == "3")
+    assert(profile("REGISTER_INITIAL_FETCH_REQUEST") == "1")
+    assert(profile("SEPARATE_SERIAL_INTEGER_ALU") == "1")
+    assert(profile("SERIAL_EXECUTE_RESULT_FORWARDING") == "0")
+    assert(FpgaConfigParameters.ipAttachment.manifestValues.toMap.apply("FPGA_DIVIDER_NON_BLOCKING") == "1")
     assertXilinxRoutes(config, 64)
   }
 
@@ -227,6 +244,11 @@ class FpgaConfigCompositionTest extends AnyFlatSpec {
       assert(attachment.name == "xilinx-u55c")
       assert(FpgaCoreComponents.forAttachment(attachment).arithmeticIp.name == "xilinx-u55c")
       assert(attachment.manifestValues.toMap.apply("FPGA_DIV_IP_CYCLES") == "34")
+      assert(attachment.manifestValues.toMap.apply("FPGA_DIVIDER_NON_BLOCKING") == "0")
+    }
+    {
+      implicit val parameters: Parameters = new U55cRv64Npc300MHzFpgaConfig
+      assert(FpgaConfigParameters.ipAttachment.manifestValues.toMap.apply("FPGA_DIVIDER_NON_BLOCKING") == "1")
     }
     {
       implicit val parameters: Parameters = new Zcu102NpcFpgaConfig

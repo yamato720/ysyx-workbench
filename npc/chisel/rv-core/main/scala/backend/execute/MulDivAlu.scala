@@ -16,6 +16,7 @@ object MulDivAlu {
     tagWidth: Int = 4,
     multiplyAdapterModuleName: String = "npc_int_multiplier_adapter",
     dividerAdapterModuleName: String = "npc_int_divider_adapter",
+    dividerAdapterNonBlocking: Boolean = false,
   ) {
     require(completionCycles >= 1, s"MulDivAlu completionCycles must be positive, got $completionCycles")
     require(tagWidth >= 1, s"MulDivAlu tagWidth must be positive, got $tagWidth")
@@ -108,11 +109,16 @@ class MulDivAlu(
       if (routeEnabled) ArithmeticEndpointSpec(ArithmeticEndpointImplementation.External,
         firstRoute(multiplyRoutes, vendorTargets, config.multiplyAdapterModuleName).moduleName)
       else legacySpec(config.multiplyAdapterModuleName))) else None
+  private val vendorDividerSpec = {
+    val base = if (routeEnabled) ArithmeticEndpointSpec(ArithmeticEndpointImplementation.External,
+      firstRoute(divideRoutes, vendorTargets, config.dividerAdapterModuleName).moduleName)
+    else legacySpec(config.dividerAdapterModuleName)
+    base.copy(adapterParameters = base.adapterParameters.updated("NON_BLOCKING",
+      if (config.dividerAdapterNonBlocking) 1 else 0))
+  }
   private val vendorDivider = if (!routeEnabled || hasRoute(divideRoutes, vendorTargets)) Some(
     provider.makeIntegerDivider(width, config.tagWidth, config.divideTiming,
-      if (routeEnabled) ArithmeticEndpointSpec(ArithmeticEndpointImplementation.External,
-        firstRoute(divideRoutes, vendorTargets, config.dividerAdapterModuleName).moduleName)
-      else legacySpec(config.dividerAdapterModuleName))) else None
+      vendorDividerSpec)) else None
   private val directMultiplier = if (routeEnabled && hasRoute(multiplyRoutes, directTargets)) Some(
     provider.makeIntegerMultiplier(width, config.tagWidth, config.multiplyTiming,
       ArithmeticEndpointSpec(ArithmeticEndpointImplementation.IntegerReference))) else None
