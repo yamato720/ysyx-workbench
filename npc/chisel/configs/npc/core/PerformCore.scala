@@ -1,4 +1,4 @@
-package scpu
+package npc
 
 /** 已完成的 NPC 微架构性能成品。
   *
@@ -39,3 +39,29 @@ class PipelineDualFwdPerformConfig extends PerformBundle(
     new WithPipelineConfig ++
     new BasePerformConfig
 )
+
+/** 流水线开启、双前递，并将普通整数执行拆成 EX0/EX1 两拍。 */
+class PipelineDualFwdTwoStageIntegerExecutePerformConfig extends PerformBundle(
+  new WithTwoStageIntegerExecuteConfig ++
+    new PipelineDualFwdPerformConfig
+)
+
+/** 流水线开启、双前递、两拍普通整数执行，并寄存首个取指请求。 */
+class PipelineDualFwdTwoStageIntegerExecuteRegisteredFetchPerformConfig extends PerformBundle(
+  new WithRegisteredInitialFetchRequestConfig ++
+    new PipelineDualFwdTwoStageIntegerExecutePerformConfig
+)
+
+/** 流水线开启、双前递、两拍普通整数执行、寄存首个取指请求，且切断串行结果的 ID 回送。 */
+class PipelineDualFwdTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluPerformConfig extends PerformBundle(
+  new WithoutSerialExecuteResultForwardingConfig ++
+  new WithSeparateSerialIntegerAluConfig ++
+    new PipelineDualFwdTwoStageIntegerExecuteRegisteredFetchPerformConfig
+)
+
+/** 流水线开启、双前递、普通整数两拍且串行控制三拍，并开启全部 300 MHz 时序切分。 */
+class PipelineDualFwdTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecutePerformConfig
+  extends PerformBundle(
+    new WithSerialExecuteAdditionalStagesConfig(2) ++
+      new PipelineDualFwdTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluPerformConfig
+  )

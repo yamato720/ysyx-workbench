@@ -1,5 +1,6 @@
-package scpu
+package npc
 
+import npc.ip.arithmetic.{ArithmeticIpTiming, FloatingDpiOperator, IntegerMultiplierModel}
 import org.scalatest.flatspec.AnyFlatSpec
 
 class MulDivAluTest extends AnyFlatSpec {
@@ -12,19 +13,24 @@ class MulDivAluTest extends AnyFlatSpec {
     assert(mulDiv.contains("module MulDivAlu"))
     assert(mulDiv.contains("module IntegerMultiplierOperator"))
     assert(mulDiv.contains("module IntegerDividerOperator"))
+    assert(mulDiv.contains("module IntegerMultiplierModel"))
+    assert(mulDiv.contains("module IntegerDividerModel"))
+    assert(!mulDiv.contains("RRArbiter"))
     assert(floating.contains("module FloatingAlu"))
     assert(floating.contains("module FloatingFmaOperator"))
     assert(floating.contains("module FloatingCompareOperator"))
+    assert(floating.contains("module FloatingDpiOperator"))
+    assert(!floating.contains("RRArbiter"))
   }
 
   "Reusable arithmetic operators" should "elaborate independently from the execution backend" in {
-    val multiply = _root_.circt.stage.ChiselStage.emitCHIRRTL(new IntegerMultiplierOperator(
-      32, ComputeUnitConfig(), 4, ArithmeticIpTiming(latency = 2), "unused"))
-    val divide = _root_.circt.stage.ChiselStage.emitCHIRRTL(new FloatingDividerOperator(
-      32, ComputeUnitConfig(), 4, ArithmeticIpTiming(latency = 1), "unused"))
+    val multiply = _root_.circt.stage.ChiselStage.emitCHIRRTL(new IntegerMultiplierModel(
+      32, 4, ArithmeticIpTiming(latency = 2)))
+    val divide = _root_.circt.stage.ChiselStage.emitCHIRRTL(new FloatingDpiOperator(
+      32, 4, ArithmeticIpTiming(latency = 1)))
 
-    assert(multiply.contains("module IntegerMultiplierOperator"))
-    assert(divide.contains("module FloatingDividerOperator"))
+    assert(multiply.contains("module IntegerMultiplierModel"))
+    assert(divide.contains("module FloatingDpiOperator"))
     assert(divide.contains("NpcFloatingPointDpi"))
     assert(!divide.contains("DivSqrtRecFN_small"))
   }

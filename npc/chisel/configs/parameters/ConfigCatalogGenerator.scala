@@ -1,4 +1,4 @@
-package scpu
+package npc
 
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path, Paths, StandardCopyOption}
@@ -8,30 +8,46 @@ import scala.util.matching.Regex
 /** 从完整 Scala Config 的源码生成 Make 使用的构造目录。
   *
   * TSV 只是 Make 在启动 JVM 前需要的快照，不是另一份人工维护的配置源。可选择
-  * 构造必须混入显式终端 marker；目录不再从 `SimulationConfig`、`FpgaConfig` 等类名
+  * 构造必须混入显式 terminal 层 trait；目录不再从 `SimulationConfig`、`FpgaConfig` 等类名
   * 后缀猜测作用域或目标。
   */
 object ConfigCatalogGenerator {
-  private val CatalogRelativePath = Path.of("chisel", "configs", "resources", "scpu-config-catalog.tsv")
+  private val CatalogRelativePath = Path.of("chisel", "configs", "resources", "npc-config-catalog.tsv")
   private val ConfigRelativePath = Path.of("chisel", "configs")
+  private val FpgaRelativePath = Path.of("fpga")
+  private val FpgaConfigRelativePath = ConfigRelativePath.resolve("fpga")
   private val PackagePattern: Regex = raw"(?m)^package\s+([A-Za-z_][A-Za-z0-9_.]*)\s*$$".r
   private val ClassPattern: Regex = raw"(?m)^\s*class\s+([A-Za-z_][A-Za-z0-9_]*Config)\s+extends\s+([A-Za-z_][A-Za-z0-9_.]*)".r
   private val BoardPattern: Regex = raw"WithFpgaBoardConfig\(FpgaBoard\.([A-Za-z0-9_]+)\)".r
 
   private final case class ClassBlock(name: String, parent: String, body: String)
 
-  private val terminalMarkers = Map(
-    "NpcTerminalConfig" -> ("npc", "NPC"),
-    "SocTerminalConfig" -> ("soc", "SOC"),
-    "FpgaNpcTerminalConfig" -> ("fpga", "NPC"),
-    "FpgaSocTerminalConfig" -> ("fpga", "SOC")
+  private val terminalTraits = Map(
+    "LocalNpcTerminal" -> ("npc", "NPC"),
+    "LocalSocTerminal" -> ("soc", "SOC"),
+    "U55cNpcTerminal" -> ("fpga", "NPC"),
+    "U55cSocTerminal" -> ("fpga", "SOC"),
+    "Zcu102NpcTerminal" -> ("fpga", "NPC"),
+    "Zcu102SocTerminal" -> ("fpga", "SOC")
   )
-
-  /** 寻找包含 `chisel/configs` 的 NPC 根目录；无法找到时返回 `None`，供安装后的
+  private val ipTerminalForScope = Map(
+    "npc" -> "NemuSimulationIpTerminal",
+    "soc" -> "NemuSimulationIpTerminal",
+    "fpga" -> "FpgaIpTerminal"
+  )
+  private val ipTerminalNames = Vector("NemuSimulationIpTerminal", "FpgaIpTerminal")
+  private val baseConstructionTraits = Vector(
+    "HostConstruction",
+    "NemuSimulationConstruction",
+    "FpgaConstruction",
+    "MakeTerminal"
+  )
+  /** 寻找同时包含通用 Config 与 FPGA 板卡 Config 的 NPC 根目录；无法找到时返回 `None`，供安装后的
     * classpath resource 回退路径使用。
     */
   def locateNpcRoot(start: Path = Paths.get("").toAbsolutePath.normalize): Option[Path] = {
-    def isNpcRoot(path: Path): Boolean = Files.isDirectory(path.resolve(ConfigRelativePath))
+    def isNpcRoot(path: Path): Boolean =
+      Files.isDirectory(path.resolve(ConfigRelativePath)) && Files.isDirectory(path.resolve(FpgaRelativePath))
 
     Iterator.iterate(Option(start))(_.flatMap(path => Option(path.getParent))).flatten
       .flatMap(path => Seq(path, path.resolve("npc")))
@@ -45,7 +61,7 @@ object ConfigCatalogGenerator {
     * 自动目录不能把文档中的示例类或注释掉的历史 Config 视为真实构造；同时保留换行，避免
     * 多行类声明的匹配位置发生偏移。
     */
-  private[scpu] def codeOnly(source: String): String = {
+  private[npc] def codeOnly(source: String): String = {
     val masked = source.toCharArray
 
     def mask(index: Int): Unit =
@@ -130,56 +146,119 @@ object ConfigCatalogGenerator {
     }
   }
 
+  /** 每个可运行领域只允许根部 `Configs.scala` 定义终端。
+    *
+    * `base/` 与 `core/` 仍由 Scala 编译器递归加载，但终端 trait 一旦出现在这些层或其他文件中，
+    * 目录生成立即失败，避免可复用组合被意外暴露为 Make 入口。
+    */
+  private[npc] def validateTerminalLayout(directory: Path): Path = {
+    val terminalPath = directory.resolve("Configs.scala").toAbsolutePath.normalize
+    require(Files.isRegularFile(terminalPath), s"终端目录 $directory 缺少根部 Configs.scala")
+
+    val misplaced = scalaFiles(directory).flatMap { path =>
+      val normalized = path.toAbsolutePath.normalize
+      if (normalized == terminalPath) Vector.empty
+      else {
+        val source = read(path)
+        classBlocks(source).flatMap { block =>
+          terminalMetadata(block).map(_ => s"${directory.relativize(path)}:${block.name}")
+        }
+      }
+    }
+    require(misplaced.isEmpty,
+      s"terminal 层 trait 只能挂载在 $terminalPath，发现：${misplaced.sorted.mkString(", ")}")
+
+    val terminalSource = read(terminalPath)
+    val terminalBlocks = classBlocks(terminalSource)
+    val unmarked = terminalBlocks.filter(block => terminalMetadata(block).isEmpty).map(_.name)
+    require(unmarked.isEmpty,
+      s"$terminalPath 只能包含挂载 terminal 层 trait 的 Config，发现：${unmarked.sorted.mkString(", ")}")
+    val directBaseTraits = terminalBlocks.flatMap { block =>
+      baseConstructionTraits.collect {
+        case name if raw"\b$name\b".r.findFirstIn(block.body).nonEmpty => s"${block.name}:$name"
+      }
+    }
+    require(directBaseTraits.isEmpty,
+      s"$terminalPath 的终端只能直接挂载一个 terminal 层 trait，不能混入 base trait：" +
+        directBaseTraits.sorted.mkString(", "))
+    terminalPath
+  }
+
   private def packageName(source: String, path: Path): String =
     PackagePattern.findFirstMatchIn(source).map(_.group(1)).getOrElse(
       throw new IllegalArgumentException(s"Missing package declaration in $path")
     )
 
-  private def marker(block: ClassBlock): Option[(String, String)] = {
-    val found = terminalMarkers.collect {
-      case (name, metadata) if raw"\b$name\b".r.findFirstIn(block.body).nonEmpty => metadata
-    }.toVector.distinct
-    require(found.size <= 1, s"Config ${block.name} 混入了多个终端 marker")
-    found.headOption
+  private def terminalMetadata(block: ClassBlock): Option[(String, String)] = {
+    val found = terminalTraits.collect {
+      case (name, metadata) if raw"\b$name\b".r.findFirstIn(block.body).nonEmpty => name -> metadata
+    }.toVector
+    require(found.size <= 1, s"Config ${block.name} 挂载了多个 terminal 层 trait")
+    found.headOption.map(_._2)
   }
 
-  private def discoverMarked(
+  /** 运行终端必须在根部 Config 中直接写出唯一的计算 IP terminal。
+    *
+    * 这与 NEMU/FPGA host 配方同样是终端 ABI 的一部分；核心和 CDE `++` 链不能
+    * 隐式选择或重复挂载它。
+    */
+  private def validateIpTerminal(block: ClassBlock, scope: String): Unit = {
+    val expected = ipTerminalForScope(scope)
+    val mounted = ipTerminalNames.flatMap { name =>
+      val occurrences = raw"\b$name\b".r.findAllMatchIn(block.body).size
+      Option.when(occurrences > 0)(name -> occurrences)
+    }
+    require(mounted == Vector(expected -> 1),
+      s"Config ${block.name} 必须直接且唯一地挂载 $expected，实际为 " +
+        mounted.map { case (name, count) => s"$name x$count" }.mkString(", "))
+    val nested = ipTerminalNames.filter { name =>
+      raw"(?s)\bnew\s+[^()]*?\bwith\s+$name\b".r.findFirstIn(block.body).nonEmpty
+    }
+    require(nested.isEmpty,
+      s"Config ${block.name} 只能在公开终端自身挂载计算 IP，不能在 CDE ++ 链中挂载：" +
+        nested.mkString(", "))
+  }
+
+  private def discoverTerminals(
     directory: Path,
     expectedScope: String,
     board: Option[String]
-  ): Vector[ConfigCatalog.Entry] = scalaFiles(directory).flatMap { path =>
+  ): Vector[ConfigCatalog.Entry] = {
+    val path = validateTerminalLayout(directory)
     val source = read(path)
     val pkg = packageName(source, path)
-    classBlocks(source).flatMap { block =>
-      marker(block).map { case (scope, target) =>
-        require(scope == expectedScope,
-          s"Config ${block.name} 的 marker 作用域 $scope 与目录 $directory 不一致")
-        val expectedParent = if (scope == "npc") "ConstructionConfig" else "CDEConfig"
-        require(block.parent == expectedParent,
-          s"Config ${block.name} 的终端 marker 要求继承 $expectedParent，实际为 ${block.parent}")
-        ConfigCatalog.Entry(
-          shortName = block.name,
-          className = s"$pkg.${block.name}",
-          scope = scope,
-          board = board,
-          target = target
-        )
-      }
+    classBlocks(source).map { block =>
+      val (scope, target) = terminalMetadata(block).getOrElse(
+        throw new IllegalArgumentException(s"终端文件 $path 中的 ${block.name} 缺少 terminal 层 trait")
+      )
+      require(scope == expectedScope,
+        s"Config ${block.name} 的终端 trait 作用域 $scope 与目录 $directory 不一致")
+      validateIpTerminal(block, scope)
+      val expectedParent = if (scope == "npc") "ConstructionConfig" else "CDEConfig"
+      require(block.parent == expectedParent,
+        s"Config ${block.name} 的终端 trait 要求继承 $expectedParent，实际为 ${block.parent}")
+      ConfigCatalog.Entry(
+        shortName = block.name,
+        className = s"$pkg.${block.name}",
+        scope = scope,
+        board = board,
+        target = target
+      )
     }
   }
 
   private def discoverNpc(configRoot: Path): Vector[ConfigCatalog.Entry] =
-    discoverMarked(configRoot.resolve("npc"), "npc", None)
+    discoverTerminals(configRoot.resolve("npc"), "npc", None)
 
   private def discoverSoc(configRoot: Path): Vector[ConfigCatalog.Entry] =
-    discoverMarked(configRoot.resolve("ysyx"), "soc", None)
+    discoverTerminals(configRoot.resolve("ysyx"), "soc", None)
 
-  private def boardMetadata(directory: Path): String = {
-    val source = scalaFiles(directory).map(read).mkString("\n")
+  private def boardMetadata(boardDirectory: Path, configDirectory: Path): String = {
+    val source = scalaFiles(configDirectory).map(read).mkString("\n")
     val board = BoardPattern.findFirstMatchIn(source).map(_.group(1)).map(_.toLowerCase).getOrElse(
-      throw new IllegalArgumentException(s"Missing WithFpgaBoardConfig in $directory")
+      throw new IllegalArgumentException(s"Missing WithFpgaBoardConfig in $configDirectory")
     )
-    directory.getFileName.toString match {
+    boardDirectory.getFileName.toString match {
       case name if name == board => board
       case name => throw new IllegalArgumentException(
         s"FPGA directory $name conflicts with its FpgaBoard.$board declaration"
@@ -187,16 +266,16 @@ object ConfigCatalogGenerator {
     }
   }
 
-  private def discoverFpga(configRoot: Path): Vector[ConfigCatalog.Entry] = {
-    val fpgaRoot = configRoot.resolve("fpga")
-    if (!Files.isDirectory(fpgaRoot)) Vector.empty
+  private def discoverFpga(npcRoot: Path): Vector[ConfigCatalog.Entry] = {
+    val fpgaConfigRoot = npcRoot.resolve(FpgaConfigRelativePath)
+    if (!Files.isDirectory(fpgaConfigRoot)) Vector.empty
     else {
-      val directories = Files.list(fpgaRoot)
-      try directories.iterator.asScala.filter(Files.isDirectory(_)).toVector.flatMap { directory =>
-        if (directory.getFileName.toString == "common") Vector.empty
+      val directories = Files.list(fpgaConfigRoot)
+      try directories.iterator.asScala.filter(Files.isDirectory(_)).toVector.flatMap { boardDirectory =>
+        if (boardDirectory.getFileName.toString == "common") Vector.empty
         else {
-          val board = boardMetadata(directory)
-          discoverMarked(directory, "fpga", Some(board))
+          val board = boardMetadata(boardDirectory, boardDirectory)
+          discoverTerminals(boardDirectory, "fpga", Some(board))
         }
       }
       finally directories.close()
@@ -218,7 +297,7 @@ object ConfigCatalogGenerator {
   def discover(npcRoot: Path): Vector[ConfigCatalog.Entry] = {
     val configRoot = npcRoot.resolve(ConfigRelativePath)
     require(Files.isDirectory(configRoot), s"Missing Scala Config root $configRoot")
-    validate(discoverNpc(configRoot) ++ discoverSoc(configRoot) ++ discoverFpga(configRoot))
+    validate(discoverNpc(configRoot) ++ discoverSoc(configRoot) ++ discoverFpga(npcRoot))
   }
 
   private def render(entries: Vector[ConfigCatalog.Entry]): String = {
@@ -227,7 +306,7 @@ object ConfigCatalogGenerator {
       s"${entry.shortName}\t${entry.className}\t${entry.scope}\t$board\t${entry.target}"
     }
     (Vector(
-      "# 此文件由 scpu.GenerateConfigCatalog 自动生成；不要手工编辑。",
+      "# 此文件由 npc.GenerateConfigCatalog 自动生成；不要手工编辑。",
       "# 短名\t完整类名\t作用域\t板卡\t目标"
     ) ++ rows).mkString("\n") + "\n"
   }
@@ -239,7 +318,7 @@ object ConfigCatalogGenerator {
     val previous = Option.when(Files.isRegularFile(destination))(read(destination))
     if (!previous.contains(content)) {
       Files.createDirectories(destination.getParent)
-      val temporary = Files.createTempFile(destination.getParent, ".scpu-config-catalog-", ".tsv")
+      val temporary = Files.createTempFile(destination.getParent, ".npc-config-catalog-", ".tsv")
       try {
         Files.writeString(temporary, content, StandardCharsets.UTF_8)
         Files.move(temporary, destination, StandardCopyOption.REPLACE_EXISTING)

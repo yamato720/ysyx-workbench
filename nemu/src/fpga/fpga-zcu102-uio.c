@@ -57,8 +57,7 @@ int nemu_fpga_zcu102_uio_open(struct nemu_fpga_zcu102_uio *uio,
                               size_t control_size,
                               const char *memory_device,
                               uint64_t memory_physical_address,
-                              size_t memory_size,
-                              uint32_t max_request_cycles) {
+                              size_t memory_size) {
   if (uio == NULL || control_device == NULL || memory_device == NULL ||
       control_size < sizeof(uint32_t) || memory_size == 0) {
     errno = EINVAL;
@@ -99,7 +98,6 @@ int nemu_fpga_zcu102_uio_open(struct nemu_fpga_zcu102_uio *uio,
     .opaque = uio,
     .read32 = uio_read32,
     .write32 = uio_write32,
-    .max_request_cycles = max_request_cycles,
   };
   if (uio_rearm_interrupt(uio) != 0) goto failure;
   return 0;
@@ -143,6 +141,20 @@ int nemu_fpga_zcu102_uio_read(struct nemu_fpga_zcu102_uio *uio,
   }
   atomic_thread_fence(memory_order_acquire);
   memcpy(destination, uio->guest_memory + guest_offset, size);
+  return uio->io_error == 0 ? 0 : -1;
+}
+
+int nemu_fpga_zcu102_uio_write(struct nemu_fpga_zcu102_uio *uio,
+                               size_t guest_offset, const void *source, size_t size) {
+  if (uio == NULL || source == NULL || uio->guest_memory == NULL ||
+      guest_offset > uio->guest_memory_size ||
+      size > uio->guest_memory_size - guest_offset) {
+    errno = EINVAL;
+    return -1;
+  }
+  memcpy(uio->guest_memory + guest_offset, source, size);
+  atomic_thread_fence(memory_order_seq_cst);
+  if (msync(uio->memory_mapping, uio->memory_mapping_size, MS_SYNC) != 0) return -1;
   return uio->io_error == 0 ? 0 : -1;
 }
 

@@ -5,4 +5,6 @@
 - `DPIUnit.scala`：NEMU 支持的 RAM 与 MMIO 访问外壳。
 
 它们只负责把硬件端口接到 Verilator DPI-C 函数；AXI 请求的发起、仲裁和地址译码仍由
-`protocol/axi` 负责。浮点 SoftFloat DPI 壳属于通用计算模块，位于 `compute/FloatingDpi.scala`。
+`protocol/axi` 负责。浮点 SoftFloat DPI 壳属于独立 IP 模块，位于
+`chisel/ip-interface/scala/FloatingModels.scala`，由
+`npc.ip.arithmetic.SimulationIpComponents` 提供。

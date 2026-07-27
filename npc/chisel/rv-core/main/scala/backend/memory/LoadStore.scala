@@ -1,8 +1,9 @@
-package scpu
+package npc
 
 import chisel3._
 import chisel3.util._
-import scpu.protocol.{AxiLiteMasterIO, MemoryFault, MemoryFaultReason}
+import npc.ip.memory.{MemoryFault, MemoryFaultReason}
+import npc.protocol.AxiLiteMasterIO
 
 /** MEM 阶段的存储字节通道格式化。 */
 object AxiLiteWstrb {

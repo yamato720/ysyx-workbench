@@ -1,4 +1,4 @@
-package scpu
+package npc
 
 /** 机器态内核已实现的架构 CSR 地址。 */
 object CsrAddress {

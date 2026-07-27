@@ -1,9 +1,9 @@
-package scpu
+package npc
 
 import org.scalatest.flatspec.AnyFlatSpec
 
 class PipelineUnitsTest extends AnyFlatSpec {
-  "HazardUnit" should "elaborate five producer ports with forwarding availability" in {
+  "HazardUnit" should "elaborate seven producer ports with forwarding availability" in {
     val chirrtl = _root_.circt.stage.ChiselStage.emitCHIRRTL(new HazardUnit)
 
     assert(chirrtl.contains("module HazardUnit"))
@@ -28,5 +28,23 @@ class PipelineUnitsTest extends AnyFlatSpec {
 
     assert(pipeline.forwarding.enableIdForwarding)
     assert(pipeline.forwarding.enableExecuteForwarding)
+    assert(pipeline.integerExecuteStages == 1)
+    assert(pipeline.serialExecuteStages == 1)
+    assert(!pipeline.registerInitialFetchRequest)
+    assert(pipeline.serialExecuteResultForwarding)
+  }
+
+  it should "only accept one or two integer stages and one through three serial stages" in {
+    assert(PipelineConfig(integerExecuteStages = 2).integerExecuteStages == 2)
+    assert(PipelineConfig(serialExecuteStages = 2).serialExecuteStages == 2)
+    assert(PipelineConfig(serialExecuteStages = 3).serialExecuteStages == 3)
+    assert(new WithSerialExecuteAdditionalStagesConfig(1).applyTo(NpcConfig()).pipeline.serialExecuteStages == 2)
+    assert(new WithSerialExecuteAdditionalStagesConfig(2).applyTo(NpcConfig()).pipeline.serialExecuteStages == 3)
+    assert(PipelineConfig(registerInitialFetchRequest = true).registerInitialFetchRequest)
+    assert(!PipelineConfig(serialExecuteResultForwarding = false).serialExecuteResultForwarding)
+    assertThrows[IllegalArgumentException](PipelineConfig(integerExecuteStages = 3))
+    assertThrows[IllegalArgumentException](PipelineConfig(serialExecuteStages = 4))
+    assertThrows[IllegalArgumentException](new WithSerialExecuteAdditionalStagesConfig(0))
+    assertThrows[IllegalArgumentException](new WithSerialExecuteAdditionalStagesConfig(3))
   }
 }

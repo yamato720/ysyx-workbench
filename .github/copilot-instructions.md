@@ -100,8 +100,8 @@ CSR operations use `csr_read(addr)` / `csr_write(addr, val)` macros defined loca
 
 ### NPC Chisel Conventions
 
-- Core RTL lives under `npc/chisel/rv-core/`; FPGA shells live under `npc/chisel/fpga-harness/`.
-- Terminal Configs live under `npc/chisel/configs/` and compose reusable fragments with CDE `++`.
+- Core RTL lives under `npc/chisel/rv-core/`; FPGA shells live under `npc/fpga/{common,u55c,zcu102}/scala/`.
+- Local terminal Configs live under `npc/chisel/configs/`; FPGA terminals live under each board's `npc/fpga/*/scala/configs/` and compose reusable fragments with CDE `++`.
 - Make-selectable Configs are discovered automatically and must have a complete, no-argument construction class.
 - DPI-C memory is a `BlackBox`; C++ implementation is in `npc/csrc/pmem.cpp`.
 - DPI-C functions: `pmem_read_a`, `pmem_write_a`, `pmem_read_b`, `pmem_write_b`

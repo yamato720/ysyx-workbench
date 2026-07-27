@@ -24,7 +24,31 @@
 #define Mr vaddr_read
 #define Mw vaddr_write
 
-#define MAX_NEGION 0x80000000u
+#define MIN_SIGNED_WORD ((word_t)1 << (sizeof(word_t) * 8 - 1))
+
+static word_t multiply_high_signed(word_t left, word_t right) {
+#ifdef CONFIG_RV64
+  return (word_t)(((__int128)(sword_t)left * (__int128)(sword_t)right) >> 64);
+#else
+  return (word_t)(((int64_t)(sword_t)left * (int64_t)(sword_t)right) >> 32);
+#endif
+}
+
+static word_t multiply_high_signed_unsigned(word_t left, word_t right) {
+#ifdef CONFIG_RV64
+  return (word_t)(((__int128)(sword_t)left * (__int128)(word_t)right) >> 64);
+#else
+  return (word_t)(((int64_t)(sword_t)left * (int64_t)(uint32_t)right) >> 32);
+#endif
+}
+
+static word_t multiply_high_unsigned(word_t left, word_t right) {
+#ifdef CONFIG_RV64
+  return (word_t)(((unsigned __int128)left * (unsigned __int128)right) >> 64);
+#else
+  return (word_t)(((uint64_t)left * (uint64_t)right) >> 32);
+#endif
+}
 
 enum {
   TYPE_I, TYPE_U, TYPE_S, TYPE_R, TYPE_B, TYPE_J,
@@ -161,12 +185,12 @@ static int decode_exec(Decode *s) {
   // ============== RV32M: Multiply/Divide Extension ==============
   
   INSTPAT("0000001 ????? ????? 000 ????? 01100 11", mul   , R, R(rd) = src1 * src2);
-  INSTPAT("0000001 ????? ????? 001 ????? 01100 11", mulh  , R, R(rd) = (word_t)(((int64_t)(sword_t)src1 * (int64_t)(sword_t)src2) >> 32));
-  INSTPAT("0000001 ????? ????? 010 ????? 01100 11", mulhsu, R, R(rd) = (word_t)(((int64_t)(sword_t)src1 * (int64_t)(uint32_t)src2) >> 32));
-  INSTPAT("0000001 ????? ????? 011 ????? 01100 11", mulhu , R, R(rd) = (word_t)(((uint64_t)(word_t)src1 * (uint64_t)(word_t)src2) >> 32));
-  INSTPAT("0000001 ????? ????? 100 ????? 01100 11", div   , R, { if(src2 == 0) R(rd) = (sword_t)-1; else if((sword_t)src1 == (sword_t)MAX_NEGION && (sword_t)src2 == -1) R(rd) = (sword_t)MAX_NEGION; else R(rd) = (sword_t)src1 / (sword_t)src2; });
+  INSTPAT("0000001 ????? ????? 001 ????? 01100 11", mulh  , R, R(rd) = multiply_high_signed(src1, src2));
+  INSTPAT("0000001 ????? ????? 010 ????? 01100 11", mulhsu, R, R(rd) = multiply_high_signed_unsigned(src1, src2));
+  INSTPAT("0000001 ????? ????? 011 ????? 01100 11", mulhu , R, R(rd) = multiply_high_unsigned(src1, src2));
+  INSTPAT("0000001 ????? ????? 100 ????? 01100 11", div   , R, { if(src2 == 0) R(rd) = (sword_t)-1; else if((word_t)src1 == MIN_SIGNED_WORD && (sword_t)src2 == -1) R(rd) = MIN_SIGNED_WORD; else R(rd) = (sword_t)src1 / (sword_t)src2; });
   INSTPAT("0000001 ????? ????? 101 ????? 01100 11", divu  , R, { if(src2 == 0) R(rd) = (word_t)-1; else R(rd) = (word_t)src1 / (word_t)src2; });
-  INSTPAT("0000001 ????? ????? 110 ????? 01100 11", rem   , R, { if(src2 == 0) R(rd) = src1; else if((sword_t)src1 == (sword_t)MAX_NEGION && (sword_t)src2 == -1) R(rd) = 0; else R(rd) = (sword_t)src1 % (sword_t)src2; });
+  INSTPAT("0000001 ????? ????? 110 ????? 01100 11", rem   , R, { if(src2 == 0) R(rd) = src1; else if((word_t)src1 == MIN_SIGNED_WORD && (sword_t)src2 == -1) R(rd) = 0; else R(rd) = (sword_t)src1 % (sword_t)src2; });
   INSTPAT("0000001 ????? ????? 111 ????? 01100 11", remu  , R, { if(src2 == 0) R(rd) = src1; else R(rd) = (word_t)src1 % (word_t)src2; });
   
   // 32-bit Multiply/Divide (RV64M only)

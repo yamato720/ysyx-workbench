@@ -10,8 +10,10 @@
 | 流水线、内存、调试、AXI 参数 | `PipelineConfig`、`MemoryConfig`、`DebugConfig`、`AxiConfig` | `PlatformParameters.scala` | 是 |
 | 完整核心参数值 | `NpcConfig` | `PlatformParameters.scala` | L1 必需 |
 | 构造 profile 数据 | `ConstructionProfile.values(...)` | `ConstructionProfile.scala` | Make 可用 Config 必需 |
-| Host 构造 trait | 无；见 `common/HostConstructionConfigs.scala` | `../common/` | 完整终端 Config 必需 |
+| 终端布局与自动目录 | `ConfigCatalogGenerator` | `ConfigCatalogGenerator.scala` | 只接受领域根部 `Configs.scala` 中的终端 |
+| 底层构造 trait | 无；见 `common/base/ConstructionTraits.scala` | `../common/base/` | 只供 terminal 层 trait 组合 |
+| 可直挂终端 trait | 无；见 `common/TerminalTraits.scala` | `../common/` 根部 | 每个完整终端 Config 挂载一个 |
 | CDE 键、Rocket 参数、板卡物理信息 | 无；不在本目录添加 | `ysyx/`、L3 或 L4 | 不适用 |
 
-完整 Config 的可组合架构、性能、存储、计算和接口片段位于同级 `common/`；本目录不再持有
-NPC 专属构造预设。公开 Make 不能覆盖这些 Scala 固定字段。
+完整 NPC Config 的底层片段和具名成品分别位于同级 `npc/base/` 与 `npc/core/`；跨领域数据位于
+`common/base/`。本目录不再持有 NPC 专属构造预设。公开 Make 不能覆盖这些 Scala 固定字段。

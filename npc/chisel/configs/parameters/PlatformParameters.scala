@@ -1,4 +1,4 @@
-package scpu
+package npc
 
 /** 流水线旁路通路的开关。 */
 case class ForwardingConfig(
@@ -10,8 +10,18 @@ case class ForwardingConfig(
 case class PipelineConfig(
   enablePipeline: Boolean = false,
   enableInterlock: Boolean = true,
-  forwarding: ForwardingConfig = ForwardingConfig()
-)
+  forwarding: ForwardingConfig = ForwardingConfig(),
+  integerExecuteStages: Int = 1,
+  serialExecuteStages: Int = 1,
+  registerInitialFetchRequest: Boolean = false,
+  separateSerialIntegerAlu: Boolean = false,
+  serialExecuteResultForwarding: Boolean = true
+) {
+  require(integerExecuteStages == 1 || integerExecuteStages == 2,
+    s"integerExecuteStages must be 1 or 2, got $integerExecuteStages")
+  require(serialExecuteStages >= 1 && serialExecuteStages <= 3,
+    s"serialExecuteStages must be 1, 2, or 3, got $serialExecuteStages")
+}
 
 /** 主存与 MMIO 地址窗口，以及复位向量。 */
 case class MemoryConfig(
@@ -45,4 +55,9 @@ case class NpcConfig(
   memory: MemoryConfig = MemoryConfig(),
   axi: AxiConfig = AxiConfig(),
   debug: DebugConfig = DebugConfig()
-)
+) {
+  def validated: NpcConfig = {
+    operators.routes.validate(isa)
+    this
+  }
+}

@@ -1,7 +1,8 @@
-package scpu
+package npc
 
 import chisel3._
 import chisel3.util._
+import npc.ip.arithmetic.ArithmeticResponse
 
 /** 后端和一个 ISA 执行 ALU 之间传递的请求。`aluOp` 刻意不进入 `compute/`：
   * ALU 会在发射可复用算子前把它映射为算子私有的 `ArithmeticRequest.operation`。

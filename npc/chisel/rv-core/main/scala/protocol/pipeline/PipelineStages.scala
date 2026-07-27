@@ -1,8 +1,8 @@
-package scpu.protocol
+package npc.protocol
 
 import chisel3._
 import chisel3.util._
-import scpu.{ISAConfig, NpcAluOp, NpcExecutionUnit}
+import npc.{ISAConfig, NpcAluOp, NpcExecutionUnit}
 
 // PipelineRegister 是一个通用的就绪/有效流水寄存器。
 //
@@ -35,6 +35,8 @@ class PipelineRegister[T <: Data](gen: T) extends Module {
   // ready 反压规则：
   //   - 缓冲为空：可以接收新数据
   //   - 缓冲非空但下游 ready：本拍会被取走，也可同时接收新数据
+  // out.ready 也会成为整个 payload 的寄存器更新许可；连接可变时延外部 IP 时，应在
+  // 该模块之外以寄存 credit 或非旁路缓冲截断响应到 ready 的组合反馈。
   io.in.ready := !validReg || io.out.ready
 
   // 输出端只反映本级寄存器中保存的数据。

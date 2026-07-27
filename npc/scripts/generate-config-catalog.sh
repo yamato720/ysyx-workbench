@@ -16,7 +16,7 @@ log=$(mktemp)
 trap 'rm -f "$log"' EXIT
 if ! (
   cd "$npc_root"
-  sbt "root/runMain scpu.GenerateConfigCatalog $npc_root"
+  sbt "root/runMain npc.GenerateConfigCatalog $npc_root"
 ) >"$log" 2>&1; then
   printf '!failed to generate Scala Config catalog:\n' >&2
   cat "$log" >&2

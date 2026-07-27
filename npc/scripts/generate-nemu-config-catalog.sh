@@ -17,7 +17,7 @@ log=$(mktemp)
 trap 'rm -f "$log"' EXIT
 if ! (
   cd "$npc_root"
-  sbt "root/runMain scpu.DescribeNemuConfigCatalog $output"
+  sbt "root/runMain npc.DescribeNemuConfigCatalog $output"
 ) >"$log" 2>&1; then
   printf '生成 Scala NEMU Host Config 目录失败：\n' >&2
   cat "$log" >&2

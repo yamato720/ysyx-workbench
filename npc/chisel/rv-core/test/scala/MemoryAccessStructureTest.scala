@@ -1,4 +1,4 @@
-package scpu
+package npc
 
 import org.scalatest.flatspec.AnyFlatSpec
 
@@ -36,10 +36,10 @@ class MemoryAccessStructureTest extends AnyFlatSpec {
   "DPI slaves" should "elaborate both 32-bit and 64-bit word interfaces" in {
     Seq(32, 64).foreach { xlen =>
       val ram = _root_.circt.stage.ChiselStage.emitCHIRRTL(
-        new scpu.protocol.AxiLiteDpiRamSlave(dataWidth = xlen)
+        new npc.protocol.AxiLiteDpiRamSlave(dataWidth = xlen)
       )
       val mmio = _root_.circt.stage.ChiselStage.emitCHIRRTL(
-        new scpu.protocol.AxiLiteDpiMmioSlave(dataWidth = xlen)
+        new npc.protocol.AxiLiteDpiMmioSlave(dataWidth = xlen)
       )
 
       assert(ram.contains(s"data : UInt<$xlen>"))

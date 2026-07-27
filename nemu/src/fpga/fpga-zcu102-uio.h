@@ -24,8 +24,7 @@ int nemu_fpga_zcu102_uio_open(struct nemu_fpga_zcu102_uio *uio,
                               size_t control_size,
                               const char *memory_device,
                               uint64_t memory_physical_address,
-                              size_t memory_size,
-                              uint32_t max_request_cycles);
+                              size_t memory_size);
 void nemu_fpga_zcu102_uio_close(struct nemu_fpga_zcu102_uio *uio);
 int nemu_fpga_zcu102_uio_load(struct nemu_fpga_zcu102_uio *uio,
                               size_t guest_offset,
@@ -33,6 +32,8 @@ int nemu_fpga_zcu102_uio_load(struct nemu_fpga_zcu102_uio *uio,
                               size_t image_size);
 int nemu_fpga_zcu102_uio_read(struct nemu_fpga_zcu102_uio *uio,
                               size_t guest_offset, void *destination, size_t size);
+int nemu_fpga_zcu102_uio_write(struct nemu_fpga_zcu102_uio *uio,
+                               size_t guest_offset, const void *source, size_t size);
 /* 等待 PL->PS UIO 中断；成功读取后立即重使能下一次中断。返回 1=已通知、0=超时。 */
 int nemu_fpga_zcu102_uio_wait_interrupt(struct nemu_fpga_zcu102_uio *uio, int timeout_ms);
 

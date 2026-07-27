@@ -1,8 +1,8 @@
-package scpu.protocol
+package npc.protocol
 
 import chisel3._
 import chisel3.util.log2Ceil
-import scpu.ISAConfig
+import npc.ISAConfig
 
 /** 取指和译码产生的调试遥测信息。 */
 class NpcFrontendDebugBundle(cfg: ISAConfig) extends Bundle {
@@ -63,6 +63,7 @@ class NpcBackendDebugBundle(cfg: ISAConfig) extends Bundle {
 
   val dispatchBackpressured = Bool()
   val idExBackpressured = Bool()
+  val integerExecuteBackpressured = Bool()
   val exMemBackpressured = Bool()
   val memoryWaitingForLsu = Bool()
   val lsuTransactionActive = Bool()

@@ -69,9 +69,9 @@ make -C am-kernels/tests/cpu-tests run-bat ALL="forwarding matrix-mul fpu" versi
 ```
 
 仿真 Config 在首次运行时自动构造。后续运行直接执行保存的 NEMU host，不再启动 NEMU Make；需要按
-C/C++/menuconfig 依赖增量刷新 host 时使用 `host-rebuild=1`，或执行
-`make -C npc host-build config=<硬件Config>`。变更 Chisel、生成 RTL、Verilator glue 或要更新硬件 ABI
-时，使用 `rebuild=1`。
+C/C++/menuconfig 依赖增量刷新 host 时使用运行入口的 `host-rebuild=1`，或执行
+`make -C npc host-rebuild config=<硬件Config>`。变更 Chisel、生成 RTL、Verilator glue 或要更新硬件 ABI
+时，执行 `make -C npc rebuild config=<Config>`。
 
 ## FPGA 构造
 
@@ -85,13 +85,13 @@ make -C npc build config=Zcu102NpcFpgaConfig
 make -C npc build config=Zcu102YsyxSocFpgaConfig
 ```
 
-FPGA Config 首次上板运行时必须明确允许构造；已有构造则仅在 `rebuild=1` 时原子替换。普通运行不会因
+FPGA Config 首次上板运行时必须明确允许构造；已有构造则仅在 `rebuild` 时原子替换。普通运行不会因
 源码或工具变化自行重跑耗时的 Vivado/Vitis 实现。
 
 ```bash
 make -C am-kernels/tests/cpu-tests run ALL=add \
   config=U55cYsyxSocFpgaConfig build=1
-make -C npc build config=U55cYsyxSocFpgaConfig rebuild=1
+make -C npc rebuild config=U55cYsyxSocFpgaConfig
 ```
 
 实现产物会写入 `npc/constructions/<FQCN>/fpga/`。Chisel/firtool 按模块生成多个 SystemVerilog 文件，
@@ -115,7 +115,7 @@ Release 追加。
 - [NPC 构造与运行](npc/README.md)：版本管理、自动构造、批处理与失配策略。
 - [Config 层级](npc/chisel/configs/README.md)：L1 NPC、L2 SoC、L3 FPGA、L4 board 的组合规则和完整 Config。
 - [FPGA 工程](npc/fpga/README.md)：U55C/ZCU102 shell、IP、资产格式及校验命令。
-- [源码 Release 构造说明](npc/fpga/releases/v0.2.0-fpga-sdb/README.md)：Release 固定内容与正式资产准入条件。
+- [源码 Release 构造说明](npc/fpga/common/releases/v0.2.0-fpga-sdb/README.md)：Release 固定内容与正式资产准入条件。
 
 常规回归：
 
@@ -127,9 +127,9 @@ mill -i ysyxsocTest.test
 
 cd ../..
 scripts/construction-regression.sh "$PWD"
-fpga/tests/config-regression.sh "$PWD"
-fpga/tests/release-regression.sh "$PWD"
-fpga/tests/run-fpga-rtl-test.sh "$PWD"
+fpga/common/tests/config-regression.sh "$PWD"
+fpga/common/tests/release-regression.sh "$PWD"
+fpga/common/tests/run-fpga-rtl-test.sh "$PWD"
 ```
 
 这些 FPGA 回归只覆盖配置、RTL 和资产流程的 dry-run，不会启动完整 Vivado/Vitis 实现，也不替代实体板验收。

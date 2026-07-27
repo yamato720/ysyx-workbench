@@ -3,8 +3,14 @@
 obj_dir := ./intermediate
 CHISEL_OUT := ./generated
 CHISEL_DPI_OUT := ./generated-dpi
+IP_SOURCE_MANIFEST_TOOL := ./scripts/ip-source-manifest.sh
+IP_SIMULATION_MODELS := ./chisel/ip-interface/sources/simulation-models.list
+IP_PERIPHERAL_MODELS := ./chisel/ip-interface/sources/peripheral-models.list
+SOC_SIMULATION_RTL_LIST := ./chisel/ysyxSoC/sources/simulation-rtl.list
+CHISEL_SOURCE_MANIFEST := $(CHISEL_OUT)/ip-sources.manifest
+CHISEL_DPI_SOURCE_MANIFEST := $(CHISEL_DPI_OUT)/ip-sources.manifest
 include ./config-catalog.mk
-include ./fpga/config-select.mk
+include ./fpga/common/config-select.mk
 
 # 统一构造器把 Scala 生成的 profile 作为底层 recipe 的唯一结构输入。变量名
 # `NPC_*` 仅保留为本 Makefile 内部适配层，不再接受公开命令行覆盖。
@@ -61,6 +67,11 @@ else
     $(error 旧构造目标已删除；请使用 make -C npc build config=<Config>)
   endif
   LEGACY_STRUCTURE_OVERRIDES := $(foreach variable,$(LEGACY_STRUCTURE_VARS),$(if $(filter command line,$(origin $(variable))),$(variable),))
+  # D 是历史 ISA 覆盖变量；仅 `make version D=<序号>` 将它重新定义为删除构造的
+  # 显式命令参数，其他目标仍必须拒绝该结构覆盖。
+  ifeq ($(strip $(MAKECMDGOALS)),version)
+    LEGACY_STRUCTURE_OVERRIDES := $(filter-out D,$(LEGACY_STRUCTURE_OVERRIDES))
+  endif
   ifneq ($(strip $(LEGACY_STRUCTURE_OVERRIDES)),)
     $(error 结构覆盖变量 $(LEGACY_STRUCTURE_OVERRIDES) 已删除；请在 Scala Config 中固定硬件 ABI)
   endif
@@ -98,17 +109,17 @@ NPC_FCMP_CYCLES ?= 3
 NPC_FCMP_II ?= 1
 
 # Non-FPGA Make targets select a registered complete NPC or SoC Config.  FPGA
-# targets resolve their terminal Config earlier in fpga/config-select.mk.
+# targets resolve their terminal Config earlier in fpga/common/config-select.mk.
 ifeq ($(INTERNAL_CONSTRUCTION),1)
 ifneq ($(FPGA_BUILD_REQUESTED),1)
 ifneq ($(strip $(config)),)
   NPC_CONFIG_SCOPE := $(if $(filter SOC,$(NPC_TARGET)),soc,npc)
-  NPC_CONFIG_RESOLVED := $(call scpu_config_resolve,$(config),$(NPC_CONFIG_SCOPE))
-  ifneq ($(call scpu_config_error,$(NPC_CONFIG_RESOLVED)),)
-    $(error $(patsubst !%,%,$(call scpu_config_error,$(NPC_CONFIG_RESOLVED))))
+  NPC_CONFIG_RESOLVED := $(call npc_config_resolve,$(config),$(NPC_CONFIG_SCOPE))
+  ifneq ($(call npc_config_error,$(NPC_CONFIG_RESOLVED)),)
+    $(error $(patsubst !%,%,$(call npc_config_error,$(NPC_CONFIG_RESOLVED))))
   endif
-  NPC_SCALA_CONFIG := $(call scpu_config_field,1,$(NPC_CONFIG_RESOLVED))
-  NPC_CONFIG_TARGET := $(call scpu_config_field,4,$(NPC_CONFIG_RESOLVED))
+  NPC_SCALA_CONFIG := $(call npc_config_field,1,$(NPC_CONFIG_RESOLVED))
+  NPC_CONFIG_TARGET := $(call npc_config_field,4,$(NPC_CONFIG_RESOLVED))
   ifneq ($(NPC_CONFIG_TARGET),$(NPC_TARGET))
     $(error config=$(NPC_SCALA_CONFIG) requires NPC_TARGET=$(NPC_CONFIG_TARGET), got $(NPC_TARGET))
   endif
@@ -116,8 +127,8 @@ endif
 endif
 endif
 
-NPC_STANDALONE_SCALA_CONFIG := $(if $(NPC_SCALA_CONFIG),$(NPC_SCALA_CONFIG),scpu.StandaloneConfig)
-NPC_SIMULATION_SCALA_CONFIG := $(if $(NPC_SCALA_CONFIG),$(NPC_SCALA_CONFIG),scpu.SimulationConfig)
+NPC_STANDALONE_SCALA_CONFIG := $(if $(NPC_SCALA_CONFIG),$(NPC_SCALA_CONFIG),npc.StandaloneConfig)
+NPC_SIMULATION_SCALA_CONFIG := $(if $(NPC_SCALA_CONFIG),$(NPC_SCALA_CONFIG),npc.SimulationConfig)
 SOC_SIMULATION_SCALA_CONFIG := $(if $(NPC_SCALA_CONFIG),$(NPC_SCALA_CONFIG),ysyx.YsyxSimulationConfig)
 NPC_BUILD_PROPS_WITH_CONFIG = -Dnpc.config=$(1)
 
@@ -157,10 +168,14 @@ FORCE:
 
 SOC_SIM_DIR := ./chisel/ysyxSoC/build-sim
 SOC_SIM_VERILOG := $(SOC_SIM_DIR)/ysyxSoCFull.v
+SOC_SOURCE_MANIFEST := $(SOC_SIM_DIR)/ip-sources.manifest
 SOC_PERIP_ROOT := ./chisel/ysyxSoC/perip
-SOC_PERIP_V := $(shell find $(SOC_PERIP_ROOT) -name "*.v")
+SOC_IP_PERIP_ROOT := ./chisel/ip-interface/resources/npc/ip/peripheral
+SOC_PERIP_V := $(shell awk 'NF && index($$1, "#") != 1' $(SOC_SIMULATION_RTL_LIST))
+SOC_IP_PERIP_V := $(shell awk 'NF && index($$1, "#") != 1' $(IP_SIMULATION_MODELS) $(IP_PERIPHERAL_MODELS))
 SOC_NEMU_STAMP := $(obj_dir)/soc-nemu-lib/.build-stamp
-SOC_NEMU_INPUTS := $(SOC_SIM_VERILOG) $(SOC_PERIP_V) \
+SOC_NEMU_INPUTS := $(SOC_SIM_VERILOG) $(SOC_PERIP_V) $(SOC_IP_PERIP_V) \
+	$(IP_SOURCE_MANIFEST_TOOL) $(IP_SIMULATION_MODELS) $(IP_PERIPHERAL_MODELS) $(SOC_SIMULATION_RTL_LIST) \
 	./csrc/npc_core.cpp ./csrc/npc_core.h ./csrc/npc_debug.h ./csrc/pmem.cpp ./csrc/soc_dpi.cpp ./csrc/fp_dpi.cpp $(SOFTFLOAT_LIB) Makefile
 
 .PHONY: softfloat-lib fp-dpi-test FORCE
@@ -187,14 +202,16 @@ fp-dpi-test: softfloat-lib
 # ============== Chisel Build ==============
 
 # A Chisel configuration is an explicit hardware ABI.  Construction management
-# calls these recipes only for a first build or rebuild=1; no source/tool
+# calls these recipes only for a first build or explicit rebuild; no source/tool
 # 摘要比对不得悄悄替换已保存构造。
 $(CHISEL_STAMP): FORCE
 	@set -e; \
 	mkdir -p "$(dir $@)"; \
 	echo '=== Generating Verilog from Chisel ==='; \
 	rm -rf "$(CHISEL_OUT)"; \
-	cd "$(CURDIR)" && NPC_SCALA_CONFIG="$(NPC_STANDALONE_SCALA_CONFIG)" sbt $(call NPC_BUILD_PROPS_WITH_CONFIG,$(NPC_STANDALONE_SCALA_CONFIG)) "root/runMain scpu.Elaborate"; \
+	cd "$(CURDIR)" && NPC_SCALA_CONFIG="$(NPC_STANDALONE_SCALA_CONFIG)" sbt $(call NPC_BUILD_PROPS_WITH_CONFIG,$(NPC_STANDALONE_SCALA_CONFIG)) "root/runMain npc.Elaborate"; \
+	"$(IP_SOURCE_MANIFEST_TOOL)" write simulation "$(CHISEL_SOURCE_MANIFEST)" "$(CURDIR)" \
+		--rtl "$(CHISEL_OUT)/CPU.sv" --model-list "$(IP_SIMULATION_MODELS)"; \
 	test -f "$(CHISEL_OUT)/CPU.sv"; touch "$@"
 
 $(CHISEL_DPI_STAMP): FORCE
@@ -202,7 +219,9 @@ $(CHISEL_DPI_STAMP): FORCE
 	mkdir -p "$(dir $@)"; \
 	echo '=== Generating NEMU Verilog from Chisel ==='; \
 	rm -rf "$(CHISEL_DPI_OUT)"; \
-	cd "$(CURDIR)" && NPC_SCALA_CONFIG="$(NPC_SIMULATION_SCALA_CONFIG)" sbt $(call NPC_BUILD_PROPS_WITH_CONFIG,$(NPC_SIMULATION_SCALA_CONFIG)) "root/runMain scpu.ElaborateDPI"; \
+	cd "$(CURDIR)" && NPC_SCALA_CONFIG="$(NPC_SIMULATION_SCALA_CONFIG)" sbt $(call NPC_BUILD_PROPS_WITH_CONFIG,$(NPC_SIMULATION_SCALA_CONFIG)) "root/runMain npc.ElaborateDPI"; \
+	"$(IP_SOURCE_MANIFEST_TOOL)" write simulation "$(CHISEL_DPI_SOURCE_MANIFEST)" "$(CURDIR)" \
+		--rtl "$(CHISEL_DPI_OUT)/CPU.sv" --model-list "$(IP_SIMULATION_MODELS)"; \
 	test -f "$(CHISEL_DPI_OUT)/CPU.sv"; touch "$@"
 
 chisel: $(CHISEL_STAMP)
@@ -218,7 +237,7 @@ chisel-module:
 		exit 1; \
 	fi
 	@echo "=== Generating $(MODULE) from Chisel ==="
-	cd $(shell pwd) && NPC_SCALA_CONFIG="$(NPC_STANDALONE_SCALA_CONFIG)" sbt $(call NPC_BUILD_PROPS_WITH_CONFIG,$(NPC_STANDALONE_SCALA_CONFIG)) "root/runMain scpu.Elaborate$(MODULE)"
+	cd $(shell pwd) && NPC_SCALA_CONFIG="$(NPC_STANDALONE_SCALA_CONFIG)" sbt $(call NPC_BUILD_PROPS_WITH_CONFIG,$(NPC_STANDALONE_SCALA_CONFIG)) "root/runMain npc.Elaborate$(MODULE)"
 
 # NEMU reference for DiffTest
 NEMU_HOME ?= $(shell pwd)/../nemu
@@ -230,6 +249,7 @@ chisel-cpu: chisel-dpi softfloat-lib
 	@rm -rf $(obj_dir)/chisel-cpu
 	@mkdir -p $(obj_dir)/chisel-cpu
 	@mkdir -p ./out/chisel-cpu
+	@set -e; rtl_sources=$$("$(IP_SOURCE_MANIFEST_TOOL)" list "$(CHISEL_DPI_SOURCE_MANIFEST)" "$(CURDIR)" rtl); \
 	verilator -Wall --sv --cc --exe --build -j $(shell nproc) \
 		--trace \
 		--top-module CPU \
@@ -239,7 +259,7 @@ chisel-cpu: chisel-dpi softfloat-lib
 		-LDFLAGS "-ldl $(SOFTFLOAT_LIB_ABS)" \
 		-Mdir $(obj_dir)/chisel-cpu \
 		-I$(CHISEL_DPI_OUT) \
-		$(CHISEL_DPI_OUT)/CPU.sv $(NPC_IP_RTL) ./csrc/npc_main.cpp ./csrc/npc_core.cpp ./csrc/pmem.cpp ./csrc/fp_dpi.cpp
+		$$rtl_sources $(NPC_IP_RTL) ./csrc/npc_main.cpp ./csrc/npc_core.cpp ./csrc/pmem.cpp ./csrc/fp_dpi.cpp
 	@mv $(obj_dir)/chisel-cpu/VCPU ./out/chisel-cpu/npc-exec
 	@echo "Built: ./out/chisel-cpu/npc-exec"
 
@@ -251,13 +271,14 @@ $(NPC_NEMU_STAMP): $(NPC_NEMU_PREREQUISITES) FORCE
 	mkdir -p "$(dir $@)"; \
 	echo "=== Building Chisel CPU library for NEMU (VCD=$(NPC_VCD_TRACE_ENABLED)) ==="; \
 		rm -rf "$(obj_dir)/chisel-cpu-lib"; mkdir -p "$(obj_dir)/chisel-cpu-lib" ./out/chisel-cpu-lib; \
+		rtl_sources=$$("$(IP_SOURCE_MANIFEST_TOOL)" list "$(CHISEL_DPI_SOURCE_MANIFEST)" "$(CURDIR)" rtl); \
 		verilator -Wall --sv --cc -j $(shell nproc) $(NPC_VCD_VERILATOR_FLAGS) \
 			--top-module CPU \
 			-Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-CASEINCOMPLETE -Wno-WIDTH \
 			-Wno-UNOPTFLAT -Wno-LATCH -Wno-DECLFILENAME -Wno-PINCONNECTEMPTY \
 			-CFLAGS "-I$(CURDIR)/csrc -fPIC $(NPC_VCD_CFLAGS) -DNPC_XLEN=$(NPC_XLEN)" \
 			-Mdir "$(obj_dir)/chisel-cpu-lib" -I"$(CHISEL_DPI_OUT)" \
-			"$(CHISEL_DPI_OUT)/CPU.sv" $(NPC_IP_RTL); \
+			$$rtl_sources $(NPC_IP_RTL); \
 		if $(MAKE) -C "$(obj_dir)/chisel-cpu-lib" -f VCPU.mk -n VCPU__ALL.o >/dev/null 2>&1; then \
 			$(MAKE) -C "$(obj_dir)/chisel-cpu-lib" -f VCPU.mk VCPU__ALL.o; \
 		else \
@@ -344,16 +365,19 @@ $(SOC_NEMU_STAMP): FORCE $(SOC_NEMU_INPUTS)
 	@echo "=== Building ysyxSoC Verilator library for NEMU ==="
 	@rm -rf $(obj_dir)/soc-nemu-lib
 	@mkdir -p $(obj_dir)/soc-nemu-lib
-	@verilator -Wall -Wno-fatal --quiet --quiet-stats --sv --cc --no-timing -j $(shell nproc) $(NPC_VCD_VERILATOR_FLAGS) \
+	@set -e; rtl_sources=$$("$(IP_SOURCE_MANIFEST_TOOL)" list "$(SOC_SOURCE_MANIFEST)" "$(CURDIR)" rtl); \
+	verilator -Wall -Wno-fatal --quiet --quiet-stats --sv --cc --no-timing -j $(shell nproc) $(NPC_VCD_VERILATOR_FLAGS) \
 		--top-module ysyxSoCTop \
 		-I$(SOC_PERIP_ROOT)/uart16550/rtl \
 		-I$(SOC_PERIP_ROOT)/spi/rtl \
+		-I$(SOC_IP_PERIP_ROOT)/uart16550/rtl \
+		-I$(SOC_IP_PERIP_ROOT)/spi/rtl \
 		-Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-CASEINCOMPLETE -Wno-WIDTH \
 		-Wno-UNOPTFLAT -Wno-LATCH -Wno-DECLFILENAME -Wno-PINCONNECTEMPTY \
 		-Wno-TIMESCALEMOD -Wno-ASSIGNDLY -Wno-UNDRIVEN -Wno-PROCASSINIT -Wno-SYNCASYNCNET -Wno-DEFPARAM \
 		-CFLAGS "-I$(shell pwd)/csrc -fPIC $(NPC_VCD_CFLAGS) -DNPC_SOC -DNPC_XLEN=32" \
 		-Mdir $(obj_dir)/soc-nemu-lib \
-		$(SOC_SIM_VERILOG) $(SOC_PERIP_V)
+		$$rtl_sources
 	@$(MAKE) -s -C $(obj_dir)/soc-nemu-lib -f VysyxSoCTop.mk libVysyxSoCTop
 	@echo "=== Compiling SoC NEMU glue ==="
 	@VERILATOR_ROOT=$$(dirname $$(dirname $$(which verilator)))/share/verilator && \
@@ -396,18 +420,26 @@ $(SOC_NEMU_STAMP): FORCE $(SOC_NEMU_INPUTS)
 
 .PHONY: soc-sim-verilog soc-nemu-lib check-soc-xlen
 
-include ./fpga/build.mk
+include ./fpga/common/build.mk
 
 # ============== Config 驱动的公开接口 ==============
 
 CONSTRUCTION_MANAGER := $(CURDIR)/scripts/construction-manager.sh
-REBUILD_REQUEST := $(if $(filter 1,$(strip $(rebuild))),1,0)
-DELETE_CONFIRM := $(if $(filter 1,$(strip $(yes))),1,0)
 HOST_BUILD_ALL := $(if $(filter 1,$(strip $(all))),1,0)
 HOST_BUILD_JOBS := $(if $(strip $(jobs)),$(strip $(jobs)),1)
 
-ifneq ($(origin host_rebuild),undefined)
+ifneq ($(strip $(rebuild)),)
+  $(error rebuild=1 已删除，请使用 make -C npc rebuild config=<Config>)
+endif
+
+ifneq ($(strip $(host_rebuild)),)
   $(error host_rebuild 已删除，请使用 host-rebuild=1)
+endif
+
+ifneq ($(strip $(delete)),)
+  ifneq ($(strip $(MAKECMDGOALS)),version)
+    $(error delete= 仅支持 make -C npc version delete=<版本序号>)
+  endif
 endif
 
 config-list:
@@ -415,18 +447,28 @@ config-list:
 
 build:
 	@test -n "$(strip $(config))" || { echo 'build 必须提供 config=<Config短名或FQCN>' >&2; exit 2; }
-	@$(CONSTRUCTION_MANAGER) build "$(CURDIR)" "$(strip $(config))" "$(REBUILD_REQUEST)"
+	@$(CONSTRUCTION_MANAGER) build "$(CURDIR)" "$(strip $(config))"
+
+rebuild:
+	@test -n "$(strip $(config))" || { echo 'rebuild 必须提供 config=<Config短名或FQCN>' >&2; exit 2; }
+	@$(CONSTRUCTION_MANAGER) rebuild "$(CURDIR)" "$(strip $(config))"
 
 host-config-list:
 	@$(CONSTRUCTION_MANAGER) host-catalog "$(CURDIR)"
 
 host-build:
+	@echo 'host-build 已删除，请使用 host-rebuild config=<Config> 或 host-rebuild all=1 jobs=<N>' >&2
+	@exit 2
+
+host-rebuild:
 	@$(CONSTRUCTION_MANAGER) host-build "$(CURDIR)" "$(strip $(config))" "$(HOST_BUILD_ALL)" "$(HOST_BUILD_JOBS)"
 
 version:
-	@if test -n "$(strip $(delete))"; then \
-		$(CONSTRUCTION_MANAGER) delete "$(CURDIR)" "$(strip $(delete))" "$(DELETE_CONFIRM)"; \
-		elif test -n "$(strip $(version))"; then \
+	@if test -n "$(strip $(D))" && test -n "$(strip $(delete))" && test "$(strip $(D))" != "$(strip $(delete))"; then \
+		echo "D=$(strip $(D)) 与 delete=$(strip $(delete)) 不一致" >&2; exit 2; \
+	elif test -n "$(strip $(D))" || test -n "$(strip $(delete))"; then \
+		$(CONSTRUCTION_MANAGER) delete "$(CURDIR)" "$(strip $(D))" "$(strip $(delete))"; \
+	elif test -n "$(strip $(version))"; then \
 			$(CONSTRUCTION_MANAGER) list "$(CURDIR)" "$(strip $(version))"; \
 		elif test -n "$(strip $(config))"; then \
 			$(CONSTRUCTION_MANAGER) list "$(CURDIR)" "$(strip $(config))"; \
@@ -434,7 +476,7 @@ version:
 		$(CONSTRUCTION_MANAGER) list "$(CURDIR)"; \
 	fi
 
-.PHONY: config-list build host-config-list host-build version
+.PHONY: config-list build rebuild host-config-list host-build host-rebuild version
 
 dpi-unit-test:
 	@mkdir -p "$(obj_dir)"; \

@@ -12,4 +12,6 @@ execute/
 
 纯计算模块已移到根目录的 [`compute/`](../../compute/README.md)：其中有可复用的
 M/F 算子、固定延迟模型、DPI 壳和外部 adapter 协议。`NpcBackend` 只根据
-`NpcExecutionUnit` 把请求交给 I/M/F ALU，再以公共 tag 按程序顺序退休。
+`NpcExecutionUnit` 把请求交给 I/M/F ALU。M/F 指令严格单在途：请求载荷保存在
+执行寄存器中，响应先经过一个弹性流水寄存器后进入 EX/MEM，因此没有 tag 完成队列、
+回填仲裁或多项算术 RAW 扫描。算子配置的 II 描述 IP 能力，不表示核心会并发发射。

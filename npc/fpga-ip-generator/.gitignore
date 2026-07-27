@@ -1,0 +1,11 @@
+**/generated/*/*
+!**/generated/*/.gitkeep
+*.xci
+*.dcp
+*.xo
+*.xsa
+*.bit
+*.xclbin
+*.jou
+*.log
+.Xil/

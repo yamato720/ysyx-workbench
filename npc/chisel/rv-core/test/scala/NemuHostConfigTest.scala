@@ -1,15 +1,20 @@
-package scpu
+package npc
 
 import org.scalatest.flatspec.AnyFlatSpec
 
 class NemuHostConfigTest extends AnyFlatSpec {
-  private final class InvalidLocalConstruction extends NemuSimulationConstructionConfig {
-    override protected val configuredNemu: NemuHostConfig = NemuHostConfig.U55cBase
+  private final class CustomLocalTerminal extends LocalNpcTerminal {
+    override protected val configuredNemu: NemuHostConfig = NemuHostConfig.LocalBase.copy(
+      trace = true,
+      vcd = true
+    )
   }
 
-  private final class InvalidFpgaConstruction extends FpgaConstructionConfig {
-    override protected val configuredNemu: NemuHostConfig = NemuHostConfig.U55cBase
-    override protected val configuredFpga: FpgaToolchainConfig = FpgaToolchainConfig.Zcu102Base
+  private final class CustomU55cTerminal extends U55cNpcTerminal {
+    override protected val configuredNemu: NemuHostConfig = NemuHostConfig.U55cBase.copy(debug = true)
+    override protected val configuredFpga: FpgaToolchainConfig = FpgaToolchainConfig.U55cBase.copy(
+      flow = FpgaToolchainConfig.U55cBase.flow.copy(implementationParallelJobs = 12)
+    )
   }
 
   "NEMU host Base" should "explicitly bind every controlled field" in {
@@ -57,8 +62,38 @@ class NemuHostConfigTest extends AnyFlatSpec {
   }
 
   "Construction traits" should "enforce local and FPGA backend ownership" in {
-    assertThrows[IllegalArgumentException](new InvalidLocalConstruction().nemuConfig)
-    assertThrows[IllegalArgumentException](new InvalidFpgaConstruction().fpgaToolchainConfig)
+    assertThrows[IllegalArgumentException](ConstructionValidation.localNemu(NemuHostConfig.U55cBase))
+    assertThrows[IllegalArgumentException](ConstructionValidation.fpga(
+      NemuHostConfig.U55cBase,
+      FpgaToolchainConfig.Zcu102Base
+    ))
+  }
+
+  it should "mount complete defaults and allow explicit recipe overrides" in {
+    val terminals = Seq(
+      new LocalNpcTerminal {} -> ("npc", "NPC", "local"),
+      new LocalSocTerminal {} -> ("soc", "SOC", "local"),
+      new U55cNpcTerminal {} -> ("fpga", "NPC", "u55c"),
+      new U55cSocTerminal {} -> ("fpga", "SOC", "u55c"),
+      new Zcu102NpcTerminal {} -> ("fpga", "NPC", "zcu102"),
+      new Zcu102SocTerminal {} -> ("fpga", "SOC", "zcu102")
+    )
+
+    terminals.foreach { case (terminal, (scope, target, backend)) =>
+      assert(terminal.constructionScope == scope)
+      assert(terminal.constructionTarget == target)
+      assert(terminal.nemuConfig.backend.id == backend)
+    }
+
+    assert((new U55cNpcTerminal {}).fpgaToolchainConfig == FpgaToolchainConfig.U55cBase)
+    assert((new Zcu102SocTerminal {}).fpgaToolchainConfig == FpgaToolchainConfig.Zcu102Base)
+
+    val customLocal = new CustomLocalTerminal
+    assert(customLocal.nemuConfig.trace && customLocal.nemuConfig.vcd)
+    assert(customLocal.nemuPreset == "Custom")
+    val customU55c = new CustomU55cTerminal
+    assert(customU55c.nemuConfig.debug)
+    assert(customU55c.fpgaToolchainConfig.flow.implementationParallelJobs == 12)
   }
 
   "NEMU host catalog" should "use only explicitly registered case class Base values" in {

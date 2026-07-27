@@ -1,4 +1,4 @@
-package scpu
+package npc
 
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
@@ -17,7 +17,7 @@ object ConstructionProfile {
 
   def values(
     entry: ConfigCatalog.Entry,
-    host: HostConstructionConfig,
+    host: HostConstruction,
     config: NpcConfig,
     extra: Seq[(String, String)] = Seq.empty
   ): Seq[(String, String)] = {
@@ -28,6 +28,7 @@ object ConstructionProfile {
     val isaExtensions = Seq(
       Option.when(config.isa.M)("m"),
       Option.when(config.isa.F)("f"),
+      Option.when(config.isa.D)("d"),
       Option.when(config.isa.Zicsr)("_zicsr")
     ).flatten.mkString
     require(capability == "run", s"终端 Config ${entry.className} 必须是可运行的 NEMU Config")
@@ -49,11 +50,11 @@ object ConstructionProfile {
     val protocolAbi = entry.scope match {
       case "npc" => "npc-dpi-v1"
       case "soc" => "ysyx-dpi-v1"
-      case "fpga" => "npc-fpga-mailbox-v3"
+      case "fpga" => "npc-fpga-runtime-v5"
       case scope => throw new IllegalArgumentException(s"未知终端作用域：$scope")
     }
     val base = Seq(
-      "PROFILE_FORMAT" -> "10",
+      "PROFILE_FORMAT" -> "16",
       "CONFIG_SHORT_NAME" -> entry.shortName,
       "CONFIG_FQCN" -> entry.className,
       "SCOPE" -> entry.scope,
@@ -78,11 +79,17 @@ object ConstructionProfile {
       "ISA_STRING" -> s"rv${config.isa.xlen}i$isaExtensions",
       "M" -> bit(config.isa.M),
       "F" -> bit(config.isa.F),
+      "D" -> bit(config.isa.D),
       "ZICSR" -> bit(config.isa.Zicsr),
       "PIPELINE" -> bit(config.pipeline.enablePipeline),
       "INTERLOCK" -> bit(config.pipeline.enableInterlock),
       "ID_FWD" -> bit(config.pipeline.forwarding.enableIdForwarding),
       "EX_FWD" -> bit(config.pipeline.forwarding.enableExecuteForwarding),
+      "INTEGER_EXECUTE_STAGES" -> config.pipeline.integerExecuteStages.toString,
+      "SERIAL_EXECUTE_STAGES" -> config.pipeline.serialExecuteStages.toString,
+      "REGISTER_INITIAL_FETCH_REQUEST" -> bit(config.pipeline.registerInitialFetchRequest),
+      "SEPARATE_SERIAL_INTEGER_ALU" -> bit(config.pipeline.separateSerialIntegerAlu),
+      "SERIAL_EXECUTE_RESULT_FORWARDING" -> bit(config.pipeline.serialExecuteResultForwarding),
       "ARITH_BACKEND" -> mulDiv.implementation.backend.name,
       "ARITH_OUTPUT_FIFO" -> mulDiv.implementation.ip.outputFifoDepth.toString,
       "MUL_CYCLES" -> mulDiv.multiplyTiming.latency.toString,
@@ -111,7 +118,8 @@ object ConstructionProfile {
       "AXI_ID_WIDTH" -> config.axi.idWidth.toString,
       "AXI_EXTERNAL" -> bit(config.axi.useExternalMaster)
     )
-    val all = (base ++ config.operators.routes.profileValues(config.isa) ++ extra).map { case (key, value) => safe(key, value) }
+    val all = (base ++ config.operators.routes.profileValues(config.isa) ++ extra)
+      .map { case (key, value) => safe(key, value) }
     val duplicates = all.groupBy(_._1).collect { case (key, values) if values.size > 1 => key }
     require(duplicates.isEmpty, s"profile 含重复字段：${duplicates.toSeq.sorted.mkString(", ")}")
     all
@@ -126,7 +134,7 @@ object ConstructionProfile {
 
 /** 为 L1 NPC Config 生成规范化 profile。 */
 object DescribeNpcConfig extends App {
-  require(args.length == 1, "用法：scpu.DescribeNpcConfig <profile.env>")
+  require(args.length == 1, "用法：npc.DescribeNpcConfig <profile.env>")
   val (entry, construction) = ConfigResolver.resolve("")
   ConstructionProfile.write(
     Path.of(args(0)),

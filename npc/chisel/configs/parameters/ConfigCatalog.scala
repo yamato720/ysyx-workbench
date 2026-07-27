@@ -1,4 +1,4 @@
-package scpu
+package npc
 
 import java.nio.file.Files
 import scala.io.Source
@@ -19,7 +19,7 @@ object ConfigCatalog {
     target: String
   )
 
-  private val resourceName = "/scpu-config-catalog.tsv"
+  private val resourceName = "/npc-config-catalog.tsv"
 
   private def load(): Vector[Entry] = {
     val stream = ConfigCatalogGenerator.ensureCurrent().map(path => Files.newInputStream(path))
@@ -74,7 +74,7 @@ object ConfigCatalog {
     require(normalized.nonEmpty, "Configuration name must not be empty")
     val entry = entries.find(candidate => candidate.shortName == normalized || candidate.className == normalized).getOrElse(
       throw new IllegalArgumentException(
-        s"Unknown Make configuration '$normalized'; add a discoverable complete Config below chisel/configs"
+        s"Unknown Make configuration '$normalized'; add a discoverable complete Config in a terminal Config source root"
       )
     )
     require(allowedScopes.contains(entry.scope),

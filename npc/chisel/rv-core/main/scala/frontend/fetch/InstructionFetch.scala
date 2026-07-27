@@ -1,11 +1,20 @@
-package scpu
+package npc
 
 import chisel3._
 import chisel3.util._
-import scpu.protocol.{AxiLiteMasterIO, MemoryFault, MemoryFaultReason}
+import npc.ip.memory.{MemoryFault, MemoryFaultReason}
+import npc.protocol.AxiLiteMasterIO
 
-/** 带单项响应缓冲的 IF 阶段 AXI 读主机。 */
-class IFetchAXIAdapter(addrWidth: Int = 32, dataWidth: Int = 64) extends Module {
+/** 带单项响应缓冲的 IF 阶段 AXI 读主机。
+  *
+  * `registerInitialRequest` 会把空闲态的首个 AR 请求延后一拍，以 `requestPc`
+  * 寄存器切断 PC 到外部 AXI 地址与 valid 的组合路径。
+  */
+class IFetchAXIAdapter(
+  addrWidth: Int = 32,
+  dataWidth: Int = 64,
+  registerInitialRequest: Boolean = false
+) extends Module {
   require(dataWidth == 32 || dataWidth == 64, s"IFetch only supports RV32/RV64 bus widths, got $dataWidth")
 
   val io = IO(new Bundle {
@@ -60,7 +69,7 @@ class IFetchAXIAdapter(addrWidth: Int = 32, dataWidth: Int = 64) extends Module 
   io.axi.w.bits.strb := 0.U
   io.axi.b.ready := false.B
   io.axi.ar.valid := false.B
-  io.axi.ar.bits.addr := beatAddr(io.pc)
+  io.axi.ar.bits.addr := beatAddr(requestPc)
   io.axi.ar.bits.size := log2Ceil(dataWidth / 8).U(3.W)
   io.axi.ar.bits.prot := "b100".U
   io.axi.r.ready := false.B
@@ -77,12 +86,16 @@ class IFetchAXIAdapter(addrWidth: Int = 32, dataWidth: Int = 64) extends Module 
           when(io.pc(1, 0).orR) {
             latchFault(io.pc, MemoryFaultReason.misaligned)
           }.otherwise {
-            io.axi.ar.valid := true.B
-            io.axi.ar.bits.addr := beatAddr(io.pc)
-            when(io.axi.ar.fire) {
-              state := sRWait
-            }.otherwise {
+            if (registerInitialRequest) {
               state := sArWait
+            } else {
+              io.axi.ar.valid := true.B
+              io.axi.ar.bits.addr := beatAddr(io.pc)
+              when(io.axi.ar.fire) {
+                state := sRWait
+              }.otherwise {
+                state := sArWait
+              }
             }
           }
         }

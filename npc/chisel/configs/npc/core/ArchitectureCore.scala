@@ -1,4 +1,4 @@
-package scpu
+package npc
 
 /** 已完成的 NPC ISA/XLEN 架构成品。
   *

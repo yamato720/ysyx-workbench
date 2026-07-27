@@ -1,8 +1,10 @@
-package scpu
+package npc
+
+import npc.ip.memory.MemoryFault
 
 import chisel3._
 import chisel3.util._
-import scpu.protocol._
+import npc.protocol._
 
 /** NPC 的取指、译码与架构派发。
   *
@@ -26,7 +28,11 @@ class NpcFrontend(config: NpcConfig) extends Module {
 
   val fetchDecodeReg = Module(new PipelineRegister(new FetchDecodePayload(cfg)))
   val programCounter = Module(new ProgramCounter(cfg.xlen, config.memory.resetVector))
-  val instructionFetchUnit = Module(new IFetchAXIAdapter(axiConfig.addrWidth, axiConfig.dataWidth))
+  val instructionFetchUnit = Module(new IFetchAXIAdapter(
+    axiConfig.addrWidth,
+    axiConfig.dataWidth,
+    config.pipeline.registerInitialFetchRequest
+  ))
   val decodeUnit = Module(new NpcDecodeUnit(cfg))
 
   val cycleCounter = if (debugEnabled) Some(RegInit(0.U(64.W))) else None

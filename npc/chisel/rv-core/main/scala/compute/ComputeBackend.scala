@@ -1,4 +1,4 @@
-package scpu
+package npc
 
 // 算子实现策略与算子本身放在一起，而非根配置层；模型和外部稳定适配器路径
 // 共用同一请求/响应约定。厂商 RTL 实现由对应平台组件提供。
@@ -11,7 +11,7 @@ object ComputeBackend {
   case object Builtin extends ComputeBackend { val name = "model" }
   case object DPI extends ComputeBackend { val name = "dpi" }
   case object IP extends ComputeBackend { val name = "ip" }
-  /** 可综合整数数据通路加严格 RISC-V 浮点邮箱回退。 */
+  /** 可综合的 FPGA 整数厂商 IP 数据通路。 */
   case object FPGA extends ComputeBackend { val name = "fpga" }
 }
 

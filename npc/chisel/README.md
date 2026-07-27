@@ -3,7 +3,7 @@
 | 目录 | 编译边界 | 职责 |
 | --- | --- | --- |
 | `rv-core/` | SBT `root` | NPC 流水线、公共协议、DPI 组件和单元测试 |
-| `fpga-harness/` | SBT `fpga` 或 Mill `ysyxsoc` | 裸 NPC/ysyxSoC 的 FPGA 系统与板卡 shell |
+| `../fpga/{common,u55c,zcu102}/scala/` | Mill `ysyxsoc` | 裸 NPC/ysyxSoC 的 FPGA 系统与板卡 shell |
 | `ysyxSoC/` | Mill `ysyxsoc` | Rocket/CDE/Diplomacy SoC 与教学外设 |
 | `configs/` | 按使用范围编入上述目标 | L1-L4 命名 Config、片段和参数数据 |
 
@@ -26,15 +26,12 @@ class U55cYsyxSocFpgaConfig extends CDEConfig(
   new U55cBoardConfig ++
     new FpgaConfig ++
     new YsyxElaborateConfig
-) with _root_.scpu.FpgaConstructionConfig with _root_.scpu.FpgaSocTerminalConfig {
-  override protected val configuredNemu = _root_.scpu.NemuHostConfig.U55cBase
-  override protected val configuredFpga = _root_.scpu.FpgaToolchainConfig.U55cBase
-}
+) with _root_.npc.U55cSocTerminal
 ```
 
 若要替换 SoC 内 NPC，只需将完成的 L1 Config 置于已有 SoC Config 左侧。板卡、频率、地址与算子
-路由由 `U55cBoardConfig` 或 `Zcu102BoardConfig` 的 CDE 图固定；器件和工具策略由终端直挂的
-`FpgaToolchainConfig` 固定。所有可选终端显式绑定 NEMU case class，避免 Make 根据 scope 或
-defconfig 名猜测运行宿主。
+路由由 `U55cBoardConfig` 或 `Zcu102BoardConfig` 的 CDE 图固定；器件、工具策略和 NEMU host 由
+根部终端预设提供完整默认值。所有内置 Config 和普通示例都只选择一个预设；显式自定义终端可按需
+重载 case class，同时仍由 backend 与板卡一致性检查约束。
 
 所有可复制特性、完整成品和 Make 发现规则见 [configs/README.md](configs/README.md)。

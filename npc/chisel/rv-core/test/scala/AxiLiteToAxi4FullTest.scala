@@ -1,7 +1,7 @@
-package scpu
+package npc
 
 import org.scalatest.flatspec.AnyFlatSpec
-import scpu.protocol.AxiLiteToAxi4Full
+import npc.protocol.AxiLiteToAxi4Full
 
 class AxiLiteToAxi4FullTest extends AnyFlatSpec {
   "AxiLiteToAxi4Full" should "elaborate a 32-bit AXI4-Full master port" in {

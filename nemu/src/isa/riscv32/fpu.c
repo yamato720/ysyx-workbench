@@ -214,12 +214,17 @@ bool riscv_f_exec(struct Decode *s) {
   switch (opcode) {
     case 0x07:
       if (rm_of(inst) == 2) {
-        write_fpr(rd_of(inst), vaddr_read(cpu.gpr[rs1_of(inst)] + imm_i(inst), 4)); return true;
+        const uint64_t address = cpu.gpr[rs1_of(inst)] + imm_i(inst);
+        const uint32_t value = vaddr_read(address, 4);
+        write_fpr(rd_of(inst), value); return true;
       }
       break;
     case 0x27:
       if (rm_of(inst) == 2) {
-        vaddr_write(cpu.gpr[rs1_of(inst)] + imm_s(inst), 4, fpr_raw(rs2_of(inst))); return true;
+        const uint64_t address = cpu.gpr[rs1_of(inst)] + imm_s(inst);
+        const uint32_t value = fpr_raw(rs2_of(inst));
+        vaddr_write(address, 4, value);
+        return true;
       }
       break;
     case 0x43: case 0x47: case 0x4b: case 0x4f:
@@ -234,7 +239,9 @@ bool riscv_f_exec(struct Decode *s) {
   return true;
 }
 
-void riscv_f_reset(void) { memset(cpu.fpr, 0, sizeof(cpu.fpr)); }
+void riscv_f_reset(void) {
+  memset(cpu.fpr, 0, sizeof(cpu.fpr));
+}
 
 #else
 
