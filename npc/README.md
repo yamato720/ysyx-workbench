@@ -28,6 +28,7 @@ make -C npc version
 make -C npc version config=SimulationConfig
 make -C npc version version=1
 make -C npc version D=1
+make -C npc version delete=1
 ```
 
 CPU 测试的正式运行入口位于 `am-kernels/tests/cpu-tests`：
@@ -51,21 +52,28 @@ make -C am-kernels/tests/cpu-tests run-bat ALL="forwarding matrix-mul fpu" \
 已保存构造的批测使用 `version=1,2,...`。只有尚无保存构造、用户明确要求按当前 Config 解析，或需要
 `build`/`rebuild` 创建或更新构造时，才使用 `config=<Config>` 作为执行选择器。
 
-`make version` 先显示已保存构造的属性位图与版本号，再显示当前 catalog 中所有可构造 Config；
-后者包含尚未 build 的 FPGA 终端。位图只标记是否为 FPGA，不重复显示板卡型号。`D=<序号>` 会直接
-删除对应保存构造，并将后续版本号紧凑重映射。
+`make version` 只读取构造目录中的 `version.tag` 和 `version.info`，不会刷新或解析 Scala catalog。
+它显示已有的 `constructions/<FQCN>/` 构造，不罗列尚未构造的 Config。属性位图固定为
+`Version RV32 RV64 M F Zicsr Pipe ID EX valid?`；`Arch` 以 `NPC`/`SoC` 显示，`RunningTime` 以
+`SIM`/`FPGA` 显示，最右侧 `Config` 为对应保存构造的短名。`valid?` 为 `+` 时该正式构造当前可运行；进行中的构造和缺少必要资产的构造保留显示
+但为空。`D=<序号>` 与 `delete=<序号>` 都会删除对应构造并紧凑重映射后续序号；同时给出时必须相同。
 
 ## 构造策略
 
 | 构造能力 | 由 `scope` 区分的目标 | 缺失时 | 已有构造的更新方式 |
 | --- | --- | --- | --- |
 | `check-only` | 只做 Scala/RTL 检查 | 不进入公开 Make 构造或运行入口 | 由测试直接调用 |
-| `run` | `npc`/`soc` 为本地仿真，`fpga` 为上板运行（由 `TARGET` 选择裸核或 SoC） | NPC/SoC 首次运行自动生成；FPGA 需 `build` | `rebuild` 原子重构硬件与运行宿主；仅更新 C/C++ 宿主用 `host-rebuild` |
+| `run` | `npc`/`soc` 为本地仿真，`fpga` 为上板运行（由 `TARGET` 选择裸核或 SoC） | NPC/SoC 首次运行自动生成；FPGA 需 `build` | `rebuild` 在同一 FQCN 目录重构硬件与运行宿主；仅更新 C/C++ 宿主用 `host-rebuild` |
 
-FPGA 的 `build` 只允许首次构造；`rebuild` 强制在临时目录完成实现、校验后原子替换。已有 FPGA
-构造不会因源码、Config 或工具变化自动重建；需要新硬件时必须显式执行 `rebuild`。旧资产的 SHA-256、
+FPGA 的首次构造需显式执行 `build`；已有 FPGA 构造不会因源码、Config 或工具变化自动重建，需要新硬件时
+必须显式执行 `rebuild`。`build` 和 `rebuild` 都直接使用稳定的 FQCN 目录，开始时会清理该目录中旧 ABI、
+RTL、FPGA 资产和运行产物；中断或失败后目录会保留为无效状态，可直接重试 `build` 或 `rebuild`。旧资产的 SHA-256、
 终端 FQCN、板卡、XRT 平台、host ABI 或 mailbox 协议不兼容时
 始终硬失败。
+
+`make build config=<Config>` 只允许首次构造，或修复 `valid?` 为空的 `building`、`interrupted`、`failed`
+和缺资产构造；它会沿用同一个版本号和 FQCN 目录。`valid?=+` 的构造会被 `build` 明确拒绝，必须使用
+`make rebuild config=<Config>` 替换硬件 ABI。
 
 普通 `run`/`run-bat` 只验证并直接执行已保存的 `abi/nemu/nemu-exec`，不会启动 NEMU Make。运行宿主的
 C/C++ 和 menuconfig 增量依赖只在 `host-rebuild` 或运行入口的 `host-rebuild=1` 时运行，并原子替换
@@ -82,38 +90,44 @@ constructions/
   npc.SimulationConfig/
     construction.env
     profile.env
+    version.tag
+    version.info
     abi/{rtl,verilator,nemu,softfloat,glue}/
     logs/
     runtime/<test>/<timestamp-ns>-<pid>/{performance.html,instructions.html,pipeline.html,wave-*.vcd}
   npc.fpga.u55c.U55cYsyxSocFpgaConfig/
     construction.env
     profile.env
+    version.tag
+    version.info
     abi/{nemu,protocol}/
     fpga/{rtl,ip-generated,synth,link,artifacts}/
     logs/
 ```
 
-首次成功构造分配从 `1` 开始的连续版本序号。同一个 Config 重构时保留版本序号和
+首次构造开始时分配从 `1` 开始的连续版本序号，并以 `version.tag` 的 `building` 状态立即可见。同一个
+Config 重构时保留版本序号和
 `CREATED_AT`，更新 `UPDATED_AT`、`REBUILD_COUNT` 和 Config 固定的 ABI；`make version D=<序号>` 删除后会将
 后续版本紧凑重映射。内部时间 ID 仅用于并发安全和
-迁移排序，不是 Make 接口。构造在 `.staging-*` 完成；成功后最新一次的 Chisel、SoftFloat、Verilator、
-FPGA 和 NEMU host 原始输出分别保存在 `logs/build/<阶段>.log` 与 `logs/host/nemu-host.log`，并随构造
-原子发布。每类只保留最新日志。失败构造写入 `.failed/<FQCN>/<build|host>/`，旧目录和其 ABI 保持不变。
+迁移排序，不是 Make 接口。从创建到完成，构造始终直接使用 `constructions/<FQCN>/`；目录名不会因
+`build`、`rebuild`、完成或中断而变化。最新一次的 Chisel、SoftFloat、Verilator、FPGA 和 NEMU host 原始输出
+分别保存在 `logs/build/<阶段>.log` 与 `logs/host/nemu-host.log`。每类只保留最新日志；失败的关键证据另存
+在 `.failed/<FQCN>/<build|host>/`，同名构造目录保留失败状态和已生成的 RTL/FPGA 中间产物。
 所有 Vivado 参与的 FPGA IP、综合和链接阶段仍实时输出；其余历史工具输出只显示阶段进度，并写入对应日志。
 交互终端中，实时阶段若连续一秒没有新输出，会显示不写入日志的流水灯，收到下一条工具输出时立即清除。
 算术 IP 的 Tcl 还会在 `fpga/ip-generated/logs/npc_int_multiplier_ip.log` 与
 `fpga/ip-generated/logs/npc_int_divider_ip.log` 分别保存参数、复用/生成动作和最终属性报告。
 
-构造 staging 目录带 `.incomplete`，host、RTL 和资产校验完成后改写为 `.complete`，随后才原子发布。
-`make version` 的已保存构造表只读取完成的正式快照；可构造 Config 表仅在 Scala Config 源码比 catalog
-更新时刷新。它不等待正在进行的长构造；FPGA 完成态还要求 U55C 的平台限定 `xclbin` 或 ZCU102 的 `npc.bit`
-实际存在且非空。完整 manifest/SHA 校验仍在构造发布和运行预检执行，避免静态版本查询反复读取大文件。
-只有旧构造尚未补齐一次性版本迁移元数据时才等待全局锁。`config-list`、`build` 和按当前 Config 解析的
-运行仍会刷新 Scala 目录。
+构造目录带 `.incomplete`，并在启动时立即写入 `version.info` 与状态为 `building` 的 `version.tag`；这两个
+索引文件与生成 RTL 位于同一稳定目录。host、RTL 和资产校验完成后标签改为 `complete`；中断或失败则改为
+`interrupted` 或 `failed`。`make version` 不等待正在进行的长构造；它扫描这些索引文件，并以轻量检查将缺少
+U55C 平台限定 `xclbin`、ZCU102 `npc.bit` 或保存 host 的构造显示为无效。完整 manifest/SHA 校验仍在运行预检
+执行。只有旧构造尚未补齐索引文件时才等待全局锁并从保存 metadata 迁移，迁移不调用 Scala。`config-list`、
+`build` 和按当前 Config 解析的运行仍会刷新 Scala 目录。
 
 版本主表用 `+`/空白属性位图代替长 Config 名称：XLEN 分为 RV32/RV64，ISA 显示 M/F/Zicsr，流水线
-固定显示 Pipe/ID/EX 三格，随后显示 NPC/SoC/FPGA 目标。板卡信息由 Config 名称表达，不在位图重复显示。
-Config 短名在第二张“版本 → Config”表中单独列出，第三张表列出当前所有可构造 Config，便于比较硬件差异。
+固定显示 Pipe/ID/EX 三格，随后显示 `valid?`。`Arch` 和 `RunningTime` 使用文本，分别表达 NPC/SoC 与
+SIM/FPGA；最右侧 `Config` 显示保存的 Config 短名，不再输出额外名称映射或可构造 Config 表。
 
 NEMU host 的 `performanceHtml` 可选项会在运行结束时写入
 `runtime/<test>/<timestamp-ns>-<pid>/performance.html`。它是报告主页，包含总体 CPI/IPC/MIPS、宿主耗时、

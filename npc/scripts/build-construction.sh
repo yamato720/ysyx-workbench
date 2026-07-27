@@ -70,6 +70,11 @@ refresh_host() {
 
 dry_run() {
   local total
+  if [[ -n ${CONSTRUCTION_TEST_HOLD_DIR:-} ]]; then
+    mkdir -p "$CONSTRUCTION_TEST_HOLD_DIR"
+    : > "$CONSTRUCTION_TEST_HOLD_DIR/ready"
+    while [[ ! -e $CONSTRUCTION_TEST_HOLD_DIR/release ]]; do sleep 0.02; done
+  fi
   case "$CAPABILITY:$SCOPE" in
     generate-only:npc|generate-only:soc)
       total=1

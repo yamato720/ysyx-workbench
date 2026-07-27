@@ -28,7 +28,7 @@ phase_log_tool="$npc_root/scripts/phase-log.sh"
 artifact_tool="$npc_root/fpga/common/scripts/artifact-manifest.sh"
 mkdir -p "$root/.profiles" "$root/.failed"
 catalog_ready=${NPC_CONFIG_CATALOG_READY:-0}
-profile_format=10
+profile_format=16
 profile_inputs_fingerprint_cache=''
 [[ $catalog_ready == 0 || $catalog_ready == 1 ]] || { echo "NPC_CONFIG_CATALOG_READY 只能是 0 或 1" >&2; exit 2; }
 
@@ -152,7 +152,7 @@ migrate_config_names_locked() {
 
 migrate_profile_mode() {
   local file=$1 capability scope board replacement normalized_scope temporary inferred_preset host_backend host_devices
-  local saved_host_config saved_preset preset pipeline_html performance_html
+  local saved_host_config saved_preset preset pipeline_html performance_html integer_execute_stages serial_execute_stages register_initial_fetch_request separate_serial_integer_alu serial_execute_result_forwarding divider_non_blocking needs_divider_non_blocking
   [[ -f $file ]] || return 0
   capability=$(value "$file" CAPABILITY)
   scope=$(value "$file" SCOPE)
@@ -174,27 +174,88 @@ migrate_profile_mode() {
   fi
   pipeline_html=$(value "$file" NEMU_PIPELINE_HTML)
   performance_html=$(value "$file" NEMU_PERFORMANCE_HTML)
+  integer_execute_stages=$(value "$file" INTEGER_EXECUTE_STAGES)
+  [[ -n $integer_execute_stages ]] || integer_execute_stages=1
+  [[ $integer_execute_stages == 1 || $integer_execute_stages == 2 ]] || {
+    echo "保存 profile 的 INTEGER_EXECUTE_STAGES 非法：$file（$integer_execute_stages）" >&2
+    exit 1
+  }
+  serial_execute_stages=$(value "$file" SERIAL_EXECUTE_STAGES)
+  [[ -n $serial_execute_stages ]] || serial_execute_stages=1
+  [[ $serial_execute_stages == 1 || $serial_execute_stages == 2 || $serial_execute_stages == 3 ]] || {
+    echo "保存 profile 的 SERIAL_EXECUTE_STAGES 非法：$file（$serial_execute_stages）" >&2
+    exit 1
+  }
+  register_initial_fetch_request=$(value "$file" REGISTER_INITIAL_FETCH_REQUEST)
+  [[ -n $register_initial_fetch_request ]] || register_initial_fetch_request=0
+  [[ $register_initial_fetch_request == 0 || $register_initial_fetch_request == 1 ]] || {
+    echo "保存 profile 的 REGISTER_INITIAL_FETCH_REQUEST 非法：$file（$register_initial_fetch_request）" >&2
+    exit 1
+  }
+  separate_serial_integer_alu=$(value "$file" SEPARATE_SERIAL_INTEGER_ALU)
+  [[ -n $separate_serial_integer_alu ]] || separate_serial_integer_alu=0
+  [[ $separate_serial_integer_alu == 0 || $separate_serial_integer_alu == 1 ]] || {
+    echo "保存 profile 的 SEPARATE_SERIAL_INTEGER_ALU 非法：$file（$separate_serial_integer_alu）" >&2
+    exit 1
+  }
+  serial_execute_result_forwarding=$(value "$file" SERIAL_EXECUTE_RESULT_FORWARDING)
+  [[ -n $serial_execute_result_forwarding ]] || serial_execute_result_forwarding=1
+  [[ $serial_execute_result_forwarding == 0 || $serial_execute_result_forwarding == 1 ]] || {
+    echo "保存 profile 的 SERIAL_EXECUTE_RESULT_FORWARDING 非法：$file（$serial_execute_result_forwarding）" >&2
+    exit 1
+  }
+  needs_divider_non_blocking=0
+  [[ $normalized_scope == fpga ]] && needs_divider_non_blocking=1
+  divider_non_blocking=$(value "$file" FPGA_DIVIDER_NON_BLOCKING)
+  [[ -n $divider_non_blocking ]] || divider_non_blocking=0
+  [[ $divider_non_blocking == 0 || $divider_non_blocking == 1 ]] || {
+    echo "保存 profile 的 FPGA_DIVIDER_NON_BLOCKING 非法：$file（$divider_non_blocking）" >&2
+    exit 1
+  }
   [[ $pipeline_html == 1 ]] && performance_html=1
   [[ $performance_html == 0 || $performance_html == 1 ]] || performance_html=0
   [[ $replacement != "$capability" || $normalized_scope != "$scope" ||
     $(value "$file" PROFILE_FORMAT) != "$profile_format" || -z $(value "$file" NEMU_PERFORMANCE_HTML) ||
-    -z $saved_preset || -n $saved_host_config ]] || return 0
+    -z $saved_preset || -n $saved_host_config || -z $(value "$file" INTEGER_EXECUTE_STAGES) ||
+    -z $(value "$file" SERIAL_EXECUTE_STAGES) ||
+    -z $(value "$file" REGISTER_INITIAL_FETCH_REQUEST) ||
+    -z $(value "$file" SEPARATE_SERIAL_INTEGER_ALU) ||
+    -z $(value "$file" SERIAL_EXECUTE_RESULT_FORWARDING) ]] ||
+    [[ $needs_divider_non_blocking == 0 || -n $(value "$file" FPGA_DIVIDER_NON_BLOCKING) ]] || return 0
 
   # 已经带完整 NEMU host 字段的保存 profile 只升级格式并补新字段，不能根据
   # backend 重新推断 preset，否则流水线 preset 会被错误降级为普通 local preset。
   if [[ -n $saved_preset || -n $saved_host_config ]]; then
     temporary=$(mktemp "$file.profile-migration.XXXXXX")
     awk -v capability="$replacement" -v scope="$normalized_scope" \
-      -v profile_format="$profile_format" -v performance_html="$performance_html" -v preset="$preset" '
+      -v profile_format="$profile_format" -v performance_html="$performance_html" -v preset="$preset" \
+      -v integer_execute_stages="$integer_execute_stages" \
+      -v serial_execute_stages="$serial_execute_stages" \
+      -v register_initial_fetch_request="$register_initial_fetch_request" \
+      -v separate_serial_integer_alu="$separate_serial_integer_alu" \
+      -v serial_execute_result_forwarding="$serial_execute_result_forwarding" \
+      -v divider_non_blocking="$divider_non_blocking" -v needs_divider_non_blocking="$needs_divider_non_blocking" '
       /^PROFILE_FORMAT=/ { print "PROFILE_FORMAT=" profile_format; next }
       /^CAPABILITY=/ { print "CAPABILITY=" capability; next }
       /^SCOPE=/ { print "SCOPE=" scope; next }
       /^NEMU_CONFIG_FQCN=/ { next }
       /^NEMU_PRESET=/ { if (!preset_seen++) print "NEMU_PRESET=" preset; next }
       /^NEMU_PERFORMANCE_HTML=/ { next }
+      /^INTEGER_EXECUTE_STAGES=/ { if (!integer_execute_stages_seen++) print "INTEGER_EXECUTE_STAGES=" integer_execute_stages; next }
+      /^SERIAL_EXECUTE_STAGES=/ { if (!serial_execute_stages_seen++) print "SERIAL_EXECUTE_STAGES=" serial_execute_stages; next }
+      /^REGISTER_INITIAL_FETCH_REQUEST=/ { if (!register_initial_fetch_request_seen++) print "REGISTER_INITIAL_FETCH_REQUEST=" register_initial_fetch_request; next }
+      /^SEPARATE_SERIAL_INTEGER_ALU=/ { if (!separate_serial_integer_alu_seen++) print "SEPARATE_SERIAL_INTEGER_ALU=" separate_serial_integer_alu; next }
+      /^SERIAL_EXECUTE_RESULT_FORWARDING=/ { if (!serial_execute_result_forwarding_seen++) print "SERIAL_EXECUTE_RESULT_FORWARDING=" serial_execute_result_forwarding; next }
+      /^FPGA_DIVIDER_NON_BLOCKING=/ { if (needs_divider_non_blocking && !divider_non_blocking_seen++) print "FPGA_DIVIDER_NON_BLOCKING=" divider_non_blocking; next }
       { print }
       END {
         if (!preset_seen) print "NEMU_PRESET=" preset
+        if (!integer_execute_stages_seen) print "INTEGER_EXECUTE_STAGES=" integer_execute_stages
+        if (!serial_execute_stages_seen) print "SERIAL_EXECUTE_STAGES=" serial_execute_stages
+        if (!register_initial_fetch_request_seen) print "REGISTER_INITIAL_FETCH_REQUEST=" register_initial_fetch_request
+        if (!separate_serial_integer_alu_seen) print "SEPARATE_SERIAL_INTEGER_ALU=" separate_serial_integer_alu
+        if (!serial_execute_result_forwarding_seen) print "SERIAL_EXECUTE_RESULT_FORWARDING=" serial_execute_result_forwarding
+        if (needs_divider_non_blocking && !divider_non_blocking_seen) print "FPGA_DIVIDER_NON_BLOCKING=" divider_non_blocking
         print "NEMU_PERFORMANCE_HTML=" performance_html
       }
     ' "$file" > "$temporary"
@@ -207,6 +268,12 @@ migrate_profile_mode() {
     /^PROFILE_FORMAT=/ { print "PROFILE_FORMAT=" profile_format; next }
     /^CAPABILITY=/ { print "CAPABILITY=" capability; next }
     /^SCOPE=/ { print "SCOPE=" scope; next }
+    /^INTEGER_EXECUTE_STAGES=/ { next }
+    /^SERIAL_EXECUTE_STAGES=/ { next }
+    /^REGISTER_INITIAL_FETCH_REQUEST=/ { next }
+    /^SEPARATE_SERIAL_INTEGER_ALU=/ { next }
+    /^SERIAL_EXECUTE_RESULT_FORWARDING=/ { next }
+    /^FPGA_DIVIDER_NON_BLOCKING=/ { next }
     /^NEMU_(CONFIG_FQCN|PRESET|BACKEND|TRACE|WATCHPOINT|VCD|PERFORMANCE_HTML|PIPELINE_HTML|NPC_DIFFTEST|DEVICES|OPTIMIZATION|DEBUG|LTO|ASAN)=/ { next }
     { print }
   ' "$file" > "$temporary"
@@ -224,6 +291,12 @@ migrate_profile_mode() {
     echo 'NEMU_DEBUG=0'
     echo 'NEMU_LTO=0'
     echo 'NEMU_ASAN=0'
+    echo "INTEGER_EXECUTE_STAGES=$integer_execute_stages"
+    echo "SERIAL_EXECUTE_STAGES=$serial_execute_stages"
+    echo "REGISTER_INITIAL_FETCH_REQUEST=$register_initial_fetch_request"
+    echo "SEPARATE_SERIAL_INTEGER_ALU=$separate_serial_integer_alu"
+    echo "SERIAL_EXECUTE_RESULT_FORWARDING=$serial_execute_result_forwarding"
+    if [[ $needs_divider_non_blocking == 1 ]]; then echo "FPGA_DIVIDER_NON_BLOCKING=$divider_non_blocking"; fi
   } >> "$temporary"
   mv "$temporary" "$file"
 }
@@ -341,10 +414,26 @@ construction_environments() {
     cut -f2-
 }
 
+# 版本索引文件是 make version 的唯一数据源。这里保留 construction.env 的扫描，
+# 仅用于把旧保存构造迁移到该格式；它不参与正常的列表和选择。
+final_construction_environments() {
+  local directory
+  while IFS= read -r file; do
+    directory=$(dirname "$file")
+    case "$(basename "$directory")" in
+      .*|staging-*|.previous-*) continue ;;
+    esac
+    [[ -f $directory/profile.env ]] || continue
+    printf '%s\t%s\n' "$(value "$file" CONSTRUCTION_ID)" "$file"
+  done < <(find "$root" -mindepth 2 -maxdepth 2 -name construction.env -print) |
+    LC_ALL=C sort -t $'\t' -k1,1 -k2,2 |
+    cut -f2-
+}
+
 construction_is_complete() {
   local directory=$1 profile scope board platform artifact host_abi
   case "$(basename "$directory")" in
-    .staging-*|.previous-*) return 1 ;;
+    .staging-*|staging-*|.previous-*) return 1 ;;
   esac
   [[ -f $directory/construction.env && -f $directory/profile.env && ! -e $directory/.incomplete ]] || return 1
   if [[ -f $directory/.complete ]]; then
@@ -393,6 +482,202 @@ mark_construction_complete() {
   rm -f "$directory/.incomplete"
 }
 
+version_tag_file() {
+  printf '%s/version.tag\n' "$1"
+}
+
+version_info_file() {
+  printf '%s/version.info\n' "$1"
+}
+
+version_index_from_tag() {
+  local index
+  index=$(value "$(version_tag_file "$1")" VERSION_INDEX)
+  require_version_index "$index"
+  printf '%s\n' "$index"
+}
+
+version_state_from_tag() {
+  local state
+  state=$(value "$(version_tag_file "$1")" STATE)
+  [[ $state == building || $state == complete || $state == failed || $state == interrupted ]] || {
+    echo "版本标签状态非法：$1（$state）" >&2
+    exit 1
+  }
+  printf '%s\n' "$state"
+}
+
+write_version_tag() {
+  local directory=$1 version_index=$2 state=$3 file temporary
+  require_version_index "$version_index"
+  [[ $state == building || $state == complete || $state == failed || $state == interrupted ]] || {
+    echo "无法写入未知版本标签状态：$state" >&2
+    exit 2
+  }
+  file=$(version_tag_file "$directory")
+  temporary=$(mktemp "$directory/.version.tag.XXXXXX")
+  {
+    echo 'VERSION_TAG_FORMAT=1'
+    echo "VERSION_INDEX=$version_index"
+    echo "STATE=$state"
+  } > "$temporary"
+  mv "$temporary" "$file"
+}
+
+write_version_info() {
+  local directory=$1 profile=$2 version_index=$3 temporary fqcn short target scope arch running_time xlen rv32=0 rv64=0
+  require_version_index "$version_index"
+  fqcn=$(value "$profile" CONFIG_FQCN)
+  [[ -n $fqcn ]] || { echo "构造缺少 CONFIG_FQCN：$profile" >&2; exit 1; }
+  short=$(value "$profile" CONFIG_SHORT_NAME)
+  [[ -n $short ]] || short=${fqcn##*.}
+  target=$(value "$profile" TARGET)
+  scope=$(value "$profile" SCOPE)
+  case "$target" in
+    NPC) arch=NPC ;;
+    SOC) arch=SoC ;;
+    *) echo "构造 TARGET 非法：$profile（$target）" >&2; exit 1 ;;
+  esac
+  case "$scope" in
+    fpga) running_time=FPGA ;;
+    npc|soc) running_time=SIM ;;
+    *) echo "构造 SCOPE 非法：$profile（$scope）" >&2; exit 1 ;;
+  esac
+  xlen=$(value "$profile" XLEN)
+  [[ $xlen == 32 ]] && rv32=1
+  [[ $xlen == 64 ]] && rv64=1
+  temporary=$(mktemp "$directory/.version.info.XXXXXX")
+  {
+    echo 'VERSION_INFO_FORMAT=1'
+    echo "VERSION_INDEX=$version_index"
+    echo "CONFIG_FQCN=$fqcn"
+    echo "CONFIG_SHORT_NAME=$short"
+    echo "RV32=$rv32"
+    echo "RV64=$rv64"
+    echo "M=$(value "$profile" M)"
+    echo "F=$(value "$profile" F)"
+    echo "ZICSR=$(value "$profile" ZICSR)"
+    echo "PIPE=$(value "$profile" PIPELINE)"
+    echo "ID=$(value "$profile" ID_FWD)"
+    echo "EX=$(value "$profile" EX_FWD)"
+    echo "ARCH=$arch"
+    echo "RUNNING_TIME=$running_time"
+  } > "$temporary"
+  mv "$temporary" "$(version_info_file "$directory")"
+}
+
+write_pending_version_info() {
+  local directory=$1 fqcn=$2 scope=$3 target=$4 version_index=$5 temporary short arch running_time
+  require_version_index "$version_index"
+  short=${fqcn##*.}
+  case "$target" in
+    NPC) arch=NPC ;;
+    SOC) arch=SoC ;;
+    *) echo "构造 TARGET 非法：$fqcn（$target）" >&2; exit 1 ;;
+  esac
+  case "$scope" in
+    fpga) running_time=FPGA ;;
+    npc|soc) running_time=SIM ;;
+    *) echo "构造 SCOPE 非法：$fqcn（$scope）" >&2; exit 1 ;;
+  esac
+  temporary=$(mktemp "$directory/.version.info.XXXXXX")
+  {
+    echo 'VERSION_INFO_FORMAT=1'
+    echo "VERSION_INDEX=$version_index"
+    echo "CONFIG_FQCN=$fqcn"
+    echo "CONFIG_SHORT_NAME=$short"
+    echo 'RV32=0'
+    echo 'RV64=0'
+    echo 'M=0'
+    echo 'F=0'
+    echo 'ZICSR=0'
+    echo 'PIPE=0'
+    echo 'ID=0'
+    echo 'EX=0'
+    echo "ARCH=$arch"
+    echo "RUNNING_TIME=$running_time"
+  } > "$temporary"
+  mv "$temporary" "$(version_info_file "$directory")"
+}
+
+prepare_stable_construction_directory() {
+  local directory=$1 fqcn=$2
+  rm -rf "$directory/abi" "$directory/fpga" "$directory/logs" "$directory/runtime"
+  rm -f "$directory/profile.env" "$directory/construction.env" "$directory/.complete"
+  mkdir -p "$directory/logs/build"
+  {
+    echo 'CONSTRUCTION_INCOMPLETE=1'
+    echo "CONFIG_FQCN=$fqcn"
+    echo "STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  } > "$directory/.incomplete"
+}
+
+migrate_legacy_staging_locked() {
+  local directory profile fqcn target index
+  while IFS= read -r directory; do
+    profile="$directory/profile.env"
+    [[ -f $profile ]] || continue
+    fqcn=$(value "$profile" CONFIG_FQCN)
+    target="$root/$fqcn"
+    [[ -n $fqcn && ! -e $target ]] || continue
+    index=$(next_version_index)
+    mv "$directory" "$target"
+    [[ -f $target/.incomplete ]] || {
+      {
+        echo 'CONSTRUCTION_INCOMPLETE=1'
+        echo "CONFIG_FQCN=$fqcn"
+        echo "STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      } > "$target/.incomplete"
+    }
+    write_version_info "$target" "$target/profile.env" "$index"
+    write_version_tag "$target" "$index" interrupted
+    echo "已迁移中断构造到稳定目录：$fqcn" >&2
+  done < <(find "$root" -mindepth 1 -maxdepth 1 -type d \( -name '.staging-*' -o -name 'staging-*' \) -print | LC_ALL=C sort)
+}
+
+write_version_info_index() {
+  local directory=$1 version_index=$2 file temporary
+  require_version_index "$version_index"
+  file=$(version_info_file "$directory")
+  temporary=$(mktemp "$directory/.version.info-index.XXXXXX")
+  awk -v version_index="$version_index" '
+    /^VERSION_INDEX=/ { print "VERSION_INDEX=" version_index; seen = 1; next }
+    { print }
+    END { if (!seen) print "VERSION_INDEX=" version_index }
+  ' "$file" > "$temporary"
+  mv "$temporary" "$file"
+}
+
+version_directory_is_final() {
+  local directory=$1
+  [[ $(dirname "$directory") == "$root" ]] || return 1
+  case "$(basename "$directory")" in
+    .*|staging-*|.previous-*) return 1 ;;
+  esac
+  return 0
+}
+
+version_metadata_directories() {
+  local tag directory
+  while IFS= read -r tag; do
+    directory=$(dirname "$tag")
+    [[ -f $(version_info_file "$directory") ]] || {
+      echo "构造版本标签缺少信息文件：$directory" >&2
+      exit 1
+    }
+    if version_directory_is_final "$directory"; then
+      printf '%s\n' "$directory"
+    fi
+  done < <(find "$root" -mindepth 2 -maxdepth 2 -name version.tag -type f -print | LC_ALL=C sort)
+}
+
+version_directory_is_valid() {
+  local directory=$1
+  version_directory_is_final "$directory" || return 1
+  [[ $(version_state_from_tag "$directory") == complete ]] || return 1
+  construction_is_complete "$directory"
+}
+
 write_version_index() {
   local file=$1 version_index=$2 temporary
   temporary=$(mktemp "$file.version-index.XXXXXX")
@@ -421,10 +706,12 @@ strip_legacy_metadata() {
 }
 
 # VERSION_INDEX 是用户可见的紧凑序号。重构保持原序号；删除后会按当前版本顺序
-# 压缩后续序号。旧构造没有该字段时，首次访问构造库会按内部时间 ID 的顺序补齐。
+# 压缩后续序号。旧构造没有标签时，首次访问构造库会按内部时间 ID 的顺序补齐。
 migrate_version_indexes_locked() {
   local file index next=1
   local -A used=()
+
+  migrate_config_names_locked
 
   while IFS= read -r file; do
     index=$(value "$file" VERSION_INDEX)
@@ -432,7 +719,7 @@ migrate_version_indexes_locked() {
     require_version_index "$index"
     [[ -z ${used[$index]+present} ]] || { echo "版本序号 $index 重复，构造库已损坏" >&2; exit 1; }
     used[$index]=present
-  done < <(construction_environments)
+  done < <(final_construction_environments)
 
   while IFS= read -r file; do
     index=$(value "$file" VERSION_INDEX)
@@ -441,9 +728,7 @@ migrate_version_indexes_locked() {
     write_version_index "$file" "$next"
     used[$next]=present
     ((next++))
-  done < <(construction_environments)
-
-  migrate_config_names_locked
+  done < <(final_construction_environments)
 
   # 已保存构造仅保留可读的来源记录；旧版的摘要和工具链探测结果不再参与
   # 任何构造决策，迁移时一并移除，避免误导为仍会自动重构。
@@ -452,37 +737,58 @@ migrate_version_indexes_locked() {
     migrate_profile_mode "$(dirname "$file")/profile.env"
     migrate_construction_mode "$file"
     migrate_host_metadata "$file"
-  done < <(construction_environments)
+  done < <(final_construction_environments)
+
+  # version.tag/version.info 是版本浏览的完整快照；从旧 metadata 迁移时绝不
+  # 查询 Scala catalog。无 .incomplete 的历史正式目录按完成状态导入，当前资产
+  # 缺失会由 valid? 的轻量校验显示为无效，而不会从列表消失。
+  while IFS= read -r file; do
+    local directory state
+    directory=$(dirname "$file")
+    index=$(value "$file" VERSION_INDEX)
+    state=complete
+    [[ -e $directory/.incomplete ]] && state=building
+    write_version_info "$directory" "$directory/profile.env" "$index"
+    write_version_tag "$directory" "$index" "$state"
+  done < <(final_construction_environments)
+
+  migrate_legacy_staging_locked
 }
 
 next_version_index() {
-  local file index maximum=0
-  while IFS= read -r file; do
-    index=$(value "$file" VERSION_INDEX)
+  local directory index maximum=0
+  while IFS= read -r directory; do
+    index=$(version_index_from_tag "$directory")
     require_version_index "$index"
     (( index > maximum )) && maximum=$index
-  done < <(construction_environments)
+  done < <(version_metadata_directories)
   printf '%s\n' "$((maximum + 1))"
 }
 
-versioned_construction_environments() {
-  local file index
-  while IFS= read -r file; do
-    index=$(value "$file" VERSION_INDEX)
+versioned_final_directories() {
+  local directory index
+  while IFS= read -r directory; do
+    version_directory_is_final "$directory" || continue
+    index=$(version_index_from_tag "$directory")
     require_version_index "$index"
-    printf '%020d\t%s\n' "$index" "$file"
-  done < <(construction_environments) |
+    printf '%020d\t%s\n' "$index" "$directory"
+  done < <(version_metadata_directories) |
     LC_ALL=C sort -t $'\t' -k1,1n -k2,2 |
     cut -f2-
 }
 
 reindex_version_indexes_locked() {
-  local file index next=1
-  while IFS= read -r file; do
-    index=$(value "$file" VERSION_INDEX)
-    [[ $index == "$next" ]] || write_version_index "$file" "$next"
+  local directory index state next=1
+  while IFS= read -r directory; do
+    index=$(version_index_from_tag "$directory")
+    if [[ $index != "$next" ]]; then
+      state=$(version_state_from_tag "$directory")
+      write_version_info_index "$directory" "$next"
+      write_version_tag "$directory" "$next" "$state"
+      [[ ! -f $directory/construction.env ]] || write_version_index "$directory/construction.env" "$next"
+    fi
     ((next++))
-  done < <(versioned_construction_environments)
+  done < <(versioned_final_directories)
 }
 
 ensure_version_indexes() {
@@ -491,19 +797,21 @@ ensure_version_indexes() {
   migrate_version_indexes_locked
 }
 
-# `build` 持有全局锁的时间覆盖完整 Chisel/Verilator/Vivado 流程，但 version/resolve
-# 只读取已经原子发布的构造。构造中的 staging 目录没有 construction.env，因此读取已
-# 发布快照不会看到半成品，也不应被长流程阻塞。只有发现旧库尚未补齐版本序号时才等待
-# 锁并执行一次迁移。
+# `build` 持有全局锁的时间覆盖完整 Chisel/Verilator/Vivado 流程。version 只读取
+# 最终 FQCN 目录的 tag/info，因此构造从创建到结束始终使用同一个可见目录名。
+# 只有旧正式构造还没有索引文件时才等待锁并执行一次文件迁移。
 published_indexes_complete() {
-  local file index
+  local file directory index tag_index
   local -A seen=()
   while IFS= read -r file; do
+    directory=$(dirname "$file")
+    [[ -f $(version_tag_file "$directory") && -f $(version_info_file "$directory") ]] || return 1
+    tag_index=$(value "$(version_tag_file "$directory")" VERSION_INDEX)
     index=$(value "$file" VERSION_INDEX)
-    [[ $index =~ ^[1-9][0-9]*$ ]] || return 1
+    [[ $index =~ ^[1-9][0-9]*$ && $index == "$tag_index" ]] || return 1
     [[ -z ${seen[$index]+present} ]] || return 1
     seen[$index]=1
-  done < <(construction_environments)
+  done < <(final_construction_environments)
   return 0
 }
 
@@ -618,11 +926,22 @@ profile_for() {
 }
 
 construction_by_version() {
-  local index=$1 matches=()
+  local directory
+  directory=$(final_construction_by_version "$1")
+  version_directory_is_valid "$directory" || {
+    echo "版本序号 $1 当前不可运行" >&2
+    exit 1
+  }
+  printf '%s\n' "$directory"
+}
+
+final_construction_by_version() {
+  local index=$1 directory matches=()
   require_version_index "$index"
-  while IFS= read -r file; do
-    [[ $(value "$file" VERSION_INDEX) == "$index" ]] && matches+=("$(dirname "$file")")
-  done < <(construction_environments)
+  while IFS= read -r directory; do
+    version_directory_is_final "$directory" || continue
+    [[ $(version_index_from_tag "$directory") == "$index" ]] && matches+=("$directory")
+  done < <(version_metadata_directories)
   [[ ${#matches[@]} == 1 ]] || {
     if [[ ${#matches[@]} == 0 ]]; then echo "版本序号 $index 不存在" >&2; else echo "版本序号 $index 重复，构造库已损坏" >&2; fi
     exit 1
@@ -727,46 +1046,53 @@ next_id() {
 }
 
 do_build_locked() {
-  local request=$1 force=$2 resolved scope board target profile fqcn retry_config capability final stage old_id version_index created rebuild_count now log backup failed_dir
+  local request=$1 force=$2 resolved scope board target profile fqcn retry_config capability final stage old_id version_index created rebuild_count now log failed_dir
   migrate_version_indexes_locked
   resolved=$(resolve_catalog "$request")
   IFS='|' read -r fqcn scope board target <<< "$resolved"
   final="$root/$fqcn"
-  if [[ -d $final && $force != 1 ]]; then
+  if [[ -d $final && $force != 1 ]] && version_directory_is_valid "$final"; then
     if [[ $scope == fpga ]]; then
       verify_assets "$final"
     fi
-    echo "复用已保存构造：$fqcn；需要重新生成请执行 make -C $npc_root rebuild config=$(config_short_name "$fqcn")。"
-    return 0
+    echo "构造已有效：$fqcn；make build 只允许创建或修复无效构造。需要重新生成请执行 make -C $npc_root rebuild config=$(config_short_name "$fqcn")。" >&2
+    return 1
   fi
-  profile=$(profile_for "$fqcn" 1)
-  capability=$(value "$profile" CAPABILITY)
-  [[ $capability != check-only ]] || { echo "$fqcn 是检查 Config，不能构造" >&2; exit 2; }
   old_id=''
   version_index=''
   created=''
   rebuild_count=0
   if [[ -f $final/construction.env ]]; then
     old_id=$(value "$final/construction.env" CONSTRUCTION_ID)
-    version_index=$(value "$final/construction.env" VERSION_INDEX)
     created=$(value "$final/construction.env" CREATED_AT)
     rebuild_count=$(value "$final/construction.env" REBUILD_COUNT)
+  fi
+  if [[ -f $(version_tag_file "$final") ]]; then
+    version_index=$(version_index_from_tag "$final")
   fi
   [[ -n $old_id ]] || old_id=$(next_id)
   [[ -n $version_index ]] || version_index=$(next_version_index)
   [[ -n $created ]] || created=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   rebuild_count=$(( ${rebuild_count:-0} + 1 ))
-  [[ ! -d $final ]] && rebuild_count=0
-  stage="$root/.staging-$fqcn-$$"
-  rm -rf "$stage"
-  mkdir -p "$stage/logs/build"
-  {
-    echo 'CONSTRUCTION_INCOMPLETE=1'
-    echo "CONFIG_FQCN=$fqcn"
-    echo "STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  } > "$stage/.incomplete"
-  trap 'rm -rf "$stage"' ERR INT TERM
+  [[ -f $final/construction.env ]] || rebuild_count=0
+
+  # FQCN 目录是可视化工具的稳定入口。build 与 rebuild 都直接在这里工作，
+  # 状态只由 version.tag 表示；不会创建、隐藏或重命名 staging 目录。
+  stage="$final"
+  prepare_stable_construction_directory "$stage" "$fqcn"
+  write_pending_version_info "$stage" "$fqcn" "$scope" "$target" "$version_index"
+  write_version_tag "$stage" "$version_index" building
+  trap 'write_version_tag "$stage" "$version_index" interrupted || true; exit 130' INT TERM
+  trap 'write_version_tag "$stage" "$version_index" failed || true; exit 1' ERR
+  profile=$(profile_for "$fqcn" 1)
+  capability=$(value "$profile" CAPABILITY)
+  if [[ $capability == check-only ]]; then
+    write_version_tag "$stage" "$version_index" failed
+    echo "$fqcn 是检查 Config，不能构造" >&2
+    exit 2
+  fi
   cp "$profile" "$stage/profile.env"
+  write_version_info "$stage" "$stage/profile.env" "$version_index"
   log="$stage/logs/build/all.log"
   : > "$log"
   echo "开始构造 $fqcn"
@@ -776,13 +1102,13 @@ do_build_locked() {
     mkdir -p "$failed_dir"
     cp -a "$stage/logs/build/." "$failed_dir/" 2>/dev/null || true
     preserve_fpga_failure_evidence "$stage" "$failed_dir"
-    rm -rf "$stage"
-    echo '构造失败；旧构造未变。' >&2
+    write_version_tag "$stage" "$version_index" failed
+    echo '构造失败；无效构造目录已保留。' >&2
     echo '失败原因（关键日志）：' >&2
     failure_excerpt "$failed_dir/all.log"
     echo "完整日志目录：$failed_dir" >&2
     retry_config=$(config_short_name "$fqcn")
-    echo "需要重试并在成功后原子覆盖时，请执行：make -C $npc_root rebuild config=$retry_config" >&2
+    echo "需要重试，请执行：make -C $npc_root rebuild config=$retry_config" >&2
     exit 1
   fi
   now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -808,14 +1134,7 @@ do_build_locked() {
   } > "$stage/construction.env"
   verify_assets "$stage"
   mark_construction_complete "$stage"
-  backup="$root/.previous-$fqcn-$$"
-  if [[ -d $final ]]; then mv "$final" "$backup"; fi
-  if mv "$stage" "$final"; then
-    rm -rf "$backup"
-  else
-    [[ -d $backup ]] && mv "$backup" "$final"
-    exit 1
-  fi
+  write_version_tag "$stage" "$version_index" complete
   trap - ERR INT TERM
   echo "已保存构造版本 $version_index：$final"
 }
@@ -828,11 +1147,18 @@ do_build() {
 }
 
 do_delete() {
-  local version_index=$1 directory
+  local d_version=${1:-} delete_version=${2:-} version_index directory
+  [[ -n $d_version || -n $delete_version ]] || usage
+  if [[ -n $d_version && -n $delete_version && $d_version != "$delete_version" ]]; then
+    echo "D=$d_version 与 delete=$delete_version 不一致" >&2
+    exit 2
+  fi
+  version_index=${d_version:-$delete_version}
+  require_version_index "$version_index"
   exec 9>"$root/.lock"
   flock 9
   migrate_version_indexes_locked
-  directory=$(construction_by_version "$version_index")
+  directory=$(final_construction_by_version "$version_index")
   rm -rf -- "$directory"
   reindex_version_indexes_locked
   echo "已删除构造版本 $version_index，并重新映射后续版本序号"
@@ -1036,7 +1362,7 @@ do_host_build_all() {
 }
 
 do_resolve() {
-  local request=${1:-} version_index=${2:-} directory profile resolved fqcn scope board target saved_fqcn saved_version
+  local request=${1:-} version_index=${2:-} directory profile info resolved fqcn scope board target saved_fqcn saved_short saved_version
   ensure_version_indexes_for_read
   if [[ -z $request && -z $version_index ]]; then
     echo "必须提供 config=<Config> 或 version=<版本序号>。可用 Config：" >&2
@@ -1046,12 +1372,15 @@ do_resolve() {
   if [[ -n $version_index ]]; then
     directory=$(construction_by_version "$version_index")
     profile="$directory/profile.env"
-    saved_fqcn=$(value "$profile" CONFIG_FQCN)
-    saved_version=$(value "$directory/construction.env" VERSION_INDEX)
+    info=$(version_info_file "$directory")
+    saved_fqcn=$(value "$info" CONFIG_FQCN)
+    saved_short=$(value "$info" CONFIG_SHORT_NAME)
+    saved_version=$(version_index_from_tag "$directory")
     if [[ -n $request ]]; then
-      resolved=$(resolve_catalog "$request")
-      IFS='|' read -r fqcn scope board target <<< "$resolved"
-      [[ $fqcn == "$saved_fqcn" ]] || { echo "config=$fqcn 与 version=$version_index（$saved_fqcn）不一致" >&2; exit 2; }
+      [[ $request == "$saved_fqcn" || $request == "$saved_short" ]] || {
+        echo "config=$request 与 version=$version_index（$saved_fqcn）不一致" >&2
+        exit 2
+      }
     fi
   else
     resolved=$(resolve_catalog "$request")
@@ -1059,8 +1388,8 @@ do_resolve() {
     directory="$root/$fqcn"
     profile=$(profile_for "$fqcn")
     saved_version='-'
-    if [[ -f $directory/construction.env ]]; then
-      saved_version=$(value "$directory/construction.env" VERSION_INDEX)
+    if [[ -f $(version_tag_file "$directory") && -f $(version_info_file "$directory") ]]; then
+      saved_version=$(version_index_from_tag "$directory")
       profile="$directory/profile.env"
     fi
   fi
@@ -1152,62 +1481,61 @@ case "$command" in
       require_version_index "$selector"
       selector_is_version=1
     fi
-    found=0
-    listed_directories=()
     ensure_version_indexes_for_read
-    refresh_catalog_if_stale
+    declare -A final_any=() final_valid=() indexes=()
+    while IFS= read -r directory; do
+      version_index=$(version_index_from_tag "$directory")
+      info=$(version_info_file "$directory")
+      indexes[$version_index]=1
+      if version_directory_is_final "$directory"; then
+        [[ -z ${final_any[$version_index]:-} || ${final_any[$version_index]} == "$directory" ]] || {
+          echo "版本序号 $version_index 重复，构造库已损坏" >&2
+          exit 1
+        }
+        final_any[$version_index]=$directory
+        if version_directory_is_valid "$directory"; then
+          final_valid[$version_index]=$directory
+        fi
+      fi
+    done < <(version_metadata_directories)
+
+    found=0
     echo '=== 构造属性位图（+ 表示启用）==='
-    printf '%-8s %-4s %-4s %-2s %-2s %-5s %-4s %-3s %-3s %-3s %-3s %-4s %-20s %s\n' \
-      Version RV32 RV64 M F Zicsr Pipe ID EX NPC SoC FPGA Updated Directory
-    while IFS= read -r env; do
-      directory=$(dirname "$env")
-      version_index=$(value "$env" VERSION_INDEX)
-      fqcn=$(value "$env" CONFIG_FQCN)
-      [[ -z $selector || $selector == "$version_index" || $selector == "$fqcn" || $selector == "$(value "$directory/profile.env" CONFIG_SHORT_NAME)" ]] || continue
+    printf '%-8s %-4s %-4s %-2s %-2s %-5s %-4s %-3s %-3s %-6s %-5s %-12s %s\n' \
+      Version RV32 RV64 M F Zicsr Pipe ID EX 'valid?' Arch RunningTime Config
+    while IFS= read -r version_index; do
+      directory=${final_valid[$version_index]:-${final_any[$version_index]:-}}
+      [[ -n $directory ]] || continue
+      info=$(version_info_file "$directory")
+      fqcn=$(value "$info" CONFIG_FQCN)
+      short=$(value "$info" CONFIG_SHORT_NAME)
+      [[ -z $selector || $selector == "$version_index" || $selector == "$fqcn" || $selector == "$short" ]] || continue
       found=$((found + 1))
-      listed_directories+=("$directory")
-      profile="$directory/profile.env"
-      scope=$(value "$profile" SCOPE)
-      target=$(value "$profile" TARGET)
-      printf '%-8s %-4s %-4s %-2s %-2s %-5s %-4s %-3s %-3s %-3s %-3s %-4s %-20s %s\n' \
+      valid=''
+      version_directory_is_valid "$directory" && valid=+
+      printf '%-8s %-4s %-4s %-2s %-2s %-5s %-4s %-3s %-3s %-6s %-5s %-12s %s\n' \
         "$version_index" \
-        "$(matching_mark "$(value "$profile" XLEN)" 32)" \
-        "$(matching_mark "$(value "$profile" XLEN)" 64)" \
-        "$(feature_mark "$(value "$profile" M)")" \
-        "$(feature_mark "$(value "$profile" F)")" \
-        "$(feature_mark "$(value "$profile" ZICSR)")" \
-        "$(feature_mark "$(value "$profile" PIPELINE)")" \
-        "$(feature_mark "$(value "$profile" ID_FWD)")" \
-        "$(feature_mark "$(value "$profile" EX_FWD)")" \
-        "$(matching_mark "$target" NPC)" \
-        "$(matching_mark "$target" SOC)" \
-        "$(matching_mark "$scope" fpga)" \
-        "$(value "$env" UPDATED_AT)" "$directory"
-    done < <(construction_environments)
+        "$(feature_mark "$(value "$info" RV32)")" \
+        "$(feature_mark "$(value "$info" RV64)")" \
+        "$(feature_mark "$(value "$info" M)")" \
+        "$(feature_mark "$(value "$info" F)")" \
+        "$(feature_mark "$(value "$info" ZICSR)")" \
+        "$(feature_mark "$(value "$info" PIPE)")" \
+        "$(feature_mark "$(value "$info" ID)")" \
+        "$(feature_mark "$(value "$info" EX)")" \
+        "$valid" \
+        "$(value "$info" ARCH)" \
+        "$(value "$info" RUNNING_TIME)" \
+        "$short"
+    done < <(printf '%s\n' "${!indexes[@]}" | LC_ALL=C sort -n)
     if [[ $selector_is_version == 1 && $found != 1 ]]; then
       echo "版本序号 $selector 不存在" >&2
       exit 1
     fi
-    echo
-    echo '=== Config 名称 ==='
-    printf '%-8s %s\n' Version Config
-    for directory in "${listed_directories[@]}"; do
-      printf '%-8s %s\n' \
-        "$(value "$directory/construction.env" VERSION_INDEX)" \
-        "$(value "$directory/profile.env" CONFIG_SHORT_NAME)"
-    done
-    echo
-    echo '=== 可构造 Config ==='
-    printf '%-42s %-8s %s\n' Config Scope Target
-    while IFS=$'\t' read -r short fqcn scope board target extra; do
-      [[ -z ${short:-} || $short == \#* ]] && continue
-      [[ -z ${extra:-} ]] || { echo "配置目录格式错误：$catalog" >&2; exit 1; }
-      printf '%-42s %-8s %s\n' "$short" "$scope" "$target"
-    done < "$catalog"
     ;;
   delete)
-    [[ $# == 1 ]] || usage
-    do_delete "$1"
+    [[ $# -ge 1 && $# -le 2 ]] || usage
+    do_delete "$@"
     ;;
   *) usage ;;
 esac

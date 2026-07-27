@@ -6,7 +6,14 @@ npc_root=${1:?用法：construction-regression.sh <npc-root>}
 npc_root=$(realpath "$npc_root")
 manager="$npc_root/scripts/construction-manager.sh"
 work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT INT TERM
+build_hold=''
+build_pid=''
+cleanup() {
+  if [[ -n ${build_hold:-} ]]; then : > "$build_hold/release" 2>/dev/null || true; fi
+  if [[ -n ${build_pid:-} ]]; then wait "$build_pid" 2>/dev/null || true; fi
+  rm -rf "$work"
+}
+trap cleanup EXIT INT TERM
 
 fail() {
   echo "构造回归失败：$*" >&2
@@ -23,7 +30,27 @@ export CONSTRUCTION_ID_PREFIX=20260718153042
 "$npc_root/scripts/generate-config-catalog.sh" "$npc_root"
 export NPC_CONFIG_CATALOG_READY=1
 
-"$manager" build "$npc_root" SimulationConfig
+build_hold="$work/first-build-hold"
+CONSTRUCTION_TEST_HOLD_DIR="$build_hold" "$manager" build "$npc_root" SimulationConfig > "$work/first-build.log" 2>&1 &
+build_pid=$!
+for _ in $(seq 1 1500); do [[ -e $build_hold/ready ]] && break; sleep 0.02; done
+[[ -e $build_hold/ready ]] || fail '首次构造没有进入可观察状态'
+initial="$CONSTRUCTION_TEST_ROOT/npc.SimulationConfig"
+[[ -d $initial && $(value "$initial/version.tag" VERSION_INDEX) == 1 &&
+  $(value "$initial/version.tag" STATE) == building &&
+  $(value "$initial/version.info" CONFIG_SHORT_NAME) == SimulationConfig ]] ||
+  fail '首次构造没有在稳定目录写入版本标签与信息文件'
+building_list=$(timeout 1 "$manager" list "$npc_root")
+building_line=$(awk '$1 == 1 { print; exit }' <<< "$building_list")
+[[ -n $building_line && ${building_line:44:6} != *+* ]] ||
+  fail '首次构造没有以无效版本显示'
+if find "$CONSTRUCTION_TEST_ROOT" -mindepth 1 -maxdepth 1 -type d \( -name '.staging-*' -o -name 'staging-*' \) -print -quit | grep -q .; then
+  fail '首次构造创建了非稳定的 staging 目录'
+fi
+: > "$build_hold/release"
+wait "$build_pid" || fail '首次构造失败'
+build_pid=''
+build_hold=''
 "$manager" build "$npc_root" PipelineSimulationConfig
 dpi="$CONSTRUCTION_TEST_ROOT/npc.SimulationConfig"
 pipeline="$CONSTRUCTION_TEST_ROOT/npc.PipelineSimulationConfig"
@@ -34,6 +61,9 @@ pipeline="$CONSTRUCTION_TEST_ROOT/npc.PipelineSimulationConfig"
 [[ $(value "$dpi/.complete" CONSTRUCTION_COMPLETE) == 1 &&
   $(value "$pipeline/.complete" CONSTRUCTION_COMPLETE) == 1 ]] ||
   fail '成功构造没有写入完成标志'
+[[ $(value "$dpi/version.tag" VERSION_INDEX) == 1 && $(value "$dpi/version.tag" STATE) == complete &&
+  $(value "$dpi/version.info" ARCH) == NPC && $(value "$dpi/version.info" RUNNING_TIME) == SIM ]] ||
+  fail '成功构造没有完成版本标签与信息文件'
 [[ ! -e $dpi/.incomplete && ! -e $pipeline/.incomplete ]] ||
   fail '成功构造仍保留未完成标志'
 [[ $(value "$dpi/profile.env" NEMU_PERFORMANCE_HTML) == 1 &&
@@ -43,6 +73,12 @@ pipeline="$CONSTRUCTION_TEST_ROOT/npc.PipelineSimulationConfig"
   fail '本地性能/流水 HTML profile 选择不正确'
 [[ -s $dpi/logs/build/all.log && -s $dpi/logs/build/chisel.log ]] ||
   fail '成功构造没有保存最新阶段日志'
+if valid_build=$($manager build "$npc_root" SimulationConfig 2>&1); then
+  fail '有效构造仍接受 build'
+fi
+[[ $valid_build == *'make build 只允许创建或修复无效构造'* &&
+  $valid_build == *"make -C $npc_root rebuild config=SimulationConfig"* ]] ||
+  fail '有效构造的 build 拒绝提示不正确'
 
 # 旧 L1 Config 去掉了冗余的 Npc 前缀；保存构造必须迁移到当前目录名，且不能
 # 改变用户引用的版本序号。profile 与 construction.env 需要作为同一引用单元更新。
@@ -62,35 +98,29 @@ pipeline_id=$(value "$pipeline/construction.env" CONSTRUCTION_ID)
 dpi_version=$(value "$dpi/construction.env" VERSION_INDEX)
 pipeline_version=$(value "$pipeline/construction.env" VERSION_INDEX)
 version_list=$("$manager" list "$npc_root")
-grep -Eq '^1[[:space:]]+SimulationConfig$' <<< "$version_list" ||
-  fail 'Config 名称表没有显示版本与短名映射'
 grep -q '^=== 构造属性位图（+ 表示启用）===$' <<< "$version_list" ||
   fail '版本列表没有显示属性位图'
-attribute_header=$(grep '^Version  *RV32  *RV64  *M  *F  *Zicsr  *Pipe  *ID  *EX  *NPC  *SoC  *FPGA' <<< "$version_list" || true)
+attribute_header=$(grep '^Version  *RV32  *RV64  *M  *F  *Zicsr  *Pipe  *ID  *EX  *valid?  *Arch  *RunningTime  *Config' <<< "$version_list" || true)
 [[ -n $attribute_header ]] || fail '属性位图表头不完整'
-[[ $attribute_header != *U55C* && $attribute_header != *ZCU102* ]] || fail '属性位图泄漏板卡型号'
-grep -Eq '^U55cRv64Npc300MHzFpgaConfig[[:space:]]+fpga[[:space:]]+NPC$' <<< "$version_list" ||
-  fail '版本列表没有显示当前 U55C 300 MHz FPGA Config'
-dpi_attributes=$(awk '/^=== 构造属性位图/{in_attributes=1; next} /^=== Config 名称 ===/{in_attributes=0} in_attributes && $1 == 1 {print}' <<< "$version_list")
-pipeline_attributes=$(awk '/^=== 构造属性位图/{in_attributes=1; next} /^=== Config 名称 ===/{in_attributes=0} in_attributes && $1 == 2 {print}' <<< "$version_list")
-[[ ${dpi_attributes:9:1} == ' ' && ${dpi_attributes:14:1} == + &&
-  ${dpi_attributes:19:1} == + && ${dpi_attributes:22:1} == ' ' && ${dpi_attributes:25:1} == + &&
-  ${dpi_attributes:31:1} == ' ' && ${dpi_attributes:36:1} == ' ' && ${dpi_attributes:40:1} == ' ' &&
-  ${dpi_attributes:44:1} == + && ${dpi_attributes:48:1} == ' ' && ${dpi_attributes:52:1} == ' ' ]] ||
-  fail '标量 RV64IM_Zicsr 构造的属性位图不正确'
-[[ ${pipeline_attributes:9:1} == ' ' && ${pipeline_attributes:14:1} == + &&
-  ${pipeline_attributes:19:1} == + && ${pipeline_attributes:22:1} == ' ' && ${pipeline_attributes:25:1} == + &&
-  ${pipeline_attributes:31:1} == + && ${pipeline_attributes:36:1} == + && ${pipeline_attributes:40:1} == + &&
-  ${pipeline_attributes:44:1} == + && ${pipeline_attributes:48:1} == ' ' && ${pipeline_attributes:52:1} == ' ' ]] ||
-  fail '流水线三格或 RV64IM_Zicsr 属性位图不正确'
+[[ $version_list != *'=== Config 名称 ==='* && $version_list != *'=== 可构造 Config ==='* ]] ||
+  fail '版本列表仍显示 Config 补充表'
+grep -Eq '^1.*SimulationConfig$' <<< "$version_list" || fail '版本列表没有显示对应 Config 短名'
+[[ $(value "$dpi/version.info" RV32) == 0 && $(value "$dpi/version.info" RV64) == 1 &&
+  $(value "$dpi/version.info" M) == 1 && $(value "$dpi/version.info" F) == 0 &&
+  $(value "$dpi/version.info" ZICSR) == 1 && $(value "$dpi/version.info" PIPE) == 0 &&
+  $(value "$dpi/version.info" ID) == 0 && $(value "$dpi/version.info" EX) == 0 ]] ||
+  fail '标量构造的属性信息不正确'
+[[ $(value "$pipeline/version.info" PIPE) == 1 && $(value "$pipeline/version.info" ID) == 1 &&
+  $(value "$pipeline/version.info" EX) == 1 ]] ||
+  fail '流水线三格属性信息不正确'
 [[ $version_list != *"$dpi_id"* && $version_list != *"$pipeline_id"* ]] ||
   fail '版本列表泄漏了内部时间 ID'
-incomplete="$CONSTRUCTION_TEST_ROOT/.staging-regression-incomplete"
+incomplete="$CONSTRUCTION_TEST_ROOT/unindexed-regression-incomplete"
 mkdir -p "$incomplete"
-cp "$dpi/construction.env" "$dpi/profile.env" "$incomplete/"
+cp "$dpi/profile.env" "$incomplete/"
 printf 'CONSTRUCTION_INCOMPLETE=1\n' > "$incomplete/.incomplete"
 [[ $("$manager" list "$npc_root") != *"$incomplete"* ]] ||
-  fail '版本列表暴露了未完成 staging 构造'
+  fail '版本列表暴露了没有索引文件的 staging 构造'
 
 # version/list/resolve 只读取已发布快照；构造锁被长流程占用时不应被拖住。
 lock_ready="$work/lock-ready"
@@ -139,14 +169,39 @@ host_before=$(sha256sum "$dpi/abi/nemu/nemu-exec" | cut -d' ' -f1)
 [[ $(value "$dpi/construction.env" CREATED_AT) == "$created" ]] || fail '复用构造改变了首次构造时间'
 [[ $(value "$dpi/construction.env" REBUILD_COUNT) == 0 ]] || fail '未请求 rebuild 却发生重构'
 
-"$manager" rebuild "$npc_root" SimulationConfig
+build_hold="$work/rebuild-hold"
+CONSTRUCTION_TEST_HOLD_DIR="$build_hold" "$manager" rebuild "$npc_root" SimulationConfig > "$work/rebuild.log" 2>&1 &
+build_pid=$!
+for _ in $(seq 1 1500); do [[ -e $build_hold/ready ]] && break; sleep 0.02; done
+[[ -e $build_hold/ready ]] || fail 'rebuild 没有进入可观察状态'
+[[ -d $dpi && $(value "$dpi/version.tag" STATE) == building ]] ||
+  fail 'rebuild 没有持续使用稳定 FQCN 目录'
+if find "$CONSTRUCTION_TEST_ROOT" -mindepth 1 -maxdepth 1 -type d \( -name '.staging-*' -o -name 'staging-*' \) -print -quit | grep -q .; then
+  fail 'rebuild 创建了非稳定的 staging 目录'
+fi
+if "$manager" resolve "$npc_root" '' "$dpi_version" >/dev/null 2>&1; then
+  fail 'rebuild 期间 building 版本仍可运行'
+fi
+rebuild_list=$("$manager" list "$npc_root" "$dpi_version")
+[[ $(awk -v version="$dpi_version" '$1 == version { count++ } END { print count + 0 }' <<< "$rebuild_list") == 1 ]] ||
+  fail 'rebuild 期间同一版本显示了多行'
+rebuild_line=$(awk -v version="$dpi_version" '$1 == version { print; exit }' <<< "$rebuild_list")
+[[ ${rebuild_line:44:6} != *+* ]] || fail 'rebuild 期间版本被错误标为有效'
+: > "$build_hold/release"
+wait "$build_pid" || fail '成功 rebuild 失败'
+build_pid=''
+build_hold=''
 [[ $(value "$dpi/construction.env" CONSTRUCTION_ID) == "$dpi_id" ]] || fail '成功 rebuild 改变了稳定编号'
 [[ $(value "$dpi/construction.env" VERSION_INDEX) == "$dpi_version" ]] || fail '成功 rebuild 改变了版本序号'
 [[ $(value "$dpi/construction.env" CREATED_AT) == "$created" ]] || fail '成功 rebuild 改变了首次构造时间'
 [[ $(value "$dpi/construction.env" REBUILD_COUNT) == 1 ]] || fail '成功 rebuild 没有计数'
 [[ ! -e $dpi/runtime ]] || fail '成功 rebuild 继承了旧硬件 ABI 的 runtime trace'
 
-sed -i -e 's/^PROFILE_FORMAT=.*/PROFILE_FORMAT=2/' -e 's/^CAPABILITY=run$/CAPABILITY=verilator/' "$dpi/profile.env"
+sed -i -e 's/^PROFILE_FORMAT=.*/PROFILE_FORMAT=2/' -e 's/^CAPABILITY=run$/CAPABILITY=verilator/' \
+  -e '/^INTEGER_EXECUTE_STAGES=/d' -e '/^REGISTER_INITIAL_FETCH_REQUEST=/d' \
+  -e '/^SERIAL_EXECUTE_STAGES=/d' \
+  -e '/^SEPARATE_SERIAL_INTEGER_ALU=/d' -e '/^SERIAL_EXECUTE_RESULT_FORWARDING=/d' \
+  -e '/^FPGA_DIVIDER_NON_BLOCKING=/d' "$dpi/profile.env"
 sed -i -e 's/^CAPABILITY=run$/CAPABILITY=verilator/' \
   -e 's/^NEMU_PRESET=LocalPipelineTrace$/NEMU_CONFIG_FQCN=npc.nemu.LocalVerilatorPipelineTraceConfig/' \
   "$dpi/construction.env"
@@ -156,7 +211,12 @@ sed -i -e 's/^HOST_FORMAT=.*/HOST_FORMAT=4/' \
   -e 's/^NEMU_PRESET=LocalPipelineTrace$/NEMU_CONFIG_FQCN=npc.nemu.LocalVerilatorPipelineTraceConfig/' \
   "$dpi/abi/nemu/host.env"
 "$manager" ensure "$npc_root" SimulationConfig 0 0
-[[ $(value "$dpi/profile.env" PROFILE_FORMAT) == 10 && $(value "$dpi/profile.env" CAPABILITY) == run ]] ||
+[[ $(value "$dpi/profile.env" PROFILE_FORMAT) == 16 && $(value "$dpi/profile.env" CAPABILITY) == run &&
+  $(value "$dpi/profile.env" INTEGER_EXECUTE_STAGES) == 1 &&
+  $(value "$dpi/profile.env" SERIAL_EXECUTE_STAGES) == 1 &&
+  $(value "$dpi/profile.env" REGISTER_INITIAL_FETCH_REQUEST) == 0 &&
+  $(value "$dpi/profile.env" SEPARATE_SERIAL_INTEGER_ALU) == 0 &&
+  $(value "$dpi/profile.env" SERIAL_EXECUTE_RESULT_FORWARDING) == 1 ]] ||
   fail '已保存 profile 未迁移到 run 模式'
 [[ $(value "$dpi/construction.env" CAPABILITY) == run ]] ||
   fail '已保存 construction.env 未迁移到 run 模式'
@@ -208,7 +268,6 @@ if find "$dpi" -name '.profile-host-previous.*' -o -name '.construction-host-pre
   fail 'host 发布故障回滚后残留 staging 或 backup'
 fi
 
-before=$(sha256sum "$dpi/construction.env" | cut -d' ' -f1)
 if failure=$(CONSTRUCTION_TEST_FAIL=1 "$manager" rebuild "$npc_root" SimulationConfig 2>&1); then
   fail '模拟失败的重构意外成功'
 fi
@@ -216,9 +275,13 @@ fi
   fail '失败重构未提示可复制的 rebuild 命令'
 [[ $failure == *'失败原因（关键日志）：'* && $failure == *'按测试请求模拟构造失败'* ]] ||
   fail '失败重构未输出关键日志片段'
-[[ $(sha256sum "$dpi/construction.env" | cut -d' ' -f1) == "$before" ]] || fail '失败重构破坏了旧构造'
+[[ -d $dpi && $(value "$dpi/version.tag" STATE) == failed && ! -f $dpi/construction.env ]] ||
+  fail '失败重构没有在稳定目录保留 failed 状态'
 [[ -s "$CONSTRUCTION_TEST_ROOT/.failed/npc.SimulationConfig/build/all.log" ]] ||
   fail '失败重构没有保存日志'
+"$manager" build "$npc_root" SimulationConfig
+[[ $(value "$dpi/version.tag" STATE) == complete && -f $dpi/construction.env ]] ||
+  fail '无效构造不能通过 build 直接修复'
 
 if "$manager" resolve "$npc_root" SimulationConfig "$pipeline_version" >/dev/null 2>&1; then
   fail 'config/version 不一致未被拒绝'
@@ -233,6 +296,8 @@ if "$manager" ensure "$npc_root" U55cYsyxSocFpgaConfig 0 0 >/dev/null 2>&1; then
 fi
 "$manager" ensure "$npc_root" U55cYsyxSocFpgaConfig 1 0
 [[ -f $u55c/fpga/artifacts/artifact-manifest.env ]] || fail 'FPGA dry-run 未生成资产清单'
+[[ $(value "$u55c/version.info" ARCH) == SoC && $(value "$u55c/version.info" RUNNING_TIME) == FPGA ]] ||
+  fail 'U55C SoC FPGA 构造的文本属性不正确'
 [[ $(value "$u55c/.complete" FPGA_ARTIFACT) == "fpga/artifacts/npc-$(value "$u55c/profile.env" FPGA_PLATFORM).xclbin" ]] ||
   fail 'FPGA 完成标志没有记录实际 xclbin'
 [[ -s $u55c/fpga/ip-generated/logs/npc_int_multiplier_ip.log && -s $u55c/fpga/ip-generated/logs/npc_int_divider_ip.log ]] ||
@@ -256,7 +321,6 @@ fpga_assets_before=$(find "$u55c/fpga" -type f -print0 | LC_ALL=C sort -z | xarg
   fail 'host-build 修改了保存 profile 的非 NEMU 字段'
 [[ $(find "$u55c/fpga" -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1) == "$fpga_assets_before" ]] ||
   fail 'host-build 修改了 FPGA 资产'
-fpga_before=$(sha256sum "$u55c/construction.env" | cut -d' ' -f1)
 if fpga_failure=$(CONSTRUCTION_TEST_FAIL=1 "$manager" rebuild "$npc_root" U55cYsyxSocFpgaConfig 2>&1); then
   fail '模拟失败的 FPGA 重构意外成功'
 fi
@@ -266,18 +330,32 @@ fpga_failed="$CONSTRUCTION_TEST_ROOT/.failed/npc.fpga.u55c.U55cYsyxSocFpgaConfig
 [[ -f $fpga_failed/profile.env && -s $fpga_failed/fpga/ip-generated/logs/npc_int_multiplier_ip.log &&
   -s $fpga_failed/fpga/ip-generated/logs/npc_int_divider_ip.log ]] ||
   fail '失败的 FPGA 重构没有保存 profile 与逐 IP 证据'
-[[ $(sha256sum "$u55c/construction.env" | cut -d' ' -f1) == "$fpga_before" ]] ||
-  fail '失败的 FPGA 重构破坏了旧构造'
-"$manager" ensure "$npc_root" U55cYsyxSocFpgaConfig 0 0
+[[ -d $u55c && $(value "$u55c/version.tag" STATE) == failed && ! -f $u55c/construction.env ]] ||
+  fail '失败的 FPGA 重构没有在稳定目录保留 failed 状态'
+if "$manager" ensure "$npc_root" U55cYsyxSocFpgaConfig 0 0 >/dev/null 2>&1; then
+  fail '失败的 FPGA 构造仍被放行'
+fi
+"$manager" rebuild "$npc_root" U55cYsyxSocFpgaConfig
 sed -i -e 's/^PROFILE_FORMAT=.*/PROFILE_FORMAT=3/' -e 's/^SCOPE=fpga$/SCOPE=fpga-soc/' "$u55c/profile.env"
 "$manager" ensure "$npc_root" U55cYsyxSocFpgaConfig 0 0
-[[ $(value "$u55c/profile.env" PROFILE_FORMAT) == 10 && $(value "$u55c/profile.env" SCOPE) == fpga ]] ||
+[[ $(value "$u55c/profile.env" PROFILE_FORMAT) == 16 && $(value "$u55c/profile.env" SCOPE) == fpga &&
+  $(value "$u55c/profile.env" INTEGER_EXECUTE_STAGES) == 1 &&
+  $(value "$u55c/profile.env" SERIAL_EXECUTE_STAGES) == 1 &&
+  $(value "$u55c/profile.env" REGISTER_INITIAL_FETCH_REQUEST) == 0 &&
+  $(value "$u55c/profile.env" SEPARATE_SERIAL_INTEGER_ALU) == 0 &&
+  $(value "$u55c/profile.env" SERIAL_EXECUTE_RESULT_FORWARDING) == 1 &&
+  $(value "$u55c/profile.env" FPGA_DIVIDER_NON_BLOCKING) == 0 ]] ||
   fail '已保存 FPGA profile 未迁移到统一 fpga 作用域'
 
 platform=$(value "$u55c/profile.env" FPGA_PLATFORM)
 mv "$u55c/fpga/artifacts/npc-$platform.xclbin" "$u55c/fpga/artifacts/npc-$platform.xclbin.missing"
-[[ $("$manager" list "$npc_root") != *"U55cYsyxSocFpgaConfig"* ]] ||
-  fail '缺少实际 xclbin 的 FPGA 构造仍被 version 视为完成'
+u55c_version=$(value "$u55c/construction.env" VERSION_INDEX)
+missing_asset_line=$("$manager" list "$npc_root" "$u55c_version" | awk -v version="$u55c_version" '$1 == version { print; exit }')
+[[ -n $missing_asset_line && ${missing_asset_line:44:6} != *+* ]] ||
+  fail '缺少实际 xclbin 的 FPGA 构造没有保留为无效版本'
+if "$manager" resolve "$npc_root" '' "$u55c_version" >/dev/null 2>&1; then
+  fail '缺少实际 xclbin 的 FPGA 构造仍能作为版本运行'
+fi
 mv "$u55c/fpga/artifacts/npc-$platform.xclbin.missing" "$u55c/fpga/artifacts/npc-$platform.xclbin"
 printf 'tampered\n' > "$u55c/fpga/artifacts/npc-$platform.xclbin"
 if "$manager" ensure "$npc_root" U55cYsyxSocFpgaConfig 0 0 >/dev/null 2>&1; then
@@ -294,4 +372,14 @@ make -C "$npc_root" version D="$pipeline_version" >/dev/null
 standalone="$CONSTRUCTION_TEST_ROOT/npc.StandaloneConfig"
 [[ $(value "$standalone/construction.env" VERSION_INDEX) == 3 ]] ||
   fail '删除后新构造没有使用紧凑序号'
+make -C "$npc_root" version delete=3 >/dev/null
+[[ ! -d $standalone ]] || fail 'delete= 未删除构造'
+"$manager" build "$npc_root" StandaloneConfig
+[[ $(value "$standalone/construction.env" VERSION_INDEX) == 3 ]] ||
+  fail 'delete= 后新构造没有使用紧凑序号'
+if make -C "$npc_root" version D=1 delete=3 >/dev/null 2>&1; then
+  fail 'D= 与 delete= 冲突仍被接受'
+fi
+make -C "$npc_root" version D=3 delete=3 >/dev/null
+[[ ! -d $standalone ]] || fail '相同 D=/delete= 未删除构造'
 printf 'Config 构造生命周期回归通过\n'

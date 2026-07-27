@@ -437,7 +437,9 @@ ifneq ($(strip $(host_rebuild)),)
 endif
 
 ifneq ($(strip $(delete)),)
-  $(error delete 参数已删除，请使用 make -C npc version D=<版本序号>)
+  ifneq ($(strip $(MAKECMDGOALS)),version)
+    $(error delete= 仅支持 make -C npc version delete=<版本序号>)
+  endif
 endif
 
 config-list:
@@ -462,9 +464,11 @@ host-rebuild:
 	@$(CONSTRUCTION_MANAGER) host-build "$(CURDIR)" "$(strip $(config))" "$(HOST_BUILD_ALL)" "$(HOST_BUILD_JOBS)"
 
 version:
-	@if test -n "$(strip $(D))"; then \
-		$(CONSTRUCTION_MANAGER) delete "$(CURDIR)" "$(strip $(D))"; \
-		elif test -n "$(strip $(version))"; then \
+	@if test -n "$(strip $(D))" && test -n "$(strip $(delete))" && test "$(strip $(D))" != "$(strip $(delete))"; then \
+		echo "D=$(strip $(D)) 与 delete=$(strip $(delete)) 不一致" >&2; exit 2; \
+	elif test -n "$(strip $(D))" || test -n "$(strip $(delete))"; then \
+		$(CONSTRUCTION_MANAGER) delete "$(CURDIR)" "$(strip $(D))" "$(strip $(delete))"; \
+	elif test -n "$(strip $(version))"; then \
 			$(CONSTRUCTION_MANAGER) list "$(CURDIR)" "$(strip $(version))"; \
 		elif test -n "$(strip $(config))"; then \
 			$(CONSTRUCTION_MANAGER) list "$(CURDIR)" "$(strip $(config))"; \
