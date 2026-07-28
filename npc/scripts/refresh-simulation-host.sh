@@ -81,10 +81,6 @@ if [[ $NEMU_PIPELINE_HTML == 1 ]]; then
     echo "流水线 HTML 必须同时启用性能 HTML" >&2
     exit 2
   }
-  [[ $NEMU_BACKEND == local ]] || {
-    echo "指令阶段 HTML 只支持本地 Verilator 构造" >&2
-    exit 2
-  }
 fi
 
 render_defconfig() {
@@ -153,9 +149,9 @@ if [[ ${CONSTRUCTION_DRY_RUN:-0} == 1 ]]; then
 else
   echo "构造 NEMU host：$CONFIG_FQCN（preset=$NEMU_PRESET，backend=$NEMU_BACKEND）"
   make -C "$nemu_root" defconfig-file \
-    NEMU_DEFCONFIG_FILE="$defconfig" NEMU_CONFIG_ROOT="$config_root" NEMU_BUILD_ROOT="$build_root"
+    NEMU_HOME="$nemu_root" NEMU_DEFCONFIG_FILE="$defconfig" NEMU_CONFIG_ROOT="$config_root" NEMU_BUILD_ROOT="$build_root"
   make -C "$nemu_root" ISA="riscv${XLEN}" app \
-    NEMU_CONFIG_ROOT="$config_root" NEMU_BUILD_ROOT="$build_root" NEMU_OBJ_DIR="$objects" \
+    NEMU_HOME="$nemu_root" NEMU_CONFIG_ROOT="$config_root" NEMU_BUILD_ROOT="$build_root" NEMU_OBJ_DIR="$objects" \
     USENPC="$usenpc" NPC_SOC="$npc_soc" NPC_OBJ_DIR="$construction/abi/verilator" \
     NPC_GLUE_DIR="$construction/abi/glue/include" NPC_SOFTFLOAT_LIB="$construction/abi/softfloat/softfloat.a"
   host_binary=$(find "$build_root" -maxdepth 1 -type f -perm -u+x -print -quit)

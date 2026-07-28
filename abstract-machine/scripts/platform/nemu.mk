@@ -49,7 +49,7 @@ ifeq ($(CONFIG_CONSTRUCTION_MANAGED),1)
   run run-bat gdb: npc-construction
 	@$(MAKE) --no-print-directory "$@" ARCH="$(ARCH)" \
 		NPC_CONSTRUCTION_DIR="$(NPC_CONSTRUCTION_DIR)" NPC_CONFIG_FQCN="$(NPC_CONFIG_FQCN)" \
-		config= version= build= rebuild= host-rebuild= CONFIG_CONSTRUCTION_MANAGED=
+		config= version= build= rebuild= host-rebuild= reset="$(strip $(reset))" CONFIG_CONSTRUCTION_MANAGED=
 else ifneq ($(strip $(NPC_CONSTRUCTION_DIR)),)
   CONSTRUCTION_ENV := $(NPC_CONSTRUCTION_DIR)/construction.env
   CONSTRUCTION_PROFILE := $(NPC_CONSTRUCTION_DIR)/profile.env
@@ -66,6 +66,17 @@ else ifneq ($(strip $(NPC_CONSTRUCTION_DIR)),)
   EXPECTED_XLEN := $(if $(filter riscv32-nemu,$(ARCH)),32,$(if $(filter riscv64-nemu,$(ARCH)),64,unknown))
   ifneq ($(XLEN),$(EXPECTED_XLEN))
     $(error ARCH/ISA 的 XLEN=$(EXPECTED_XLEN) 与 Config 固定的 XLEN=$(XLEN) 冲突)
+  endif
+  ifneq ($(strip $(reset)),)
+    ifneq ($(filter 0 1,$(strip $(reset))),$(strip $(reset)))
+      $(error reset 只能是 0 或 1)
+    endif
+    ifneq ($(SCOPE),fpga)
+      $(error reset=1 仅适用于 FPGA Config)
+    endif
+  endif
+  ifeq ($(SCOPE),fpga)
+    CFLAGS += -DAM_NEMU_FPGA_MTESTEXIT
   endif
   NEMU_CONSTRUCTION_EXEC := $(NPC_CONSTRUCTION_DIR)/abi/nemu/nemu-exec
   ifeq ($(wildcard $(NEMU_CONSTRUCTION_EXEC)),)
@@ -87,6 +98,25 @@ else ifneq ($(strip $(NPC_CONSTRUCTION_DIR)),)
 	if test "$(SCOPE)" = fpga; then \
 		artifacts="$(NPC_CONSTRUCTION_DIR)/fpga/artifacts"; \
 		if test "$(FPGA_BOARD)" = u55c; then \
+			if test "$(reset)" = 1; then \
+				xbutil="$${NEMU_FPGA_XBUTIL:-$${XRT_ROOT:+$$XRT_ROOT/bin/}xbutil}"; \
+				command -v "$$xbutil" >/dev/null 2>&1 || { echo "U55C reset=1 需要 xbutil；请设置 XRT_ROOT 或 NEMU_FPGA_XBUTIL" >&2; exit 1; }; \
+				bdf="$${NEMU_FPGA_XRT_BDF:-}"; \
+				if test -z "$$bdf"; then \
+					device_index="$${NEMU_FPGA_DEVICE_INDEX:-0}"; \
+					test "$$device_index" = 0 || { echo "NEMU_FPGA_DEVICE_INDEX=$$device_index 需要同时设置 NEMU_FPGA_XRT_BDF" >&2; exit 2; }; \
+					bdf="$$($$xbutil --batch examine 2>/dev/null | sed -n 's/^[[:space:]]*\[\([[:xdigit:]:.]*\)\][[:space:]]*:.*/\1/p' | head -n 1)"; \
+				fi; \
+				printf '%s\n' "$$bdf" | grep -Eq '^[[:xdigit:]]{4}:[[:xdigit:]]{2}:[[:xdigit:]]{2}\.[[:xdigit:]]$$' || { echo "无效的 U55C BDF：$$bdf" >&2; exit 1; }; \
+				printf 'reset=1：重置 U55C %s，再装载 xclbin...\n' "$$bdf"; \
+				"$$xbutil" --batch --force reset --device "$$bdf" --type user; \
+				ready=0; attempt=0; \
+				while test "$$attempt" -lt 30; do \
+					if "$$xbutil" --batch examine 2>/dev/null | awk -v bdf="$$bdf" 'index($$0, "[" bdf "]") && /Yes/ { found=1 } END { exit !found }'; then ready=1; break; fi; \
+					attempt=$$((attempt + 1)); sleep 1; \
+					done; \
+					test "$$ready" = 1 || { echo "U55C reset 后未在 30 秒内恢复就绪：$$bdf" >&2; exit 1; }; \
+			fi; \
 			export NEMU_FPGA_XCLBIN="$$artifacts/npc-$(FPGA_PLATFORM).xclbin"; \
 		elif test "$(FPGA_BOARD)" = zcu102; then \
 			set -a; . "$$artifacts/npc-zcu102.env"; set +a; \

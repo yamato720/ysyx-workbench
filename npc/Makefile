@@ -171,7 +171,7 @@ SOC_SIM_VERILOG := $(SOC_SIM_DIR)/ysyxSoCFull.v
 SOC_SOURCE_MANIFEST := $(SOC_SIM_DIR)/ip-sources.manifest
 SOC_PERIP_ROOT := ./chisel/ysyxSoC/perip
 SOC_IP_PERIP_ROOT := ./chisel/ip-interface/resources/npc/ip/peripheral
-SOC_PERIP_V := $(shell awk 'NF && index($$1, "#") != 1' $(SOC_SIMULATION_RTL_LIST))
+SOC_PERIP_V := $(if $(wildcard $(SOC_SIMULATION_RTL_LIST)),$(shell awk 'NF && index($$1, "#") != 1' $(SOC_SIMULATION_RTL_LIST)))
 SOC_IP_PERIP_V := $(shell awk 'NF && index($$1, "#") != 1' $(IP_SIMULATION_MODELS) $(IP_PERIPHERAL_MODELS))
 SOC_NEMU_STAMP := $(obj_dir)/soc-nemu-lib/.build-stamp
 SOC_NEMU_INPUTS := $(SOC_SIM_VERILOG) $(SOC_PERIP_V) $(SOC_IP_PERIP_V) \
@@ -457,11 +457,11 @@ host-config-list:
 	@$(CONSTRUCTION_MANAGER) host-catalog "$(CURDIR)"
 
 host-build:
-	@echo 'host-build 已删除，请使用 host-rebuild config=<Config> 或 host-rebuild all=1 jobs=<N>' >&2
-	@exit 2
+	@$(CONSTRUCTION_MANAGER) host-build "$(CURDIR)" "$(strip $(config))" "$(HOST_BUILD_ALL)" "$(HOST_BUILD_JOBS)"
 
 host-rebuild:
-	@$(CONSTRUCTION_MANAGER) host-build "$(CURDIR)" "$(strip $(config))" "$(HOST_BUILD_ALL)" "$(HOST_BUILD_JOBS)"
+	@echo 'host-rebuild 已删除，请使用 host-build config=<Config> 或 host-build all=1 jobs=<N>' >&2
+	@exit 2
 
 version:
 	@if test -n "$(strip $(D))" && test -n "$(strip $(delete))" && test "$(strip $(D))" != "$(strip $(delete))"; then \

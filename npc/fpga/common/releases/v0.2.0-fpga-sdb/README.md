@@ -1,7 +1,7 @@
 # v0.2.0-fpga-sdb Release
 
-> 这是 ABI v3 的历史 Release 合同。当前源码使用 `npc-fpga-runtime-v5`，不能直接运行这里描述的
-> FPGA 资产；必须对当前 Config 执行 `rebuild`。
+> 这是 ABI v3 的历史 Release 合同。当前 U55C 源码使用 `npc-fpga-runtime-v11`，ZCU102 使用
+> `npc-fpga-runtime-v7`，不能直接运行这里描述的 FPGA 资产；必须对当前 Config 执行 `rebuild`。
 
 本源码 Release 的 `constructions.env` 只固定两个可重建的终端 Config FQCN：
 

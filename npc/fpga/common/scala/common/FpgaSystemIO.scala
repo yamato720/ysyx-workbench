@@ -4,12 +4,13 @@ import chisel3._
 import npc.protocol.{Axi4FullMasterIO, AxiLiteMasterIO}
 
 /** Stable boundary between a board-neutral FPGA system and a board shell. */
-class FpgaSystemIO(addrWidth: Int, dataWidth: Int, idWidth: Int) extends Bundle {
+class FpgaSystemIO(addrWidth: Int, dataWidth: Int, idWidth: Int, traceEnabled: Boolean = false) extends Bundle {
   val interrupt = Input(Bool())
   val master = new Axi4FullMasterIO(addrWidth, dataWidth, idWidth)
   val control = Flipped(new AxiLiteMasterIO(32, 32))
   val mailboxInterrupt = Output(Bool())
   val memoryHostBase = Output(UInt(64.W))
+  val trace = if (traceEnabled) Some(new Axi4FullMasterIO(64, dataWidth, idWidth)) else None
 }
 
 object FpgaSystemIO {
@@ -35,5 +36,8 @@ object FpgaSystemIO {
 
     shell.mailboxInterrupt := system.mailboxInterrupt
     shell.memoryHostBase := system.memoryHostBase
+    (shell.trace zip system.trace).foreach { case (shellTrace, systemTrace) =>
+      shellTrace <> systemTrace
+    }
   }
 }

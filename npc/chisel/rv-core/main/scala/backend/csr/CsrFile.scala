@@ -18,6 +18,9 @@ class CsrFile(cfg: ISAConfig = ISAConfig()) extends Module {
     val trapCause = Input(UInt(cfg.xlen.W))
     val trapEpc = Input(UInt(cfg.xlen.W))
     val trapVector = Output(UInt(cfg.xlen.W))
+    val externalInterruptTrapVector = Output(UInt(cfg.xlen.W))
+    val machineExternalInterruptPending = Output(Bool())
+    val mret = Input(Bool())
 
     val machineExceptionPc = Output(UInt(cfg.xlen.W))
 
@@ -37,6 +40,7 @@ class CsrFile(cfg: ISAConfig = ISAConfig()) extends Module {
   val mepc = RegInit(0.U(cfg.xlen.W))
   val mcause = RegInit(0.U(cfg.xlen.W))
   val mipSoftware = RegInit(0.U(cfg.xlen.W))
+  val mtestexit = RegInit(0.U(cfg.xlen.W))
   val fflags = RegInit(0.U(5.W))
   val frm = RegInit(0.U(3.W))
   val mip = Cat(
@@ -63,8 +67,14 @@ class CsrFile(cfg: ISAConfig = ISAConfig()) extends Module {
     CsrAddress.mepc.U -> mepc,
     CsrAddress.mcause.U -> mcause,
     CsrAddress.mip.U -> mip,
+    CsrAddress.mtestexit.U -> mtestexit,
   ))
-  io.trapVector := mtvec
+  val mtvecBase = Cat(mtvec(cfg.xlen - 1, 2), 0.U(2.W))
+  io.trapVector := mtvecBase
+  io.externalInterruptTrapVector := Mux(mtvec(1, 0) === 1.U,
+    mtvecBase + (CsrCause.machineExternalInterrupt * 4).U(cfg.xlen.W), mtvecBase)
+  io.machineExternalInterruptPending := mstatus(CsrStatusBit.mie) &&
+    mie(CsrInterruptBit.meip) && mip(CsrInterruptBit.meip)
   io.machineExceptionPc := mepc
   io.fEnabled := cfg.F.B && mstatus(14, 13) =/= 0.U
   io.frmOut := frm
@@ -76,6 +86,17 @@ class CsrFile(cfg: ISAConfig = ISAConfig()) extends Module {
   when(io.trapEnable) {
     mcause := io.trapCause
     mepc := io.trapEpc
+    mstatus := mstatus
+      .bitSet(CsrStatusBit.mpie.U, mstatus(CsrStatusBit.mie))
+      .bitSet(CsrStatusBit.mie.U, false.B)
+      .bitSet(CsrStatusBit.mppLow.U, true.B)
+      .bitSet(CsrStatusBit.mppHigh.U, true.B)
+  }.elsewhen(io.mret) {
+    mstatus := mstatus
+      .bitSet(CsrStatusBit.mie.U, mstatus(CsrStatusBit.mpie))
+      .bitSet(CsrStatusBit.mpie.U, true.B)
+      .bitSet(CsrStatusBit.mppLow.U, false.B)
+      .bitSet(CsrStatusBit.mppHigh.U, false.B)
   }.elsewhen(io.floatingCommit) {
     fflags := fflags | io.floatingExceptionFlags
     mstatus := mstatus.bitSet(13.U, true.B).bitSet(14.U, true.B)
@@ -100,6 +121,7 @@ class CsrFile(cfg: ISAConfig = ISAConfig()) extends Module {
       is(CsrAddress.mepc.U) { mepc := io.writeData }
       is(CsrAddress.mcause.U) { mcause := io.writeData }
       is(CsrAddress.mip.U) { mipSoftware := io.writeData }
+      is(CsrAddress.mtestexit.U) { mtestexit := io.writeData }
     }
   }
 }

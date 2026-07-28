@@ -25,6 +25,7 @@
 ```bash
 make -C npc build config=U55cNpcFpgaConfig
 make -C npc build config=U55cRv64Npc300MHzFpgaConfig
+make -C npc rebuild config=U55cRv64Npc300MHzDebugFpgaConfig
 make -C npc build config=U55cYsyxSocFpgaConfig
 make -C npc build config=Zcu102NpcFpgaConfig
 make -C npc build config=Zcu102YsyxSocFpgaConfig
@@ -38,10 +39,18 @@ IP 时序等独立硬件约束；构造时会与 catalog、CDE 板卡及 profile
 `FpgaToolchainConfig.reports` 固定时序、拥塞、时钟利用率、控制集、高扇出、方法学和 QoR 报告。
 U55C 的 `FPGA_VITIS_XRT_MODE=unset` 只影响 `v++` 子进程，不改变保存的运行宿主。
 
-当前 FPGA 构造使用 `npc-fpga-runtime-v5` 作为调试和运行控制 ABI：M 扩展继续由 Xilinx 整数乘除
-IP 执行；所有公开 FPGA Config 固定 `F=0`、`D=0`。因此 FPGA 不生成硬件 FPR、本地 FPU、浮点 IP
-或 NEMU 指令代执行服务；完整 F 扩展只由本地 Verilator/NEMU 仿真 Config 用于学习。U55C 使用 XRT
-轮询，ZCU102 使用 PS/UIO 通知，二者均不接入 RISC-V 外部中断。
+普通 U55C 构造使用 `npc-fpga-runtime-v11`：Vitis CU 元数据显式定义为 `ip_c`、`ap_ctrl_hs`、4 KiB 控制窗口和匹配 XLEN 的
+AXI 数据宽度，使 XRT 能取得 mailbox 控制上下文，而 NPC 仍由 mailbox 连续运行控制。`U55cRv64Npc300MHzDebugFpgaConfig`
+使用 `npc-fpga-runtime-v12`，增加仅该 Config 存在的 `m_axi_trace -> HBM[1]`。它的 16 MiB trace BO 保留前
+200000 条提交，FIFO 深度由 Scala profile 的 `FPGA_TRACE_CACHE_RECORDS` 固定为 URAM 资源。v11 仍可上板和
+交互调试，但无逐指令/流水硬件数据。ZCU102 使用 `npc-fpga-runtime-v7`。M 扩展继续由 Xilinx
+整数乘除 IP 执行；所有公开 FPGA Config 固定 `F=0`、`D=0`。因此 FPGA 不生成硬件 FPR、本地 FPU、
+浮点 IP 或 NEMU 指令代执行服务；完整 F 扩展只由本地 Verilator/NEMU 仿真 Config 用于学习。U55C
+使用 XRT 轮询，ZCU102 使用 PS/UIO 通知，二者均不接入 RISC-V 外部中断。
+
+runtime v7 mailbox 将三条信号分开：控制寄存器的 guest MEIP 电平馈入 `core.io.interrupt`；`putch` 与
+completion 通过 shell notification 通知宿主；FPGA AM 对非标准机器 CSR `mtestexit`（`0x7c0`）的已提交写入会锁存
+退出码和提交 PC 后复位 core。EBREAK 只保留正常同步 breakpoint trap 状态；completion 不是 debug halt，也不是 guest 外部中断。
 
 ## RTL 资源收缩证据
 
@@ -108,8 +117,8 @@ npc/fpga/common/scripts/artifact-manifest.sh verify \
   --platform xilinx_u55c_gen3x16_xdma_3_202210_1 \
   --config-fqcn npc.fpga.u55c.U55cYsyxSocFpgaConfig \
   --host-abi nemu-construction-v1 \
-  --protocol-abi npc-fpga-runtime-v5
+  --protocol-abi npc-fpga-runtime-v11
 ```
 
 源码、Config 或工具变化不会自动替换已有 FPGA 构造；需要新实现时显式执行 `rebuild`。
-ABI v3 及更早构造不能通过 `host-rebuild` 升级，必须使用 `rebuild` 重新生成硬件和运行宿主。
+ABI v3 及更早构造不能通过 `host-build` 升级，必须使用 `rebuild` 重新生成硬件和运行宿主。

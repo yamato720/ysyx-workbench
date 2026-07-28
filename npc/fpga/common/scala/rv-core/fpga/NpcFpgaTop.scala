@@ -11,37 +11,81 @@ class NpcFpgaSystem(implicit parameters: Parameters) extends Module {
 
   private val width = config.isa.xlen
   private val axiConfig = config.axi
-  val io = IO(new FpgaSystemIO(axiConfig.addrWidth, axiConfig.dataWidth, axiConfig.idWidth))
+  private val runtimeTrace = FpgaConfigParameters.runtimeTrace
+  val io = IO(new FpgaSystemIO(axiConfig.addrWidth, axiConfig.dataWidth, axiConfig.idWidth,
+    runtimeTrace.enabled))
 
   val mailbox = Module(new FpgaRuntimeMailbox(width))
+  val runtime = Wire(new FpgaRuntimeDebug(width))
+  mailbox.io.runtime := runtime
   val core = withReset(reset.asBool || mailbox.io.coreReset) {
     Module(new NpcCore(config, FpgaCoreComponents.forAttachment(FpgaConfigParameters.ipAttachment)))
   }
-  core.io.interrupt := io.interrupt
+  core.io.interrupt := io.interrupt || mailbox.io.guestExternalInterrupt
   io.master <> core.io.master
-  io.mailboxInterrupt := mailbox.io.interrupt
+  io.mailboxInterrupt := mailbox.io.mailboxInterrupt
   io.memoryHostBase := mailbox.io.memoryHostBase
   mailbox.io.putch <> core.io.putch.get
 
   val debug = core.io.debug.get
-  mailbox.io.runtime.currentPc := debug.frontend.currentPc
-  mailbox.io.runtime.nextArchitecturalPc := debug.frontend.nextArchitecturalPc
-  mailbox.io.runtime.frontendInstruction := debug.frontend.frontendInstruction
-  mailbox.io.runtime.commitValid := debug.backend.commitValid
-  mailbox.io.runtime.commitPc := debug.backend.commitPc
-  mailbox.io.runtime.commitInstruction := debug.backend.commitInstruction
-  mailbox.io.runtime.commitNextPc := debug.backend.commitNextPc
-  mailbox.io.runtime.cycleCount := debug.backend.cycleCount
-  mailbox.io.runtime.fcsr := debug.backend.fcsr
-  mailbox.io.runtime.mstatus := debug.backend.mstatus
-  mailbox.io.runtime.mcause := debug.backend.mcause
-  mailbox.io.runtime.mepc := debug.backend.mepc
-  mailbox.io.runtime.mtvec := debug.backend.mtvec
-  mailbox.io.runtime.coreBusy := debug.coreBusy
-  mailbox.io.runtime.dispatchFire := core.io.dispatchControl.get.dispatchFire
+  runtime.currentPc := debug.frontend.currentPc
+  runtime.nextArchitecturalPc := debug.frontend.nextArchitecturalPc
+  runtime.frontendInstruction := debug.frontend.frontendInstruction
+  runtime.commitValid := debug.backend.commitValid
+  runtime.commitPc := debug.backend.commitPc
+  runtime.commitInstruction := debug.backend.commitInstruction
+  runtime.commitNextPc := debug.backend.commitNextPc
+  runtime.sampleCommitValid := debug.backend.sampleCommitValid
+  runtime.sampleCommitPc := debug.backend.sampleCommitPc
+  runtime.sampleCommitInstruction := debug.backend.sampleCommitInstruction
+  runtime.sampleCommitNextPc := debug.backend.sampleCommitNextPc
+  runtime.sampleFetchCycles := debug.backend.sampleFetchCycles
+  runtime.sampleDecodeCycles := debug.backend.sampleDecodeCycles
+  runtime.sampleExecuteCycles := debug.backend.sampleExecuteCycles
+  runtime.sampleMemoryCycles := debug.backend.sampleMemoryCycles
+  runtime.sampleWritebackCycles := debug.backend.sampleWritebackCycles
+  runtime.completionCommitValid := debug.backend.completionCommitValid
+  runtime.completionCommitPc := debug.backend.completionCommitPc
+  runtime.completionCommitNextPc := debug.backend.completionCommitNextPc
+  runtime.cycleCount := debug.backend.cycleCount
+  runtime.fcsr := debug.backend.fcsr
+  runtime.mstatus := debug.backend.mstatus
+  runtime.mcause := debug.backend.mcause
+  runtime.mepc := debug.backend.mepc
+  runtime.mtvec := debug.backend.mtvec
+  runtime.coreBusy := debug.coreBusy
+  runtime.dispatchFire := core.io.dispatchControl.get.dispatchFire
   core.io.dispatchControl.get.dispatchPermit := mailbox.io.dispatchPermit
-  mailbox.io.runtime.backpressureReasons := debug.backpressureReasons
-  mailbox.io.runtime.gprs := debug.backend.registers
+  runtime.backpressureReasons := debug.backpressureReasons
+  runtime.fetchAxiWaitCycles := debug.frontend.fetchAxiWaitCycles
+  runtime.redirectFlushCount := debug.frontend.redirectFlushCount
+  runtime.idStallCycles := debug.backend.idStallCycles
+  runtime.executeStallCycles := debug.backend.executeStallCycles
+  runtime.memoryStallCycles := debug.backend.memoryStallCycles
+  runtime.pipelineFeatures := debug.backend.pipelineFeatures
+  runtime.gprs := debug.backend.registers
+
+  val traceStatus = WireDefault(0.U.asTypeOf(new FpgaRuntimeTraceStatus))
+  mailbox.io.trace := traceStatus
+  if (runtimeTrace.enabled) {
+    val statistics = Module(new FpgaRuntimeStatistics(width, runtimeTrace.maxRecords))
+    val writer = Module(new FpgaRuntimeTraceWriter(
+      width, axiConfig.idWidth, runtimeTrace.maxRecords, runtimeTrace.cacheRecords))
+    statistics.io.runtime := runtime
+    statistics.io.coreReset := mailbox.io.coreReset
+    statistics.io.clear := mailbox.io.traceClear
+    statistics.io.classSelector := mailbox.io.traceClassSelector
+    statistics.io.stageSelector := mailbox.io.traceStageSelector
+    statistics.io.stallSelector := mailbox.io.traceStallSelector
+    writer.io.runtime := runtime
+    writer.io.traceBase := mailbox.io.traceHostBase
+    writer.io.clear := mailbox.io.traceClear
+    io.trace.get <> writer.io.axi
+    traceStatus := statistics.io.status
+    traceStatus.records := writer.io.records
+    traceStatus.dropped := writer.io.dropped
+    traceStatus.drained := writer.io.drained
+  }
 
   mailbox.io.axi.aw.valid := io.control.aw.valid
   mailbox.io.axi.aw.bits := io.control.aw.bits
@@ -72,7 +116,9 @@ abstract class NpcFpgaShell(board: FpgaBoard)(implicit parameters: Parameters) e
   override def desiredName: String = "NpcFpgaTop"
 
   private val axiConfig = config.axi
-  val io = IO(new FpgaSystemIO(axiConfig.addrWidth, axiConfig.dataWidth, axiConfig.idWidth))
+  private val runtimeTrace = FpgaConfigParameters.runtimeTrace
+  val io = IO(new FpgaSystemIO(axiConfig.addrWidth, axiConfig.dataWidth, axiConfig.idWidth,
+    runtimeTrace.enabled))
   private val system = Module(new NpcFpgaSystem)
   FpgaSystemIO.connect(io, system.io)
 }

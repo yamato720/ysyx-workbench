@@ -163,7 +163,11 @@ static int decode_exec(Decode *s) {
 // ecall, ebreak, fence, mret
   INSTPAT("0000000 00000 00000 000 00000 11100 11", ecall  , N, s->dnpc = isa_raise_intr(11, s->pc)); // M-mode ecall
   INSTPAT("0000000 00000 00000 001 00000 11100 11", fence  , N, /* no side effect in NEMU */);
+#ifdef NPC_FPGA_REMOTE
+  INSTPAT("0000000 00001 00000 000 00000 11100 11", ebreak , N, s->dnpc = isa_raise_intr(3, s->pc));
+#else
   INSTPAT("0000000 00001 00000 000 00000 11100 11", ebreak , N, NEMUTRAP(s->pc, R(10))); // R(10) is $a0
+#endif
   INSTPAT("0011000 00010 00000 000 00000 11100 11", mret   , N, s->dnpc = cpu.mepc);
 
 

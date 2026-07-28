@@ -17,6 +17,7 @@
 !configs/riscv64-fpga-u55c-defconfig
 !tests/run-pipeline-html-test.sh
 !tests/run-performance-html-test.sh
+!tests/run-fpga-runtime-test.sh
 include/config
 include/generated
 

@@ -379,6 +379,12 @@ void npc_pipeline_html_record(
                        disassembly, commit_cycle, stage_cycles);
 }
 
+void npc_pipeline_html_set_dropped(uint64_t dropped) {
+  if (global_recorder == NULL) npc_pipeline_html_init();
+  if (global_recorder != NULL && dropped > global_recorder->dropped)
+    global_recorder->dropped = dropped;
+}
+
 void npc_pipeline_html_finalize(
     const uint64_t stalls[PIPELINE_HTML_STAGE_COUNT],
     bool write_pipeline_html) {

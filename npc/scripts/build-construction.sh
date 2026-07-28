@@ -64,6 +64,10 @@ copy_glue() {
 
 refresh_host() {
   local index=$1 total=$2
+  if [[ ${CONSTRUCTION_TEST_HOST_FAIL:-0} == 1 ]]; then
+    run_phase nemu-host "$index" "$total" bash -c 'echo "按测试请求模拟 NEMU host 构造失败" >&2; exit 1'
+    return
+  fi
   run_phase nemu-host "$index" "$total" \
     "$npc_root/scripts/refresh-simulation-host.sh" "$workspace" "$stage"
 }

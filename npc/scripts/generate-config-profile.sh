@@ -34,9 +34,17 @@ case "$scope" in
       exit 1
     fi
     ;;
-  soc|fpga)
+  soc)
     if ! (cd "$npc_root/chisel/ysyxSoC" && NPC_SCALA_CONFIG="$fqcn" mill -i \
       ysyxsoc.runMain ysyx.DescribeConfig "$temporary") >"$log" 2>&1; then
+      echo "生成 $fqcn profile 失败：" >&2
+      cat "$log" >&2
+      exit 1
+    fi
+    ;;
+  fpga)
+    if ! (cd "$npc_root/chisel/ysyxSoC" && NPC_SCALA_CONFIG="$fqcn" mill -i \
+      ysyxsoc.runMain ysyx.DescribeFpgaConfig "$temporary") >"$log" 2>&1; then
       echo "生成 $fqcn profile 失败：" >&2
       cat "$log" >&2
       exit 1
@@ -61,7 +69,9 @@ awk -F= '
     if (!seen["PROFILE_FORMAT"] || !seen["CAPABILITY"] || !seen["XLEN"] || !seen["NEMU_PRESET"] ||
         !seen["INTEGER_EXECUTE_STAGES"] || !seen["SERIAL_EXECUTE_STAGES"] || !seen["REGISTER_INITIAL_FETCH_REQUEST"] ||
         !seen["SEPARATE_SERIAL_INTEGER_ALU"] || !seen["SERIAL_EXECUTE_RESULT_FORWARDING"] ||
-        (scope == "fpga" && !seen["FPGA_DIVIDER_NON_BLOCKING"])) exit 1
+        (scope == "fpga" && (!seen["FPGA_DIVIDER_NON_BLOCKING"] || !seen["FPGA_RUNTIME_TRACE"] ||
+          !seen["FPGA_TRACE_HBM_BANK"] || !seen["FPGA_TRACE_BUFFER_BYTES"] || !seen["FPGA_TRACE_MAX_RECORDS"] ||
+          !seen["FPGA_TRACE_CACHE_RECORDS"]))) exit 1
   }
 ' "$temporary" || { echo "Scala profile 格式无效：$temporary" >&2; exit 1; }
 mv "$temporary" "$output"

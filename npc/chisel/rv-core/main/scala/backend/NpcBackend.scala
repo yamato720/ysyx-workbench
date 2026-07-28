@@ -37,6 +37,7 @@ class NpcBackend(
 
   val io = IO(new Bundle {
     val interrupt = Input(Bool())
+    val interruptPc = Input(UInt(cfg.xlen.W))
     val dispatch = Flipped(Decoupled(new DecodedDispatchPayload(cfg)))
     val axi = new AxiLiteMasterIO(axiConfig.addrWidth, axiConfig.dataWidth)
     val redirectValid = Output(Bool())
@@ -87,6 +88,7 @@ class NpcBackend(
     cfg.xlen, operatorConfig.floating, operatorConfig.routes, components.arithmeticIp))) else None
   val csrExecution = Module(new CsrExecution(cfg))
   val csrFile = Module(new CsrFile(cfg))
+  val machineExternalInterruptPending = csrFile.io.machineExternalInterruptPending
   val loadStoreUnit = Module(new LSUAXIAdapter(
     axiConfig.addrWidth,
     axiConfig.dataWidth,
@@ -348,9 +350,9 @@ class NpcBackend(
   val arithmeticWillIssue = decodeExecuteReg.io.out.valid && executeInputIsArithmetic && arithmeticCanAccept
   val decodeCanIssue = Mux(
     pipelineConfig.enablePipeline.B,
-    !hazardUnit.io.stall && !floatingRawHazard && !redirectBarrier && !frontendRedirectValid &&
+    !hazardUnit.io.stall && !floatingRawHazard && !redirectBarrier && !machineExternalInterruptPending && !frontendRedirectValid &&
       executeState =/= executeArithmeticWait && !arithmeticWillIssue,
-    !busyAfterDecode && !frontendRedirectValid
+    !busyAfterDecode && !machineExternalInterruptPending && !frontendRedirectValid
   )
   decodeExecuteReg.io.flush := frontendRedirectValid
   decodeExecuteReg.io.in.valid := io.dispatch.valid && decodeCanIssue
@@ -794,17 +796,39 @@ class NpcBackend(
   csrFile.io.writeEnable := commitFire && memoryWritebackReg.io.out.bits.csrWriteEnable
   csrFile.io.accessAllowed := memoryWritebackReg.io.out.bits.csrAccessAllowed
   csrFile.io.externalInterrupt := io.interrupt
-  csrFile.io.trapEnable := commitFire && memoryWritebackReg.io.out.bits.trapEnable
-  csrFile.io.trapCause := memoryWritebackReg.io.out.bits.trapCause
-  csrFile.io.trapEpc := memoryWritebackReg.io.out.bits.trapEpc
+  // 除 WB 外的旧指令均已完成。若 WB 有效，它会在此拍成为最后一条提交；
+  // 若 WB 也为空，中断可直接发生在前端给出的下一条指令边界。
+  val interruptPipelineDrained = !decodeExecuteReg.io.out.valid && !integerExecuteReg.io.out.valid &&
+    !serialExecuteControlReg.io.out.valid && !serialExecuteResultReg.io.out.valid &&
+    !arithmeticResponseReg.io.out.valid && executeState === executeIdle &&
+    !executeMemoryReg.io.out.valid && memoryState === memoryIdle && !loadStoreUnit.io.busy
+  val commitSynchronousTrap = memoryWritebackReg.io.out.bits.trapEnable
+  val commitMret = memoryWritebackReg.io.out.bits.mretEnable
+  val commitExternalInterrupt = commitFire && machineExternalInterruptPending &&
+    interruptPipelineDrained && !commitSynchronousTrap && !commitMret
+  val idleExternalInterrupt = !memoryWritebackReg.io.out.valid && machineExternalInterruptPending &&
+    interruptPipelineDrained
+  val takeExternalInterrupt = commitExternalInterrupt || idleExternalInterrupt
+  val machineExternalInterruptCause =
+    ((BigInt(1) << (cfg.xlen - 1)) | BigInt(CsrCause.machineExternalInterrupt)).U(cfg.xlen.W)
+
+  csrFile.io.trapEnable := (commitFire && commitSynchronousTrap) || takeExternalInterrupt
+  csrFile.io.trapCause := Mux(takeExternalInterrupt, machineExternalInterruptCause,
+    memoryWritebackReg.io.out.bits.trapCause)
+  csrFile.io.trapEpc := Mux(takeExternalInterrupt,
+    Mux(commitExternalInterrupt, memoryWritebackReg.io.out.bits.nextPc, io.interruptPc),
+    memoryWritebackReg.io.out.bits.trapEpc)
+  csrFile.io.mret := commitFire && commitMret
   csrFile.io.floatingCommit := commitFire && memoryWritebackReg.io.out.bits.floatingInstruction
   csrFile.io.floatingExceptionFlags := memoryWritebackReg.io.out.bits.floatingExceptionFlags
-  commitRedirectValid := commitFire && (memoryWritebackReg.io.out.bits.trapEnable || memoryWritebackReg.io.out.bits.mretEnable)
-  commitRedirectTarget := Mux(memoryWritebackReg.io.out.bits.trapEnable, csrFile.io.trapVector,
-    csrFile.io.machineExceptionPc)
-  val commitNextPc = Mux(memoryWritebackReg.io.out.bits.trapEnable, csrFile.io.trapVector,
-    Mux(memoryWritebackReg.io.out.bits.mretEnable, csrFile.io.machineExceptionPc,
+  commitRedirectValid := takeExternalInterrupt || (commitFire && (commitSynchronousTrap || commitMret))
+  commitRedirectTarget := Mux(takeExternalInterrupt, csrFile.io.externalInterruptTrapVector,
+    Mux(commitSynchronousTrap, csrFile.io.trapVector, csrFile.io.machineExceptionPc))
+  val commitNextPc = Mux(takeExternalInterrupt, csrFile.io.externalInterruptTrapVector,
+    Mux(commitSynchronousTrap, csrFile.io.trapVector,
+      Mux(commitMret, csrFile.io.machineExceptionPc,
       memoryWritebackReg.io.out.bits.nextPc))
+  )
   when(io.dispatch.fire && (dispatch.trapEnable || dispatch.mretEnable)) {
     redirectBarrier := true.B
   }
@@ -865,6 +889,24 @@ class NpcBackend(
   io.debug.commitPc := commitPcDebug
   io.debug.commitInstruction := commitInstDebug
   io.debug.commitNextPc := commitNextPcDebug
+  io.debug.sampleCommitValid := commitFire
+  io.debug.sampleCommitPc := memoryWritebackReg.io.out.bits.pc
+  io.debug.sampleCommitInstruction := memoryWritebackReg.io.out.bits.instruction
+  io.debug.sampleCommitNextPc := commitNextPc
+  io.debug.sampleFetchCycles := memoryWritebackReg.io.out.bits.perfFetchCycles
+  io.debug.sampleDecodeCycles := memoryWritebackReg.io.out.bits.perfDecodeCycles
+  io.debug.sampleExecuteCycles := memoryWritebackReg.io.out.bits.perfExecuteCycles
+  io.debug.sampleMemoryCycles := memoryWritebackReg.io.out.bits.perfMemoryCycles
+  io.debug.sampleWritebackCycles := performanceCycle - memoryWritebackReg.io.out.bits.perfWritebackStartCycle
+  // `mtestexit` is an FPGA runtime ABI, not a RISC-V exception. It is
+  // deliberately derived from the commit payload, so an EBREAK remains an
+  // ordinary synchronous breakpoint trap and cannot reset the FPGA core.
+  io.debug.completionCommitValid := commitFire &&
+    memoryWritebackReg.io.out.bits.csrWriteEnable &&
+    memoryWritebackReg.io.out.bits.csrAccessAllowed &&
+    memoryWritebackReg.io.out.bits.csrAddress === CsrAddress.mtestexit.U
+  io.debug.completionCommitPc := memoryWritebackReg.io.out.bits.pc
+  io.debug.completionCommitNextPc := commitNextPc
   io.debug.cycleCount := performanceCycle
   io.debug.commitFetchCycles := commitFetchCyclesDebug
   io.debug.commitDecodeCycles := commitDecodeCyclesDebug

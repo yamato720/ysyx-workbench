@@ -30,6 +30,25 @@ export CONSTRUCTION_ID_PREFIX=20260718153042
 "$npc_root/scripts/generate-config-catalog.sh" "$npc_root"
 export NPC_CONFIG_CATALOG_READY=1
 
+# 没有正式 FPGA 构造时，host-build 仍应能根据完整 Config 产生可与外部 xclbin
+# 搭配使用的 U55C host；这个缓存不能出现在正式版本库中，也不能携带硬件资产。
+host_only_fqcn=npc.fpga.u55c.U55cRv64Npc300MHzFpgaConfig
+host_only="$CONSTRUCTION_TEST_ROOT/.hosts/$host_only_fqcn"
+"$manager" host-build "$npc_root" U55cRv64Npc300MHzFpgaConfig 0 1
+[[ -x $host_only/abi/nemu/nemu-exec && -f $host_only/abi/nemu/host.env &&
+  -f $host_only/profile.env && -f $host_only/construction.env && -s $host_only/logs/host/nemu-host.log ]] ||
+  fail 'host-only 缓存没有生成完整 NEMU host'
+[[ $(value "$host_only/profile.env" CONFIG_FQCN) == "$host_only_fqcn" &&
+  $(value "$host_only/abi/nemu/host.env" NEMU_BACKEND) == u55c &&
+  $(value "$host_only/construction.env" HOST_ONLY) == 1 ]] ||
+  fail 'host-only 缓存没有冻结匹配的 U55C Config profile'
+[[ ! -e $host_only/version.tag && ! -d "$CONSTRUCTION_TEST_ROOT/$host_only_fqcn" &&
+  ! -e $host_only/fpga && ! -e $host_only/abi/rtl ]] ||
+  fail 'host-only 缓存错误地生成正式构造或硬件资产'
+if "$manager" resolve "$npc_root" '' 1 >/dev/null 2>&1; then
+  fail 'host-only 缓存错误地成为正式 version'
+fi
+
 build_hold="$work/first-build-hold"
 CONSTRUCTION_TEST_HOLD_DIR="$build_hold" "$manager" build "$npc_root" SimulationConfig > "$work/first-build.log" 2>&1 &
 build_pid=$!
@@ -302,6 +321,24 @@ fi
   fail 'FPGA 完成标志没有记录实际 xclbin'
 [[ -s $u55c/fpga/ip-generated/logs/npc_int_multiplier_ip.log && -s $u55c/fpga/ip-generated/logs/npc_int_divider_ip.log ]] ||
   fail 'FPGA dry-run 未生成逐 IP 日志'
+
+# 完整 FPGA 资产已经生成而末尾 NEMU host 失败时，host-build 必须只恢复 host。
+# 同时模拟旧版本失败目录没有 construction.env 的情形，确保无需重跑硬件即可迁移。
+if fpga_host_failure=$(CONSTRUCTION_TEST_HOST_FAIL=1 "$manager" rebuild "$npc_root" U55cYsyxSocFpgaConfig 2>&1); then
+  fail '模拟 FPGA host 失败的重构意外成功'
+fi
+[[ $fpga_host_failure == *'可使用 host-build 只重试失败的 NEMU host'* &&
+  $(value "$u55c/version.tag" STATE) == failed && -f $u55c/construction.env && -e $u55c/.incomplete ]] ||
+  fail 'FPGA host 失败没有保留可恢复的正式构造元数据'
+u55c_assets_after_host_failure=$(find "$u55c/fpga" -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)
+rm -f "$u55c/construction.env"
+"$manager" host-build "$npc_root" U55cYsyxSocFpgaConfig 0 1
+[[ $(value "$u55c/version.tag" STATE) == complete && ! -e $u55c/.incomplete &&
+  -f $u55c/construction.env && -x $u55c/abi/nemu/nemu-exec &&
+  $(value "$u55c/construction.env" SOURCE_REV) == unknown ]] ||
+  fail 'host-build 没有恢复旧失败 FPGA 构造'
+[[ $(find "$u55c/fpga" -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1) == "$u55c_assets_after_host_failure" ]] ||
+  fail '恢复失败 FPGA host 时重新构造或修改了硬件资产'
 
 # host-build 重新读取当前终端的 NEMU case class，但保存 profile 的硬件和 FPGA
 # 工具链字段以及全部 FPGA 资产必须保持冻结。

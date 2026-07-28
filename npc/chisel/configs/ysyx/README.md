@@ -31,6 +31,7 @@
 
 `YsyxElaborateConfig` 与 `YsyxSimulationConfig` 的硬件组合相同；前者只是可复用 CDE 图，后者只挂载
 默认提供 `NemuHostConfig.LocalPipelineTrace` 的 `LocalSocTerminal`，成为可运行终端。
-没有 `FpgaBoardKey` 的 SoC CDE 图自动使用本地
-Verilator 分支；L4 板卡终端只要叠加自身 `...BoardConfig` 即自动转入 FPGA 分支，无需额外的平台
-Config。
+没有通用 `FpgaIpAttachmentKey` 的 SoC CDE 图自动使用本地 Verilator 分支；L4 板卡终端只要叠加
+自身 `...BoardConfig` 即自动转入 FPGA 分支，无需额外的平台 Config。L2 只读取
+`NpcCoreConfigKey` 和 `FpgaIpAttachmentKey`，不依赖 `npc.fpga` 的板卡类型或实现；物理板卡和
+profile 细节由 FPGA 集成层负责。

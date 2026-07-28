@@ -1,6 +1,6 @@
 package npc
 
-/** 写入 mcause 的同步异常原因码。 */
+/** 写入 mcause 的异常和中断原因码。 */
 object CsrCause {
   val misalignedFetch = 0x0
   val fetchAccess = 0x1
@@ -21,6 +21,8 @@ object CsrCause {
   val loadGuestPageFault = 0x15
   val virtualInstruction = 0x16
   val storeGuestPageFault = 0x17
+
+  val machineExternalInterrupt = 0xb
 
   val all: Array[Int] = Array(
     misalignedFetch, fetchAccess, illegalInstruction, breakpoint,

@@ -5,9 +5,10 @@ import _root_.npc.{
   FpgaConfig,
   FpgaIpTerminal,
   Rv64PipelineDualForwardingFpgaConfig,
-  Rv64PipelineDualForwardingTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecuteFpgaConfig
+  Rv64PipelineDualForwardingTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecuteFpgaConfig,
+  RuntimeTraceProfile
 }
-import _root_.npc.{U55cNpcTerminal, U55cSocTerminal}
+import _root_.npc.{NemuHostConfig, U55cNpcTerminal, U55cSocTerminal}
 import _root_.ysyx.YsyxElaborateConfig
 
 /** U55C 的所有可运行终端构造。
@@ -42,6 +43,19 @@ class U55cRv64Npc300MHzFpgaConfig extends CDEConfig(
   new U55c300MHzBoardConfig ++
     new Rv64PipelineDualForwardingTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecuteFpgaConfig
 ) with U55cNpcTerminal with FpgaIpTerminal
+
+/** U55C RV64IM 300 MHz 调试终端。
+  *
+  * 这是生成 v12 trace xclbin 的唯一公开 Config；它需要完整 `rebuild`，不能由
+  * v11 外部 xclbin 的 host-only 构造补出硬件采样。
+  */
+class U55cRv64Npc300MHzDebugFpgaConfig extends CDEConfig(
+  new U55c300MHzDebugBoardConfig ++
+    new Rv64PipelineDualForwardingTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecuteFpgaConfig
+) with U55cNpcTerminal with FpgaIpTerminal {
+  override protected def configuredNemu: NemuHostConfig = NemuHostConfig.U55cRuntimeTrace
+  override protected def configuredRuntimeTraceProfile: RuntimeTraceProfile = RuntimeTraceProfile.U55cDebug
+}
 
 /** U55C 的 ysyxSoC FPGA 终端构造。
   *

@@ -30,6 +30,9 @@
 #include <performance-html.h>
 #endif
 #include "npc_debug.h"
+#ifdef NPC_FPGA_REMOTE
+#include <npc-fpga-trace.h>
+#endif
 // NPC integration: declare NPC functions
 extern void npc_init();
 extern void npc_single_run();
@@ -162,7 +165,17 @@ typedef struct {
 
 static NPCInstructionTiming npc_last_instruction = {};
 
+static bool npc_monitoring_available(void) {
+#ifdef NPC_FPGA_REMOTE
+  return npc_hardware_monitoring_available();
+#else
+  return true;
+#endif
+}
+
 #ifdef CONFIG_NPC_PERFORMANCE_HTML
+static uint64_t npc_recorded_trace_sequence;
+
 static void npc_record_pipeline_html(
     Decode *instruction, uint64_t sequence, uint64_t commit_cycle) {
   uint64_t stage[PIPELINE_HTML_STAGE_COUNT];
@@ -177,9 +190,77 @@ static void npc_record_pipeline_html(
               (uint8_t *)&instruction->isa.inst, instruction_length);
   npc_pipeline_html_record(sequence, instruction->pc, instruction->isa.inst,
                            disassembly, commit_cycle, stage);
+  if (sequence > npc_recorded_trace_sequence)
+    npc_recorded_trace_sequence = sequence;
 }
 
+#ifdef NPC_FPGA_REMOTE
+static int npc_import_fpga_trace_record(const struct npc_fpga_trace_record *record,
+                                        void *opaque) {
+  (void)opaque;
+  if (record == NULL || record->sequence <= npc_recorded_trace_sequence) return 0;
+  if (npc_recorded_trace_sequence != 0 &&
+      record->sequence != npc_recorded_trace_sequence + 1) {
+    errno = EPROTO;
+    return -1;
+  }
+
+  const uint32_t instruction = record->instruction;
+  const int instruction_length = (instruction & 0x3) == 0x3 ? 4 : 2;
+  char disassembly[160] = {};
+  void disassemble(char *str, int size, uint64_t pc, uint8_t *code, int nbyte);
+  disassemble(disassembly, sizeof(disassembly), record->pc,
+              (uint8_t *)&instruction, instruction_length);
+  uint64_t stage[PIPELINE_HTML_STAGE_COUNT];
+  for (uint32_t index = 0; index < PIPELINE_HTML_STAGE_COUNT; index++)
+    stage[index] = record->stage[index];
+  npc_pipeline_html_record(record->sequence, record->pc, instruction,
+                           disassembly, record->commit_cycle, stage);
+  npc_recorded_trace_sequence = record->sequence;
+  npc_last_instruction = (NPCInstructionTiming) {
+    .cycles_before = 0,
+    .cycles_after = record->commit_cycle,
+    .commits_before = record->sequence - 1,
+    .commits_after = record->sequence,
+    .pc = record->pc,
+    .inst = instruction,
+    .valid = true,
+  };
+  return 0;
+}
+
+static void npc_refresh_last_hardware_timing(void) {
+  if (!npc_monitoring_available()) return;
+  const uint64_t commits = npc_get_timing_sample_count(NPC_TIMING_ALL);
+  if (commits == 0) return;
+  npc_last_instruction = (NPCInstructionTiming) {
+    .cycles_before = 0,
+    .cycles_after = npc_get_last_timing_total_cycles(),
+    .commits_before = commits - 1,
+    .commits_after = commits,
+    .pc = npc_get_timing_last_pc(NPC_TIMING_ALL),
+    .inst = npc_get_timing_last_instruction(NPC_TIMING_ALL),
+    .valid = true,
+  };
+}
+
+static void npc_import_fpga_trace(void) {
+  if (!npc_monitoring_available()) return;
+  if (npc_runtime_visit_trace(npc_import_fpga_trace_record, NULL) != 0) {
+    if (errno != EBUSY)
+      fprintf(stderr, "cannot import U55C runtime trace: %s\n", strerror(errno));
+    return;
+  }
+  npc_pipeline_html_set_dropped(npc_runtime_trace_dropped());
+  npc_refresh_last_hardware_timing();
+}
+#endif
+
 static void npc_finish_pipeline_html(void) {
+#ifdef NPC_FPGA_REMOTE
+  if (!npc_monitoring_available()) return;
+  npc_import_fpga_trace();
+#endif
   uint64_t stalls[PIPELINE_HTML_STAGE_COUNT];
   for (uint32_t index = 0; index < PIPELINE_HTML_STAGE_COUNT; index++) {
     stalls[index] = npc_get_pipeline_stall_count(index);
@@ -202,6 +283,11 @@ extern int npc_debug_step(void);
 extern uint32_t npc_debug_stop_reason(void);
 extern uint64_t npc_debug_stop_pc(void);
 extern uint64_t npc_get_last_commit_pc(void);
+extern bool npc_runtime_has_failed(void);
+extern bool npc_runtime_has_completed(void);
+extern uint64_t npc_runtime_completion_code(void);
+extern uint64_t npc_runtime_completion_pc(void);
+extern uint64_t npc_runtime_completion_next_pc(void);
 
 static volatile sig_atomic_t npc_interrupt_requested;
 
@@ -373,6 +459,10 @@ static void npc_finish_performance_html(void) {
   if (npc_performance_html_finished) return;
   npc_performance_html_finished = true;
 
+#ifdef NPC_FPGA_REMOTE
+  npc_import_fpga_trace();
+#endif
+
   PerformanceHtmlTimingRow rows[NPC_TIMING_CLASS_COUNT] = {};
   for (uint32_t timing_class = 0; timing_class < NPC_TIMING_CLASS_COUNT; timing_class++) {
     rows[timing_class].name = npc_timing_class_names[timing_class];
@@ -422,6 +512,10 @@ static void npc_finish_performance_html(void) {
     .commits = commits,
     .host_time_us = g_timer,
     .guest_instructions = g_nr_guest_inst,
+    .monitoring_available = npc_monitoring_available(),
+#ifdef NPC_FPGA_REMOTE
+    .trace_dropped = npc_runtime_trace_dropped(),
+#endif
     .pipeline_features = npc_get_pipeline_features(),
     .last_commit_valid = npc_last_instruction.valid,
     .last_class = last_class_name,
@@ -481,6 +575,14 @@ void npc_print_performance(void) {
 #else
   const char *mode = "NPC";
 #endif
+
+  if (!npc_monitoring_available()) {
+    printf("[%s] hardware monitoring is unavailable: this xclbin has no U55C v12 trace capability. "
+           "Rebuild U55cRv64Npc300MHzDebugFpgaConfig for pipeline and timing statistics.\n", mode);
+    printf("[%s] mailbox counters: cycles=%" PRIu64 ", commits=%" PRIu64 "\n",
+           mode, cycles, commits);
+    return;
+  }
 
   if (commits == 0 || cycles == 0) {
     printf("[%s] performance: cycles=%" PRIu64 ", commits=%" PRIu64
@@ -766,11 +868,7 @@ static void exec_once(Decode *s, vaddr_t pc) {
       RECORD_STORE_MISMATCH("store_bytes", expected_store_word_bytes, store_word_bytes);
 #undef RECORD_STORE_MISMATCH
     }
-    // ebreak terminates the test program. NEMU keeps dnpc at pc + 4 before
-    // ending execution, while NPC treats it as a synchronous trap and exposes
-    // mtvec as its committed next PC. Registers must still match.
-    bool is_terminal_ebreak = s->isa.inst == 0x00100073;
-    if (!is_terminal_ebreak && nemu_s.dnpc != s->dnpc) {
+    if (nemu_s.dnpc != s->dnpc) {
       snprintf(mm[nm].name, sizeof(mm[nm].name), "next_pc");
       mm[nm].nemu_val = nemu_s.dnpc;
       mm[nm].npc_val  = s->dnpc;
@@ -809,16 +907,15 @@ static void exec_once(Decode *s, vaddr_t pc) {
   int ilen = ((s->isa.inst & 0x3) == 0x3) ? 4 : 2;
   s->snpc = s->pc + ilen;
   
-  // Check for ebreak instruction (RISC-V trap for program termination)
-  // ebreak encoding: 0x00100073
+  // Local NPC preserves the historical AM test convention. FPGA remote mode
+  // ends only when its independent mailbox completion event arrives.
+#ifndef NPC_FPGA_REMOTE
   if (s->isa.inst == 0x00100073) {
-    // a0 register (x10) contains the exit code
-    // In NPC mode, read it from the hardware
     extern void set_nemu_state(int state, vaddr_t pc, int halt_ret);
     extern uint64_t npc_get_reg(int idx);
-    int halt_ret = (int)npc_get_reg(10);  // Read a0 from NPC
-    set_nemu_state(NEMU_END, s->pc, halt_ret);
+    set_nemu_state(NEMU_END, s->pc, (int)npc_get_reg(10));
   }
+#endif
   
 #ifdef CONFIG_ITRACE
   // Format instruction trace similar to normal NEMU mode
@@ -894,6 +991,14 @@ static void execute(uint64_t n) {
     #if defined(CONFIG_FTRACE) || defined(CONFIG_MY_TRACE)
     check_ftrace(cpu.pc, s.isa.inst);
     #endif
+#ifdef NPC_FPGA_REMOTE
+    if (npc_runtime_has_completed()) {
+      cpu.pc = npc_runtime_completion_next_pc();
+      set_nemu_state(NEMU_END, npc_runtime_completion_pc(),
+                     (int)npc_runtime_completion_code());
+      break;
+    }
+#endif
 #ifdef CONFIG_WATCHPOINT
     if (check_watchpoints()) {
       nemu_state.state = NEMU_STOP;
@@ -908,30 +1013,63 @@ static void execute(uint64_t n) {
 #if defined(NPC) && defined(NPC_FPGA_REMOTE)
 static void execute_fpga_free_run(void) {
   const uint64_t commits_before = npc_get_commit_count();
+  const uint64_t cycles_before = npc_get_cycle_count();
+  const bool interactive = npc_debug_is_interactive();
   struct sigaction action = {0};
   struct sigaction previous = {0};
+  uint64_t blocking_started_at = 0;
+  bool blocking = false;
+  bool watchdog_fired = false;
   action.sa_handler = npc_interrupt_handler;
   sigemptyset(&action.sa_mask);
   npc_interrupt_requested = 0;
   sigaction(SIGINT, &action, &previous);
 
-  if (npc_debug_resume() != 0) {
+  if (interactive && npc_debug_resume() != 0) {
     fprintf(stderr, "FPGA resume failed: %s\n", strerror(errno));
     set_nemu_state(NEMU_ABORT, cpu.pc, -1);
   } else {
-    while (!npc_is_finished() && !npc_interrupt_requested) npc_step_cycle();
-    if (npc_interrupt_requested) {
-      if (npc_debug_halt() != 0) {
-        fprintf(stderr, "FPGA halt after Ctrl-C failed: %s\n", strerror(errno));
-        set_nemu_state(NEMU_ABORT, cpu.pc, -1);
+    while (!npc_is_finished() && !npc_interrupt_requested) {
+      npc_step_cycle();
+      if (npc_is_finished() || npc_interrupt_requested) break;
+
+      const uint32_t reasons = npc_get_backpressure_reasons();
+      if (reasons != 0) {
+        const uint64_t now = get_time();
+        if (!blocking) {
+          blocking = true;
+          blocking_started_at = now;
+        }
+        if (now - blocking_started_at >= NPC_BACKPRESSURE_WATCHDOG_US) {
+          npc_report_backpressure_watchdog(cpu.pc, cycles_before, commits_before,
+                                           now - blocking_started_at, reasons);
+          set_nemu_state(NEMU_ABORT, cpu.pc, -1);
+          watchdog_fired = true;
+          break;
+        }
       } else {
-        cpu.pc = npc_debug_stop_pc();
-        nemu_state.state = NEMU_STOP;
+        blocking = false;
       }
-    } else if (npc_debug_stop_reason() == 3) {
-      cpu.pc = npc_debug_stop_pc();
-      set_nemu_state(NEMU_END, npc_get_last_commit_pc(), (int)npc_get_reg(10));
-    } else if (npc_is_finished()) {
+    }
+    if (npc_interrupt_requested) {
+      if (interactive) {
+        if (npc_debug_halt() != 0) {
+          fprintf(stderr, "FPGA halt after Ctrl-C failed: %s\n", strerror(errno));
+          set_nemu_state(NEMU_ABORT, cpu.pc, -1);
+        } else {
+          cpu.pc = npc_debug_stop_pc();
+          nemu_state.state = NEMU_STOP;
+        }
+      } else {
+        // A batch cancellation must not look like a passing AM test.  The
+        // atexit cleanup below returns the mailbox-controlled core to reset.
+        set_nemu_state(NEMU_ABORT, npc_get_pc(), -1);
+      }
+    } else if (!watchdog_fired && npc_runtime_has_completed()) {
+      cpu.pc = npc_runtime_completion_next_pc();
+      set_nemu_state(NEMU_END, npc_runtime_completion_pc(),
+                     (int)npc_runtime_completion_code());
+    } else if (!watchdog_fired && npc_is_finished()) {
       set_nemu_state(NEMU_ABORT, cpu.pc, -1);
     }
   }
@@ -986,7 +1124,7 @@ void cpu_exec(uint64_t n) {
   uint64_t timer_start = get_time();
   
 #if defined(NPC) && defined(NPC_FPGA_REMOTE)
-  if (n == UINT64_MAX && npc_debug_is_interactive() && !has_watchpoints())
+  if (n == UINT64_MAX && !has_watchpoints())
     execute_fpga_free_run();
   else
     execute(n);

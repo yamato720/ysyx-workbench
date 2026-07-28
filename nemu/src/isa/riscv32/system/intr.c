@@ -21,7 +21,7 @@ word_t isa_raise_intr(word_t NO, vaddr_t epc) { // NO: interrupt/exception code;
   cpu.mepc   = epc;
   // nemu_state.state = NEMU_STOP;
   record_error(NO, epc);
-  return cpu.mtvec; // s->dnpc = cpu.mtvec;
+  return cpu.mtvec & ~(word_t)0x3; // synchronous traps always use mtvec.BASE
 }
 
 #define MAX_ERROR_NUM 16

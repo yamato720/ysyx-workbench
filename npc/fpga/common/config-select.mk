@@ -84,6 +84,30 @@ ifeq ($(FPGA_BUILD_REQUESTED),1)
     ifneq ($(BOARD_CONFIG_FPGA_DIV_ADAPTER_CYCLES),$(FPGA_DIV_ADAPTER_CYCLES))
       $(error Scala divider adapter latency $(FPGA_DIV_ADAPTER_CYCLES) 与板卡 config.mk 的 $(BOARD_CONFIG_FPGA_DIV_ADAPTER_CYCLES) 不一致)
     endif
+    ifneq ($(filter 0 1,$(FPGA_RUNTIME_TRACE)),$(FPGA_RUNTIME_TRACE))
+      $(error FPGA_RUNTIME_TRACE 必须是 0 或 1)
+    endif
+    ifeq ($(FPGA_RUNTIME_TRACE),1)
+      ifneq ($(FPGA_CONFIG_NAME),u55c)
+        $(error runtime trace 仅支持 U55C)
+      endif
+      ifneq ($(FPGA_CONFIG_TARGET),NPC)
+        $(error runtime trace 仅支持裸 NPC)
+      endif
+      ifneq ($(FPGA_TRACE_HBM_BANK),1)
+        $(error runtime trace 必须固定使用 HBM[1])
+      endif
+      ifneq ($(FPGA_TRACE_BUFFER_BYTES),16777216)
+        $(error runtime trace 缓冲区必须为 16 MiB)
+      endif
+      ifneq ($(FPGA_TRACE_MAX_RECORDS),200000)
+        $(error runtime trace 记录上限必须为 200000)
+      endif
+      trace_cache_power_of_two := $(shell value='$(FPGA_TRACE_CACHE_RECORDS)'; test "$$value" -ge 2 2>/dev/null && test $$((value & (value - 1))) -eq 0 && echo 1)
+      ifneq ($(trace_cache_power_of_two),1)
+        $(error FPGA_TRACE_CACHE_RECORDS 必须是至少 2 的 2 次幂)
+      endif
+    endif
     override NPC_XLEN := $(XLEN)
     override NPC_M := $(M)
     override NPC_F := $(F)

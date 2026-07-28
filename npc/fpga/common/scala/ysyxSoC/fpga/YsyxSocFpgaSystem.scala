@@ -3,7 +3,7 @@ package ysyx.fpga
 import chisel3._
 import freechips.rocketchip.diplomacy.LazyModule
 import org.chipsalliance.cde.config.Parameters
-import _root_.npc.fpga.{FpgaConfigParameters, FpgaCoreComponents, FpgaRuntimeMailbox, FpgaSystemIO}
+import _root_.npc.fpga.{FpgaConfigParameters, FpgaRuntimeMailbox, FpgaRuntimeTraceStatus, FpgaSystemIO}
 import _root_.ysyx.{ChipLinkParam, YsyxPlatformParameters, ysyxSoCASIC}
 
 /** Board-neutral ysyxSoC system: CPU, SoC interconnect, AXI memory, and mailbox. */
@@ -11,17 +11,16 @@ class YsyxSocFpgaSystem(implicit val parameters: Parameters) extends Module {
   private val npcConfig = YsyxPlatformParameters.npcCoreConfig
   require(npcConfig.isa.xlen == 32, "ysyxSoC FPGA integration only supports RV32")
   require(YsyxPlatformParameters.isFpga, "YsyxSocFpgaSystem requires an FPGA platform Config")
-  require(YsyxPlatformParameters.fpgaBoard.nonEmpty, "YsyxSocFpgaSystem requires a board-specific FPGA Config")
+  require(FpgaConfigParameters.board.nonEmpty, "YsyxSocFpgaSystem requires a board-specific FPGA Config")
 
   val io = IO(new FpgaSystemIO(32, 32, ChipLinkParam.idBits))
-  val soc = LazyModule(new ysyxSoCASIC(
-    FpgaCoreComponents.forAttachment(FpgaConfigParameters.ipAttachment)
-  ))
+  val soc = LazyModule(new ysyxSoCASIC)
   val mailbox = Module(new FpgaRuntimeMailbox(32))
+  mailbox.io.trace := 0.U.asTypeOf(new FpgaRuntimeTraceStatus)
   val msoc = withReset(reset.asBool || mailbox.io.coreReset) { Module(soc.module) }
   val memory = soc.fpgaMemory.head
 
-  msoc.intr_from_chipSlave := io.interrupt
+  msoc.intr_from_chipSlave := io.interrupt || mailbox.io.guestExternalInterrupt
 
   io.master.aw.valid := memory.aw.valid
   io.master.aw.bits.id := memory.aw.bits.id
@@ -65,7 +64,7 @@ class YsyxSocFpgaSystem(implicit val parameters: Parameters) extends Module {
   memory.r.bits.last := io.master.r.bits.last
   io.master.r.ready := memory.r.ready
 
-  io.mailboxInterrupt := mailbox.io.interrupt
+  io.mailboxInterrupt := mailbox.io.mailboxInterrupt
   io.memoryHostBase := mailbox.io.memoryHostBase
   mailbox.io.putch <> msoc.putch.get
 
@@ -93,6 +92,18 @@ class YsyxSocFpgaSystem(implicit val parameters: Parameters) extends Module {
   mailbox.io.runtime.commitPc := debug.backend.commitPc
   mailbox.io.runtime.commitInstruction := debug.backend.commitInstruction
   mailbox.io.runtime.commitNextPc := debug.backend.commitNextPc
+  mailbox.io.runtime.sampleCommitValid := debug.backend.sampleCommitValid
+  mailbox.io.runtime.sampleCommitPc := debug.backend.sampleCommitPc
+  mailbox.io.runtime.sampleCommitInstruction := debug.backend.sampleCommitInstruction
+  mailbox.io.runtime.sampleCommitNextPc := debug.backend.sampleCommitNextPc
+  mailbox.io.runtime.sampleFetchCycles := debug.backend.sampleFetchCycles
+  mailbox.io.runtime.sampleDecodeCycles := debug.backend.sampleDecodeCycles
+  mailbox.io.runtime.sampleExecuteCycles := debug.backend.sampleExecuteCycles
+  mailbox.io.runtime.sampleMemoryCycles := debug.backend.sampleMemoryCycles
+  mailbox.io.runtime.sampleWritebackCycles := debug.backend.sampleWritebackCycles
+  mailbox.io.runtime.completionCommitValid := debug.backend.completionCommitValid
+  mailbox.io.runtime.completionCommitPc := debug.backend.completionCommitPc
+  mailbox.io.runtime.completionCommitNextPc := debug.backend.completionCommitNextPc
   mailbox.io.runtime.cycleCount := debug.backend.cycleCount
   mailbox.io.runtime.fcsr := debug.backend.fcsr
   mailbox.io.runtime.mstatus := debug.backend.mstatus
@@ -103,5 +114,11 @@ class YsyxSocFpgaSystem(implicit val parameters: Parameters) extends Module {
   mailbox.io.runtime.dispatchFire := msoc.dispatchControl.get.dispatchFire
   msoc.dispatchControl.get.dispatchPermit := mailbox.io.dispatchPermit
   mailbox.io.runtime.backpressureReasons := debug.backpressureReasons
+  mailbox.io.runtime.fetchAxiWaitCycles := debug.frontend.fetchAxiWaitCycles
+  mailbox.io.runtime.redirectFlushCount := debug.frontend.redirectFlushCount
+  mailbox.io.runtime.idStallCycles := debug.backend.idStallCycles
+  mailbox.io.runtime.executeStallCycles := debug.backend.executeStallCycles
+  mailbox.io.runtime.memoryStallCycles := debug.backend.memoryStallCycles
+  mailbox.io.runtime.pipelineFeatures := debug.backend.pipelineFeatures
   mailbox.io.runtime.gprs := debug.backend.registers
 }

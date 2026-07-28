@@ -11,6 +11,8 @@ ip_generator="$npc_root/fpga-ip-generator/common/compute/source/tcl/create-arith
 implementation_reports_tcl="$npc_root/fpga/common/tcl/implementation-reports.tcl"
 source_manifest_tool="$npc_root/scripts/ip-source-manifest.sh"
 u55c_build_mk="$npc_root/fpga/common/build.mk"
+u55c_package_tcl="$npc_root/fpga/u55c/tcl/package-xo.tcl"
+u55c_wrapper="$npc_root/fpga/u55c/rtl/npc-u55c-kernel-wrapper.sv"
 zcu102_link_tcl="$npc_root/fpga/zcu102/tcl/link.tcl"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT INT TERM
@@ -88,7 +90,13 @@ if rg -q 'freechips\.rocketchip|org\.chipsalliance\.cde|npc\.fpga' "$npc_root/ch
   fail 'rv-core 仍依赖 Rocket、CDE 或 FPGA 类型'
 fi
 
-for name in U55cNpcFpgaConfig U55cRv64NpcFpgaConfig U55cRv64Npc300MHzFpgaConfig U55cYsyxSocFpgaConfig Zcu102NpcFpgaConfig Zcu102YsyxSocFpgaConfig; do
+soc_profile=$($manager resolve "$npc_root" YsyxSimulationConfig '' | awk -F'|' '{print $NF}')
+grep -qx 'SCOPE=soc' "$soc_profile" || fail 'SoC profile 未由 SoC 描述器生成'
+if grep -q '^FPGA_BOARD=' "$soc_profile"; then
+  fail 'SoC profile 意外包含 FPGA 板卡字段'
+fi
+
+for name in U55cNpcFpgaConfig U55cRv64NpcFpgaConfig U55cRv64Npc300MHzFpgaConfig U55cRv64Npc300MHzDebugFpgaConfig U55cYsyxSocFpgaConfig Zcu102NpcFpgaConfig Zcu102YsyxSocFpgaConfig; do
   grep -Eq "^${name}[[:space:]]" "$catalog" || fail "自动目录缺少 $name"
 done
 [[ $($resolver "$catalog" U55cYsyxSocFpgaConfig fpga) == 'npc.fpga.u55c.U55cYsyxSocFpgaConfig|fpga|u55c|SOC' ]] ||
@@ -99,11 +107,12 @@ if $resolver "$catalog" U55cYsyxSocFpgaConfig npc >/dev/null 2>&1; then fail '�
 if $resolver "$catalog" UnknownConfig fpga >/dev/null 2>&1; then fail '未知 Config 未被拒绝'; fi
 
 check_terminal() {
-  local config=$1 expected_board=$2 expected_target=$3 expected_xlen=$4 expected_clock=$5 expected_xrt_mode expected_integer_execute_stages=1 expected_serial_execute_stages=1 expected_register_initial_fetch_request=0 expected_separate_serial_integer_alu=0 expected_serial_execute_result_forwarding=1 expected_divider_non_blocking=0 resolved profile output
+  local config=$1 expected_board=$2 expected_target=$3 expected_xlen=$4 expected_clock=$5 expected_xrt_mode expected_protocol_abi expected_integer_execute_stages=1 expected_serial_execute_stages=1 expected_register_initial_fetch_request=0 expected_separate_serial_integer_alu=0 expected_serial_execute_result_forwarding=1 expected_divider_non_blocking=0 resolved profile output
   case "$config" in
-    U55cRv64Npc300MHzFpgaConfig) expected_xrt_mode=unset; expected_integer_execute_stages=2; expected_serial_execute_stages=3; expected_register_initial_fetch_request=1; expected_separate_serial_integer_alu=1; expected_serial_execute_result_forwarding=0; expected_divider_non_blocking=1 ;;
-    U55c*) expected_xrt_mode=unset ;;
-    Zcu102*) expected_xrt_mode=inherit ;;
+    U55cRv64Npc300MHzFpgaConfig) expected_xrt_mode=unset; expected_protocol_abi=npc-fpga-runtime-v11; expected_integer_execute_stages=2; expected_serial_execute_stages=3; expected_register_initial_fetch_request=1; expected_separate_serial_integer_alu=1; expected_serial_execute_result_forwarding=0; expected_divider_non_blocking=1 ;;
+    U55cRv64Npc300MHzDebugFpgaConfig) expected_xrt_mode=unset; expected_protocol_abi=npc-fpga-runtime-v12; expected_integer_execute_stages=2; expected_serial_execute_stages=3; expected_register_initial_fetch_request=1; expected_separate_serial_integer_alu=1; expected_serial_execute_result_forwarding=0; expected_divider_non_blocking=1 ;;
+    U55c*) expected_xrt_mode=unset; expected_protocol_abi=npc-fpga-runtime-v11 ;;
+    Zcu102*) expected_xrt_mode=inherit; expected_protocol_abi=npc-fpga-runtime-v7 ;;
     *) fail "$config 缺少 Vitis XRT 环境策略预期" ;;
   esac
   resolved=$($manager resolve "$npc_root" "$config" '')
@@ -142,7 +151,25 @@ check_terminal() {
   grep -qx "vitis_xrt_mode=$expected_xrt_mode" <<< "$output" || fail "$config Vitis XRT 环境策略错误"
   grep -qx 'backend=fpga' <<< "$output" || fail "$config 未使用 FPGA 算术策略"
   grep -qx 'HOST_ABI=nemu-construction-v1' "$profile" || fail "$config host ABI 缺失"
-  grep -qx 'PROTOCOL_ABI=npc-fpga-runtime-v5' "$profile" || fail "$config 协议 ABI 缺失"
+  grep -qx "PROTOCOL_ABI=$expected_protocol_abi" "$profile" || fail "$config 协议 ABI 缺失"
+  if [[ $config == U55cRv64Npc300MHzDebugFpgaConfig ]]; then
+    grep -qx 'NEMU_PERFORMANCE_HTML=1' "$profile" || fail "$config 未启用性能主页"
+    grep -qx 'NEMU_PIPELINE_HTML=1' "$profile" || fail "$config 未启用流水页面"
+    grep -qx 'NEMU_TRACE=0' "$profile" || fail "$config 不应启用软件 trace"
+    grep -qx 'FPGA_RUNTIME_TRACE=1' "$profile" || fail "$config 未启用 runtime trace"
+    grep -qx 'FPGA_TRACE_HBM_BANK=1' "$profile" || fail "$config trace HBM bank 错误"
+    grep -qx 'FPGA_TRACE_BUFFER_BYTES=16777216' "$profile" || fail "$config trace BO 大小错误"
+    grep -qx 'FPGA_TRACE_MAX_RECORDS=200000' "$profile" || fail "$config trace 记录上限错误"
+    grep -qx 'FPGA_TRACE_CACHE_RECORDS=4096' "$profile" || fail "$config URAM FIFO 深度错误"
+    grep -qx 'runtime_trace=1' <<< "$output" || fail "$config 未传递 trace 开关给 FPGA recipe"
+    grep -qx 'trace_cache_records=4096' <<< "$output" || fail "$config 未传递 URAM FIFO 深度给 FPGA recipe"
+  else
+    grep -qx 'FPGA_RUNTIME_TRACE=0' "$profile" || fail "$config 意外启用 runtime trace"
+    if [[ $config == U55c* ]]; then
+      grep -qx 'NEMU_PERFORMANCE_HTML=1' "$profile" || fail "$config 未启用性能主页"
+      grep -qx 'NEMU_PIPELINE_HTML=0' "$profile" || fail "$config 意外启用流水页面"
+    fi
+  fi
   grep -qx 'M=1' "$profile" || fail "$config 未启用 M 扩展"
   grep -qx 'F=0' "$profile" || fail "$config 不应启用 F 扩展"
   grep -qx 'D=0' "$profile" || fail "$config 不应启用 D 扩展"
@@ -193,6 +220,7 @@ check_operator_routes() {
 check_terminal U55cNpcFpgaConfig u55c NPC 32 125
 check_terminal U55cRv64NpcFpgaConfig u55c NPC 64 125
 check_terminal U55cRv64Npc300MHzFpgaConfig u55c NPC 64 300
+check_terminal U55cRv64Npc300MHzDebugFpgaConfig u55c NPC 64 300
 check_terminal U55cYsyxSocFpgaConfig u55c SOC 32 125
 check_terminal Zcu102NpcFpgaConfig zcu102 NPC 32 300
 check_terminal Zcu102YsyxSocFpgaConfig zcu102 SOC 32 300
@@ -264,6 +292,20 @@ grep -q 'npc_optional_implementation_report' "$implementation_reports_tcl" || fa
 grep -q 'FPGA_U55C_REPORT_HOOK' "$u55c_build_mk" || fail 'U55C 构建未生成实现报告 hook'
 grep -q 'STEPS.ROUTE_DESIGN.TCL.POST' "$u55c_build_mk" || fail 'U55C 构建未接入 post-route hook'
 grep -q 'env -u XILINX_XRT' "$u55c_build_mk" || fail 'U55C 构建未按 Config 隔离 Vitis XRT 环境'
+grep -q -- '-ctrl_protocol ap_ctrl_hs' "$u55c_package_tcl" || fail 'U55C XO 未使用 ap_ctrl_hs'
+grep -q -- '-kernel_xml' "$u55c_package_tcl" || fail 'U55C XO 未提供 XRT kernel metadata'
+grep -q 'language="ip_c"' "$u55c_package_tcl" || fail 'U55C XO 未声明 XRT-compatible ip_c kernel'
+grep -q 'range="0x1000"' "$u55c_package_tcl" || fail 'U55C XO 未声明 4 KiB control window'
+grep -q 'Materialize the XLEN define' "$u55c_package_tcl" || fail 'U55C XO 未固化 XLEN define'
+grep -q 'vitis_drc {ctrl_protocol ap_ctrl_hs}' "$u55c_package_tcl" || fail 'U55C XO 未声明 ap_ctrl_hs Vitis DRC'
+grep -q 'set_property interface_mode slave' "$u55c_package_tcl" || fail 'U55C XO 未显式标记 AXI-Lite slave 接口'
+grep -q 'set_property interface_mode master' "$u55c_package_tcl" || fail 'U55C XO 未显式标记 AXI master 接口'
+if grep -q 'user_managed' "$u55c_package_tcl"; then fail 'U55C XO 仍使用 user_managed 控制协议'; fi
+grep -q 'input  wire \[11:0\]                  s_axi_control_awaddr' "$u55c_wrapper" || fail 'U55C wrapper 控制写地址不是 12 位'
+grep -q 'input  wire \[11:0\]                  s_axi_control_araddr' "$u55c_wrapper" || fail 'U55C wrapper 控制读地址不是 12 位'
+for signal in ap_start ap_done ap_idle ap_ready; do
+  if grep -q "${signal}" "$u55c_wrapper"; then fail "U55C wrapper 不应暴露裸 ${signal} 引脚"; fi
+done
 grep -q 'implementation_reports_tcl' "$zcu102_link_tcl" || fail 'ZCU102 链接 Tcl 未接入共享实现报告'
 grep -q 'source \$implementation_reports_tcl' "$zcu102_link_tcl" || fail 'ZCU102 链接 Tcl 未执行共享实现报告'
 make --no-print-directory -s -C "$npc_root/../nemu" fpga-runtime-test

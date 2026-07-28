@@ -36,6 +36,8 @@ typedef struct {
   uint64_t commits;
   uint64_t host_time_us;
   uint64_t guest_instructions;
+  bool monitoring_available;
+  uint64_t trace_dropped;
   uint32_t pipeline_features;
   uint64_t stalls[PERFORMANCE_HTML_STALL_COUNT];
   bool last_commit_valid;

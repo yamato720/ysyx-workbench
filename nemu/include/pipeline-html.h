@@ -46,6 +46,7 @@ void npc_pipeline_html_record(
     const char *disassembly,
     uint64_t commit_cycle,
     const uint64_t stage_cycles[PIPELINE_HTML_STAGE_COUNT]);
+void npc_pipeline_html_set_dropped(uint64_t dropped);
 void npc_pipeline_html_finalize(
     const uint64_t stalls[PIPELINE_HTML_STAGE_COUNT],
     bool write_pipeline_html);

@@ -22,12 +22,17 @@ elaborate() {
 zcu_soc="$work/zcu102-soc"
 zcu_npc="$work/zcu102-npc"
 u55c_soc="$work/u55c-soc"
+u55c_rv64_npc="$work/u55c-rv64-npc"
+u55c_rv64_debug="$work/u55c-rv64-debug"
 elaborate Zcu102YsyxSocFpgaConfig "$zcu_soc"
 elaborate Zcu102NpcFpgaConfig "$zcu_npc"
 elaborate U55cYsyxSocFpgaConfig "$u55c_soc"
+elaborate U55cRv64Npc300MHzFpgaConfig "$u55c_rv64_npc"
+elaborate U55cRv64Npc300MHzDebugFpgaConfig "$u55c_rv64_debug"
 
 mapfile -d '' -t zcu_soc_rtl < <(find "$zcu_soc/rtl" -type f \( -name '*.v' -o -name '*.sv' \) -print0 | sort -z)
 mapfile -d '' -t zcu_npc_rtl < <(find "$zcu_npc/rtl" -type f \( -name '*.v' -o -name '*.sv' \) -print0 | sort -z)
+mapfile -d '' -t u55c_rv64_npc_rtl < <(find "$u55c_rv64_npc/rtl" -type f \( -name '*.v' -o -name '*.sv' \) -print0 | sort -z)
 (( ${#zcu_soc_rtl[@]} > 1 )) || { echo 'ysyx FPGA elaboration 未按模块拆分 RTL' >&2; exit 1; }
 (( ${#zcu_npc_rtl[@]} > 1 )) || { echo '裸 NPC FPGA elaboration 未按模块拆分 RTL' >&2; exit 1; }
 [[ -f $u55c_soc/rtl/NpcFpgaTop.sv ]] || { echo 'U55C 未生成 NpcFpgaTop' >&2; exit 1; }
@@ -56,7 +61,15 @@ if grep -q '^OPERATOR_ROUTE_F_' "$zcu_npc/rtl/fpga-parameters.env"; then
   echo 'FPGA elaboration profile 仍含浮点算子路由' >&2; exit 1
 fi
 grep -Rqs '^module MulDivAlu' "$zcu_npc/rtl" || { echo 'FPGA RTL 缺少整数乘除单元' >&2; exit 1; }
-grep -Rqs '^module FpgaRuntimeMailbox' "$zcu_npc/rtl" || { echo 'FPGA RTL 缺少 v5 runtime mailbox' >&2; exit 1; }
+grep -Rqs '^module FpgaRuntimeMailbox' "$zcu_npc/rtl" || { echo 'FPGA RTL 缺少 v6 runtime mailbox' >&2; exit 1; }
+if grep -Rqs 'io_trace_aw_valid' "$u55c_rv64_npc/rtl"; then
+  echo '普通 U55C RTL 不应包含 trace AXI 端口' >&2; exit 1
+fi
+grep -Rqs 'io_trace_aw_valid' "$u55c_rv64_debug/rtl" || { echo 'Debug U55C RTL 缺少 trace AXI 端口' >&2; exit 1; }
+grep -Rqs 'trace_uram_fifo' "$u55c_rv64_debug/rtl" || { echo 'Debug U55C RTL 缺少命名 URAM FIFO' >&2; exit 1; }
+[[ -f $u55c_rv64_debug/rtl/trace_uram_fifo_4096x576.sv ]] || {
+  echo 'Debug U55C RTL 未按 Config 生成 4096x576 trace URAM FIFO' >&2; exit 1;
+}
 
 verilator --binary --timing -Wno-fatal -Wno-PINMISSING --top-module FpgaIntegerMultiplierAdapterTb \
   --Mdir "$work/integer-multiplier" "$npc_root/fpga-ip-generator/common/compute/source/sv/npc-integer-ip-adapters.sv" \
@@ -77,3 +90,24 @@ verilator --binary --timing -Wno-fatal -Wno-PINMISSING -DNPC_TEST_DIVIDER_NON_BL
 verilator --binary --timing -Wno-fatal -Wno-PINMISSING --top-module FpgaDebugControlTb \
   --Mdir "$work/debug" "${zcu_npc_rtl[@]}" "$npc_root/fpga/common/tests/fpga-debug-control-tb.sv" >/dev/null
 "$work/debug/VFpgaDebugControlTb"
+
+verilator --binary --timing -Wno-fatal -Wno-PINMISSING -Wno-WIDTHEXPAND --top-module FpgaMachineExternalInterruptTb \
+  --Mdir "$work/machine-external-interrupt" "${zcu_npc_rtl[@]}" \
+  "$npc_root/fpga-ip-generator/common/compute/source/sv/npc-integer-ip-adapters.sv" \
+  "$npc_root/fpga/common/tests/fpga-integer-ip-stubs.sv" \
+  "$npc_root/fpga/common/tests/fpga-machine-external-interrupt-tb.sv" >/dev/null
+"$work/machine-external-interrupt/VFpgaMachineExternalInterruptTb"
+
+verilator --binary --timing -Wno-fatal -Wno-PINMISSING -Wno-WIDTHEXPAND -DNPC_TEST_RV64 \
+  --top-module FpgaMachineExternalInterruptTb --Mdir "$work/machine-external-interrupt-rv64" \
+  "${u55c_rv64_npc_rtl[@]}" "$npc_root/fpga-ip-generator/common/compute/source/sv/npc-integer-ip-adapters.sv" \
+  "$npc_root/fpga/common/tests/fpga-integer-ip-stubs.sv" \
+  "$npc_root/fpga/common/tests/fpga-machine-external-interrupt-tb.sv" >/dev/null
+"$work/machine-external-interrupt-rv64/VFpgaMachineExternalInterruptTb"
+
+verilator --binary --timing -Wno-fatal -Wno-PINMISSING -Wno-WIDTHEXPAND \
+  --top-module FpgaMachineExternalInterruptBackendTb --Mdir "$work/machine-external-interrupt-backend" \
+  "${zcu_npc_rtl[@]}" "$npc_root/fpga-ip-generator/common/compute/source/sv/npc-integer-ip-adapters.sv" \
+  "$npc_root/fpga/common/tests/fpga-integer-ip-stubs.sv" \
+  "$npc_root/fpga/common/tests/fpga-machine-external-interrupt-backend-tb.sv" >/dev/null
+"$work/machine-external-interrupt-backend/VFpgaMachineExternalInterruptBackendTb"

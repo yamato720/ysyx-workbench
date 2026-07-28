@@ -22,6 +22,7 @@ out/
 !*.scala
 !*.sbt
 !*.env
+!/fpga/*/link.cfg
 !.gitignore
 !.gitkeep
 !*.md

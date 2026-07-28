@@ -4,7 +4,7 @@ import npc.CdeConfigResolver
 import org.chipsalliance.cde.config.Parameters
 import org.scalatest.flatspec.AnyFlatSpec
 import npc.ExternalAxiConfig
-import npc.{ArithmeticRouteOperation, ComputeBackend, ConfigCatalog, ConstructionConfig, ConstructionProfile, FloatingCheckConfig, FpgaIpTerminal, FpgaToolchainConfig, NemuHostConfig, NemuSimulationIpTerminal, NpcConfig, NpcCoreConfigKey, OperatorIpTimingConfig, OperatorRouteTarget, Rv64IMFZicsrConfig, WithNpcCoreConfig}
+import npc.{ArithmeticRouteOperation, ComputeBackend, ConfigCatalog, ConstructionConfig, ConstructionProfile, FloatingCheckConfig, FpgaIpTerminal, FpgaToolchainConfig, NemuHostConfig, NemuSimulationIpTerminal, NpcConfig, NpcCoreComponents, NpcCoreConfigKey, OperatorIpTimingConfig, OperatorRouteTarget, Rv64IMFZicsrConfig, WithNpcCoreConfig}
 import npc.fpga.u55c.{U55cNpcFpgaConfig, U55cRv64Npc300MHzFpgaConfig, U55cRv64NpcFpgaConfig, U55cXilinxIpAttachment, U55cYsyxSocFpgaConfig}
 import npc.fpga.zcu102.{Zcu102NpcFpgaConfig, Zcu102YsyxSocFpgaConfig}
 import ysyx.{YsyxPlatformParameters, YsyxSimulationConfig, YsyxSocConfig}
@@ -241,7 +241,11 @@ class FpgaConfigCompositionTest extends AnyFlatSpec {
     {
       implicit val parameters: Parameters = new U55cNpcFpgaConfig
       val attachment = FpgaConfigParameters.ipAttachment
+      val neutralComponents = NpcCoreComponents.externalArithmetic(attachment.name, attachment.arithmeticIp)
       assert(attachment.name == "xilinx-u55c")
+      assert(neutralComponents.name == attachment.name)
+      assert(neutralComponents.arithmeticIp == attachment.arithmeticIp)
+      assert(neutralComponents.exposesDispatchControl(FpgaConfigParameters.npcCoreConfig))
       assert(FpgaCoreComponents.forAttachment(attachment).arithmeticIp.name == "xilinx-u55c")
       assert(attachment.manifestValues.toMap.apply("FPGA_DIV_IP_CYCLES") == "34")
       assert(attachment.manifestValues.toMap.apply("FPGA_DIVIDER_NON_BLOCKING") == "0")

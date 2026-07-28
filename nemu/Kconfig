@@ -172,13 +172,13 @@ config NPC_PERFORMANCE_HTML
     Pipeline analysis is an optional child report.
 
 config NPC_PIPELINE_HTML
-  depends on NPC_PERFORMANCE_HTML && FPGA_BACKEND_NONE
+  depends on NPC_PERFORMANCE_HTML
   bool "Generate committed-instruction pipeline HTML"
   default n
   help
-    Use the performance recorder's committed-instruction data to write a
-    self-contained pipeline.html timeline. This does not enable VCD or the
-    regular instruction trace.
+    Use local committed-instruction records or U55C v12 HBM trace replay to
+    write a self-contained pipeline.html timeline. This does not enable VCD
+    or the regular instruction trace.
 
 config TRACE_START
   depends on TRACE

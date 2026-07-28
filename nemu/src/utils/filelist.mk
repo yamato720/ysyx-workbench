@@ -20,5 +20,6 @@ LIBCAPSTONE = tools/capstone/repo/libcapstone.so.5
 CFLAGS += -I tools/capstone/repo/include
 src/utils/disasm.c: $(LIBCAPSTONE)
 $(LIBCAPSTONE):
-	$(MAKE) -C tools/capstone
+	# Capstone is a standalone shared library, not part of the NEMU host link.
+	env -u LDFLAGS $(MAKE) -C tools/capstone
 endif

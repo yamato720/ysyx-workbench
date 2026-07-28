@@ -20,3 +20,22 @@ object SimulationCoreComponents extends NpcCoreComponents {
   override val name: String = "simulation"
   override val arithmeticIp: ArithmeticIpProvider = SimulationIpComponents
 }
+
+/** Components backed by an externally generated arithmetic implementation.
+  *
+  * The core only needs the provider contract.  FPGA integration owns the
+  * physical provider and adapts its board attachment through this factory.
+  */
+object NpcCoreComponents {
+  def externalArithmetic(name: String, arithmeticIp: ArithmeticIpProvider): NpcCoreComponents = {
+    require(name.nonEmpty, "external arithmetic component name must not be empty")
+    new ExternalArithmeticCoreComponents(name, arithmeticIp)
+  }
+}
+
+private final class ExternalArithmeticCoreComponents(
+  override val name: String,
+  override val arithmeticIp: ArithmeticIpProvider
+) extends NpcCoreComponents {
+  override def exposesDispatchControl(config: NpcConfig): Boolean = true
+}

@@ -58,6 +58,7 @@ class NpcCore(
     case None => backend.io.dispatch <> frontend.io.dispatch
   }
   backend.io.interrupt := io.interrupt
+  backend.io.interruptPc := frontend.io.interruptPc
   frontend.io.axi <> memoryFabric.io.instruction
   backend.io.axi <> memoryFabric.io.data
   io.master <> memoryFabric.io.master

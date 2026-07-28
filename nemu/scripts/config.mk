@@ -38,13 +38,13 @@ FIXDEP := $(FIXDEP_PATH)/build/fixdep
 KCONFIG_LOCK := $(KCONFIG_PATH)/build/.conf.lock
 
 $(CONF):
-	$(Q)$(MAKE) $(silent) -C $(KCONFIG_PATH) NAME=conf
+	$(Q)$(MAKE) $(silent) -C $(KCONFIG_PATH) NAME=conf NEMU_BUILD_ROOT="$(KCONFIG_PATH)/build"
 
 $(MCONF):
-	$(Q)$(MAKE) $(silent) -C $(KCONFIG_PATH) NAME=mconf
+	$(Q)$(MAKE) $(silent) -C $(KCONFIG_PATH) NAME=mconf NEMU_BUILD_ROOT="$(KCONFIG_PATH)/build"
 
 $(FIXDEP):
-	$(Q)$(MAKE) $(silent) -C $(FIXDEP_PATH)
+	$(Q)$(MAKE) $(silent) -C $(FIXDEP_PATH) NEMU_BUILD_ROOT="$(FIXDEP_PATH)/build"
 
 menuconfig: $(MCONF) $(CONF) $(FIXDEP)
 	@mkdir -p "$(NEMU_CONFIG_ROOT)/include/config" "$(NEMU_CONFIG_ROOT)/include/generated"

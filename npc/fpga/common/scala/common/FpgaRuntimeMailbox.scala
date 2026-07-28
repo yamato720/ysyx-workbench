@@ -15,17 +15,36 @@ class FpgaRuntimeMailbox(width: Int) extends Module {
     val coreReset = Output(Bool())
     val dispatchPermit = Output(Bool())
     val memoryHostBase = Output(UInt(64.W))
-    val interrupt = Output(Bool())
+    val traceHostBase = Output(UInt(64.W))
+    val traceClear = Output(Bool())
+    val traceClassSelector = Output(UInt(5.W))
+    val traceStageSelector = Output(UInt(3.W))
+    val traceStallSelector = Output(UInt(3.W))
+    val trace = Input(new FpgaRuntimeTraceStatus)
+    val guestExternalInterrupt = Output(Bool())
+    val mailboxInterrupt = Output(Bool())
   })
 
   val coreReset = RegInit(true.B)
   val commandSequence = RegInit(0.U(32.W))
   val putchPending = RegInit(false.B)
   val putchData = RegInit(0.U(8.W))
+  val completionPending = RegInit(false.B)
+  val completionCode = RegInit(0.U(width.W))
+  val completionPc = RegInit(0.U(width.W))
+  val completionNextPc = RegInit(0.U(width.W))
+  val completionGprs = RegInit(VecInit(Seq.fill(32)(0.U(width.W))))
+  val guestExternalInterrupt = RegInit(false.B)
   val gprIndex = RegInit(0.U(5.W))
   val csrIndex = RegInit(0.U(3.W))
   val memoryHostBaseLow = RegInit(0.U(32.W))
   val memoryHostBaseHigh = RegInit(0.U(32.W))
+  val traceHostBaseLow = RegInit(0.U(32.W))
+  val traceHostBaseHigh = RegInit(0.U(32.W))
+  val traceClassSelector = RegInit(0.U(5.W))
+  val traceStageSelector = RegInit(0.U(3.W))
+  val traceStallSelector = RegInit(0.U(3.W))
+  val traceClear = WireDefault(false.B)
 
   val debugController = Module(new FpgaDebugController(width))
   val debugCommand = WireDefault(0.U.asTypeOf(Valid(new FpgaDebugCommand)))
@@ -39,12 +58,18 @@ class FpgaRuntimeMailbox(width: Int) extends Module {
   io.coreReset := coreReset
   io.dispatchPermit := debugController.io.dispatchPermit
   io.memoryHostBase := Cat(memoryHostBaseHigh, memoryHostBaseLow)
+  io.traceHostBase := Cat(traceHostBaseHigh, traceHostBaseLow)
+  io.traceClear := traceClear
+  io.traceClassSelector := traceClassSelector
+  io.traceStageSelector := traceStageSelector
+  io.traceStallSelector := traceStallSelector
   io.putch.ready := !putchPending
   when(io.putch.fire) {
     putchPending := true.B
     putchData := io.putch.bits
   }
-  io.interrupt := putchPending || debug.terminalHalted
+  io.guestExternalInterrupt := guestExternalInterrupt
+  io.mailboxInterrupt := putchPending || completionPending
 
   val awValid = RegInit(false.B)
   val awAddress = Reg(UInt(32.W))
@@ -81,7 +106,10 @@ class FpgaRuntimeMailbox(width: Int) extends Module {
 
   val writeCommit = awValid && wValid && !bValid
   when(writeCommit) {
-    switch(awAddress(7, 0)) {
+    // The U55C kernel exposes a 4 KiB AXI-Lite control aperture.  Runtime
+    // trace registers live above 0x100, so decoding only the low byte would
+    // alias them with the legacy mailbox map and make trace BO setup inert.
+    switch(awAddress(11, 0)) {
       is("h40".U) { commandSequence := writeMasked(commandSequence, wData, wStrb) }
       is("h44".U) {
         when(wStrb(0)) {
@@ -97,16 +125,37 @@ class FpgaRuntimeMailbox(width: Int) extends Module {
           resetControl.bits.asserted := wData(0)
           resetControl.bits.run := wData(1)
           when(wData(0) || wData(2)) { putchPending := false.B }
+          when(wData(0) || wData(1) || wData(3)) { completionPending := false.B }
+          when(wData(0) || wData(1)) { traceClear := true.B }
         }
       }
+      is("h70".U) { when(wStrb(0)) { guestExternalInterrupt := wData(0) } }
       is("h8c".U) { when(wStrb(0)) { gprIndex := wData(4, 0) } }
       is("h5c".U) { when(wStrb(0)) { csrIndex := wData(2, 0) } }
       is("hf0".U) { memoryHostBaseLow := writeMasked(memoryHostBaseLow, wData, wStrb) }
       is("hf4".U) { memoryHostBaseHigh := writeMasked(memoryHostBaseHigh, wData, wStrb) }
+      is("h120".U) { traceHostBaseLow := writeMasked(traceHostBaseLow, wData, wStrb) }
+      is("h124".U) { traceHostBaseHigh := writeMasked(traceHostBaseHigh, wData, wStrb) }
+      is("h128".U) { when(wStrb(0)) { traceClassSelector := wData(4, 0) } }
+      is("h12c".U) { when(wStrb(0)) { traceStageSelector := wData(2, 0) } }
+      is("h160".U) { when(wStrb(0)) { traceStallSelector := wData(2, 0) } }
     }
     awValid := false.B
     wValid := false.B
     bValid := true.B
+  }
+
+  // A committed write to custom machine CSR mtestexit (0x7c0) is the FPGA
+  // completion boundary. It is a host notification, not a debug halt or a
+  // RISC-V external interrupt; EBREAK remains a normal breakpoint trap.
+  val completionCommit = io.runtime.completionCommitValid
+  when(completionCommit && !coreReset && !completionPending) {
+    completionPending := true.B
+    completionCode := io.runtime.gprs(10)
+    completionPc := io.runtime.completionCommitPc
+    completionNextPc := io.runtime.completionCommitNextPc
+    completionGprs := io.runtime.gprs
+    coreReset := true.B
   }
 
   def low(value: UInt): UInt = value(31, 0)
@@ -118,7 +167,8 @@ class FpgaRuntimeMailbox(width: Int) extends Module {
     3.U -> io.runtime.mtvec,
     5.U -> io.runtime.nextArchitecturalPc
   ))
-  def readRegister(address: UInt): UInt = MuxLookup(address(7, 0), 0.U(32.W))(Seq(
+  val selectedGpr = Mux(completionPending, completionGprs(gprIndex), io.runtime.gprs(gprIndex))
+  def readRegister(address: UInt): UInt = MuxLookup(address(11, 0), 0.U(32.W))(Seq(
     "h3c".U -> 7.U(32.W),
     "h40".U -> commandSequence,
     "h48".U -> debug.completedSequence,
@@ -128,13 +178,18 @@ class FpgaRuntimeMailbox(width: Int) extends Module {
     "h54".U -> high(debug.haltNextPc),
     "h58".U -> Cat(0.U(28.W), debug.stopReason),
     "h5c".U -> Cat(0.U(29.W), csrIndex),
+    "h60".U -> low(completionPc),
+    "h64".U -> high(completionPc),
+    "h68".U -> low(completionNextPc),
+    "h6c".U -> high(completionNextPc),
+    "h70".U -> Cat(0.U(31.W), guestExternalInterrupt),
     "h80".U -> Cat(0.U(31.W), coreReset),
-    "h84".U -> Cat(0.U(28.W), debug.protocolError, putchPending,
+    "h84".U -> Cat(0.U(27.W), completionPending, debug.protocolError, putchPending,
       debug.stableHalted, debug.running),
     "h88".U -> Cat(2.U(8.W), 7.U(8.W), (width == 64).B, 0.U(7.W), width.U(8.W)),
     "h8c".U -> Cat(0.U(27.W), gprIndex),
-    "h90".U -> low(io.runtime.gprs(gprIndex)),
-    "h94".U -> high(io.runtime.gprs(gprIndex)),
+    "h90".U -> low(selectedGpr),
+    "h94".U -> high(selectedGpr),
     "h98".U -> 0.U,
     "h9c".U -> 0.U,
     "ha0".U -> 0.U,
@@ -151,8 +206,8 @@ class FpgaRuntimeMailbox(width: Int) extends Module {
     "hcc".U -> io.runtime.cycleCount(63, 32),
     "hd0".U -> debug.commitCount(31, 0),
     "hd4".U -> debug.commitCount(63, 32),
-    "hd8".U -> low(debug.haltCode),
-    "hdc".U -> high(debug.haltCode),
+    "hd8".U -> low(completionCode),
+    "hdc".U -> high(completionCode),
     "he0".U -> Cat(0.U(23.W), io.runtime.backpressureReasons),
     "he4".U -> io.runtime.frontendInstruction,
     "he8".U -> Cat(0.U(24.W), putchData),
@@ -160,7 +215,42 @@ class FpgaRuntimeMailbox(width: Int) extends Module {
     "hf0".U -> memoryHostBaseLow,
     "hf4".U -> memoryHostBaseHigh,
     "hf8".U -> high(selectedCsr),
-    "hfc".U -> "h4e504305".U
+    "hfc".U -> "h4e504306".U,
+    "h100".U -> Cat(0.U(31.W), io.trace.enabled),
+    "h104".U -> io.trace.formatVersion,
+    "h108".U -> io.trace.recordBytes,
+    "h10c".U -> io.trace.maxRecords,
+    "h110".U -> io.trace.records(31, 0),
+    "h114".U -> io.trace.records(63, 32),
+    "h118".U -> io.trace.dropped(31, 0),
+    "h11c".U -> io.trace.dropped(63, 32),
+    "h120".U -> traceHostBaseLow,
+    "h124".U -> traceHostBaseHigh,
+    "h128".U -> Cat(0.U(27.W), traceClassSelector),
+    "h12c".U -> Cat(0.U(29.W), traceStageSelector),
+    "h130".U -> io.trace.classSampleCount(31, 0),
+    "h134".U -> io.trace.classSampleCount(63, 32),
+    "h138".U -> io.trace.classStageTotal(31, 0),
+    "h13c".U -> io.trace.classStageTotal(63, 32),
+    "h140".U -> io.trace.classMaxTotal(31, 0),
+    "h144".U -> io.trace.classMaxTotal(63, 32),
+    "h148".U -> io.trace.classLastPc(31, 0),
+    "h14c".U -> io.trace.classLastPc(63, 32),
+    "h150".U -> io.trace.classLastInstruction,
+    "h154".U -> io.trace.classLastStage(31, 0),
+    "h158".U -> io.trace.classLastStage(63, 32),
+    "h15c".U -> Cat(0.U(27.W), io.trace.lastClass),
+    "h160".U -> Cat(0.U(29.W), traceStallSelector),
+    "h164".U -> io.trace.selectedStall(31, 0),
+    "h168".U -> io.trace.selectedStall(63, 32),
+    "h16c".U -> io.trace.cycles(31, 0),
+    "h170".U -> io.trace.cycles(63, 32),
+    "h174".U -> io.trace.commits(31, 0),
+    "h178".U -> io.trace.commits(63, 32),
+    "h17c".U -> Cat(0.U(29.W), io.trace.pipelineFeatures),
+    "h180".U -> Cat(0.U(30.W), io.trace.drained, io.trace.enabled),
+    "h184".U -> io.trace.lastTotal(31, 0),
+    "h188".U -> io.trace.lastTotal(63, 32)
   ))
 
   when(io.axi.ar.fire) {

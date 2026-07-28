@@ -13,6 +13,7 @@ object ElaborateFPGA extends App {
   implicit val parameters: Parameters = construction
   val npcConfig = FpgaConfigParameters.npcCoreConfig
   val platform = FpgaConfigParameters.platform
+  val runtimeTrace = FpgaConfigParameters.runtimeTrace
   val ipAttachment = FpgaConfigParameters.ipAttachment
   val toolchain = construction match {
     case value: FpgaConstruction => value.fpgaToolchainConfig
@@ -35,5 +36,5 @@ object ElaborateFPGA extends App {
     args ++ Array("--split-verilog"),
     firtoolOptions
   )
-  FpgaElaborationManifest.write(args, npcConfig, platform, ipAttachment, toolchain, entry.className, entry.target)
+  FpgaElaborationManifest.write(args, npcConfig, platform, runtimeTrace, ipAttachment, toolchain, entry.className, entry.target)
 }

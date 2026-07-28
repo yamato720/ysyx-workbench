@@ -35,6 +35,10 @@ IF                 ID                    EX                    MEM              
 
 因此，一条 CSR 指令的读值来自执行时锁存的旧状态，而写入在提交时发生。`CSRRW x0, csr, rs1` 仍可更新 CSR，只是 `x0` 丢弃旧值。
 
+`mtestexit`（`0x7c0`）是本实现保留的非标准机器态读写 CSR。它和其他 CSR 一样只在提交点写入；FPGA
+顶层会把对它的已提交写入解释为 mailbox completion。普通 AM/NEMU 构建不会生成该访问，仍以 EBREAK 终止，
+因此 guest 的 EBREAK 保持标准 breakpoint trap 语义。
+
 ## 为什么状态更新在提交点
 
 把 CSR 写入放在 EX 看起来更短，但会让暂时执行过的指令提前改变 `mstatus`、`mtvec`、`fcsr` 等架构状态。若该指令随后被 flush、因异常取消，或被更老的异常截断，错误副作用很难撤销。
@@ -56,9 +60,15 @@ IF                 ID                    EX                    MEM              
 - 到提交点后，`CsrFile` 以最高优先级写入 `mcause` 与 `mepc`；后端把下一 PC 重定向到 `mtvec`。
 - `MRET` 不写入 `CsrFile`，而是在提交点读取 `mepc` 并将下一 PC 重定向到该值。
 
-当前 `CsrFile` 内部状态更新优先级为：`trapEnable`、浮点提交、普通 CSR 写入。这样一条发生同步异常的指令不会同时提交普通 CSR 副作用。
+当前 `CsrFile` 内部状态更新优先级为：`trapEnable`、`mret`、浮点提交、普通 CSR 写入。这样一条发生同步异常的指令不会同时提交普通 CSR 副作用。
 
-`externalInterrupt` 目前只被合成为 `mip.MEIP` 的外部输入。中断优先级判定、`mie/mstatus` 使能检查以及自动进入 trap 尚未实现；因此它不是当前执行路径中的异步陷入源。
+`externalInterrupt` 映射为 `mip.MEIP`。当 `mstatus.MIE`、`mie.MEIE` 和 `mip.MEIP`
+同时为 1 时，后端先停止派发并排空在途指令，再在最后一个提交边界写入
+`mcause=interrupt|11`、`mepc=该已提交指令的 next PC`，并跳转 `mtvec`。若管线本来
+为空，则直接在前端唯一待派发指令的 PC 边界进入 trap，因而不需要等待一条无关指令。
+`mtvec.MODE=1` 时 machine external interrupt 使用 `BASE + 4 * 11`，否则使用 `BASE`。
+trap entry 保存 `MIE` 到 `MPIE` 并清除 `MIE`；`MRET` 恢复 `MIE`、置 `MPIE=1` 并清除
+`MPP`。
 
 ## 浮点 CSR 与 FS 状态
 

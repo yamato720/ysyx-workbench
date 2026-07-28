@@ -56,6 +56,7 @@ int main(void) {
     .commits = 10,
     .host_time_us = 1250,
     .guest_instructions = 10,
+    .monitoring_available = true,
     .pipeline_features = 7,
     .stalls = {3, 5, 7, 11, 13},
     .last_commit_valid = true,
@@ -99,6 +100,13 @@ int main(void) {
   assert(strstr(content, "尚无已提交指令") != NULL);
   assert(strstr(content, "href=\"pipeline.html\"") == NULL);
   assert(strstr(content, "href=\"instructions.html\"") == NULL);
+  free(content);
+
+  report.monitoring_available = false;
+  assert(performance_html_write(path, &report) == 0);
+  content = read_file(path);
+  assert(strstr(content, "未启用 U55C v12 runtime trace") != NULL);
+  assert(strstr(content, "data-filter=\"load\"") == NULL);
   free(content);
 
   errno = 0;

@@ -7,6 +7,7 @@ import _root_.npc.{FpgaIpAttachment, FpgaIpAttachmentKey, NpcConfig, NpcCoreConf
 case object FpgaPlatformSettingsKey extends Field[Option[FpgaPlatformSettings]](None)
 case object FpgaBoardKey extends Field[Option[FpgaBoard]](None)
 case object FpgaClockMHzKey extends Field[Option[Int]](None)
+case object FpgaRuntimeTraceConfigKey extends Field[FpgaRuntimeTraceConfig](FpgaRuntimeTraceConfig.Disabled)
 
 object FpgaConfigParameters {
   /** 取得当前 CDE 图选择的已完成 NPC 参数。 */
@@ -25,6 +26,10 @@ object FpgaConfigParameters {
   }
 
   def board(implicit parameters: Parameters): Option[FpgaBoard] = parameters(FpgaBoardKey)
+
+  /** Runtime trace is disabled unless a board terminal explicitly enables it. */
+  def runtimeTrace(implicit parameters: Parameters): FpgaRuntimeTraceConfig =
+    parameters(FpgaRuntimeTraceConfigKey)
 
   /** 取得 NPC/SoC 共同消费的 FPGA IP attachment。 */
   def ipAttachment(implicit parameters: Parameters): FpgaIpAttachment =

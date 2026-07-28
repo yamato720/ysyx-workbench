@@ -5,7 +5,7 @@
 
 | 文件 | 职责 | 是否可被更高层复用或覆盖 |
 | --- | --- | --- |
-| `core/U55cBoardConfig.scala` | 板卡标识、频率与 U55C Xilinx IP 合同 | 是；`U55cBoardConfig` 与 `U55c300MHzBoardConfig` 是可叠加的 L4 板卡策略 |
+| `core/U55cBoardConfig.scala` | 板卡标识、频率、U55C Xilinx IP 合同与 Debug trace 策略 | 是；`U55cBoardConfig`、`U55c300MHzBoardConfig` 与 `U55c300MHzDebugBoardConfig` 是可叠加的 L4 板卡策略 |
 | `Configs.scala` | U55C 裸 NPC、RV64IM 裸 NPC、300 MHz 时序实验与 ysyxSoC 的所有终端构造 | 是；根部只放终端 |
 
 `U55cNpcFpgaConfig` 直接组合 `U55cBoardConfig ++ FpgaConfig`。
@@ -22,6 +22,8 @@
 | U55C 裸 NPC 终端 | `new U55cNpcFpgaConfig` | `Configs.scala` | 是 |
 | U55C RV64IM 裸 NPC 终端 | `new U55cRv64NpcFpgaConfig` | `Configs.scala` | 是；F/D 禁用 |
 | U55C RV64IM 300 MHz 时序实验终端 | `new U55cRv64Npc300MHzFpgaConfig` | `Configs.scala` | 是；F/D 禁用 |
+| U55C RV64IM 300 MHz Debug 终端 | `new U55cRv64Npc300MHzDebugFpgaConfig` | `Configs.scala` | 是；仅此终端启用 v12 trace |
+| U55C Debug trace 策略 | `new U55c300MHzDebugBoardConfig` | `core/U55cBoardConfig.scala` | 是；HBM[1]、16 MiB、200000 条，URAM FIFO 默认 4096 条 |
 | U55C SoC 终端 | `new U55cYsyxSocFpgaConfig` | `Configs.scala` | 是 |
 | U55C 板卡标识 | `new WithFpgaBoardConfig(FpgaBoard.U55c)` | L3 `common/base/FpgaConfigFragments.scala` | U55C 目标必需 |
 | U55C 时钟 | `new U55cBoardConfig(clockMHz = 125)` | `core/U55cBoardConfig.scala` | U55C 目标必需；允许频率由 `npc/fpga/u55c/config.mk` 的物理能力表限制 |
@@ -45,3 +47,8 @@ RV32/RV64 的整数 IP 路由。`U55c300MHzBoardConfig` 把物理时钟、乘法
 attachment 封装为命名板卡策略，仍保持 `II=1`。`U55cRv64Npc300MHzFpgaConfig` 显式组合该板卡策略与
 普通整数路径两拍、串行控制路径三拍、首拍取指请求寄存器化、串行整数 ALU 分离、串行结果 ID 前递关闭的 RV64 核心。这些均是
 频率对应的独立开关，不会由 `clockMHz` 自动推导，因此未来 250 MHz 终端可逐项选择。
+
+`U55cRv64Npc300MHzDebugFpgaConfig` 在同一 RV64 300 MHz 核上叠加 `U55c300MHzDebugBoardConfig`。
+它通过 `RuntimeTraceProfile.U55cDebug` 冻结 v12 trace ABI；如需调整片上 FIFO 深度，应在 Config 中用
+`RuntimeTraceProfile.U55cDebug.copy(cacheRecords = <2 的幂>)` 构造新的 profile，再传给
+`U55c300MHzDebugBoardConfig`。这会改变 URAM 数量和生成 RTL，不能以 `host-build` 替代 `rebuild`。

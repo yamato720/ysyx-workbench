@@ -72,6 +72,7 @@ classpath、Make 和 construction manager 在启动前解析公开终端。该�
 | `U55cNpcFpgaConfig` | FPGA（`TARGET=NPC`） | U55C 裸 NPC 上板运行 |
 | `U55cRv64NpcFpgaConfig` | FPGA（`TARGET=NPC`） | U55C RV64IM_Zicsr 裸 NPC 上板运行 |
 | `U55cRv64Npc300MHzFpgaConfig` | FPGA（`TARGET=NPC`） | U55C RV64IM_Zicsr 300 MHz 单实现时序实验 |
+| `U55cRv64Npc300MHzDebugFpgaConfig` | FPGA（`TARGET=NPC`） | U55C RV64IM_Zicsr 300 MHz v12 Debug；HBM trace 与性能报告 |
 | `U55cYsyxSocFpgaConfig` | FPGA（`TARGET=SOC`） | U55C ysyxSoC 上板运行 |
 | `Zcu102NpcFpgaConfig` | FPGA（`TARGET=NPC`） | ZCU102 裸 NPC 上板运行 |
 | `Zcu102YsyxSocFpgaConfig` | FPGA（`TARGET=SOC`） | ZCU102 ysyxSoC 上板运行 |
@@ -142,11 +143,18 @@ IP provider、M 路由和时序合同。L4 板卡 Config 选择 attachment，NPC
 make -C npc config-list
 make -C npc build config=SimulationConfig
 make -C npc build config=U55cYsyxSocFpgaConfig
+make -C npc host-build config=U55cRv64Npc300MHzFpgaConfig
+make -C npc rebuild config=U55cRv64Npc300MHzFpgaConfig
 ```
 
 自动 TSV 只在 Make 启动 JVM 前提供短名、FQCN、作用域、板卡和目标。选中后由 Scala 反射实例化，
 生成包含 XLEN、ISA、流水线、算术时序、内存、板卡、工具策略、运行宿主 ABI 和协议 ABI 的
 `profile.env`。NEMU 配方以稳定的 `NEMU_PRESET` 和完整 `NEMU_*` 字段记录；FPGA 工具链继续渲染为
 现有 `FPGA_*` 字段。其中 `NEMU_PERFORMANCE_HTML` 与 `NEMU_PIPELINE_HTML` 是 NEMU 层行为；后者只能在前者之上
-启用，两者都不修改 `PerformConfig` 或 FPGA 顶层调试端口。
+启用。U55C Debug 终端额外冻结 `FPGA_RUNTIME_TRACE`、HBM bank、BO 大小、记录上限和
+`FPGA_TRACE_CACHE_RECORDS`；最后一项是生成 URAM FIFO 的深度，属于硬件 ABI，修改后必须 `rebuild`。
+普通 U55C 终端保持全部 trace 字段关闭，两种 host 开关都不能为外部 v11 xclbin 凭空提供记录。
 Make/Tcl 只做映射与一致性检查，不能覆盖这些值。
+`host-build` 在没有正式构造时只创建 `constructions/.hosts/<FQCN>/` 下的 NEMU host 缓存，适合与外部
+xclbin 配合；缓存不携带 RTL、FPGA 资产或版本标签，不能作为 `run`/`run-bat` 的构造选择器。`rebuild` 才会
+生成并替换完整硬件 ABI 和 FPGA 资产。

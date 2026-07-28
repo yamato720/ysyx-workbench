@@ -32,6 +32,11 @@ export NEMU_HOME="$(pwd)/nemu"
 export AM_HOME="$(pwd)/abstract-machine"
 export NPC_HOME="$(pwd)/npc"
 export NVBOARD_HOME="$(pwd)/nvboard"
+
+echo "NEMU_HOME=$NEMU_HOME"
+echo "AM_HOME=$AM_HOME"
+echo "NPC_HOME=$NPC_HOME"
+echo "NVBOARD_HOME=$NVBOARD_HOME"
 ```
 
 将这些变量写入 shell 启动文件后再开始日常构造。
@@ -70,7 +75,7 @@ make -C am-kernels/tests/cpu-tests run-bat ALL="forwarding matrix-mul fpu" versi
 
 仿真 Config 在首次运行时自动构造。后续运行直接执行保存的 NEMU host，不再启动 NEMU Make；需要按
 C/C++/menuconfig 依赖增量刷新 host 时使用运行入口的 `host-rebuild=1`，或执行
-`make -C npc host-rebuild config=<硬件Config>`。变更 Chisel、生成 RTL、Verilator glue 或要更新硬件 ABI
+`make -C npc host-build config=<硬件Config>`。变更 Chisel、生成 RTL、Verilator glue 或要更新硬件 ABI
 时，执行 `make -C npc rebuild config=<Config>`。
 
 ## FPGA 构造

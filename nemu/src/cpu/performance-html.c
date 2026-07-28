@@ -140,6 +140,11 @@ static int write_document(FILE *output, const PerformanceHtmlReport *report) {
   } else {
     write_metric(output, "仿真速度", "N/A", "小于 1 us");
   }
+  if (!report->monitoring_available) {
+    fputs("</div></section><section><h2>硬件监测</h2><p class=\"muted\">当前 FPGA xclbin 未启用 U55C v12 runtime trace；流水停顿、分类时序和逐指令报告不可用。请使用 U55cRv64Npc300MHzDebugFpgaConfig 重新构建硬件。</p></section></main><footer>当前页面仅显示 mailbox 可读取的执行计数；未生成零值流水统计。</footer></body></html>", output);
+    return ferror(output) ? -1 : 0;
+  }
+
   fputs("</div></section></main><div class=\"band\"><div class=\"band-inner\"><section><h2>流水与停顿</h2><div class=\"pipeline-meta\">", output);
 
   const bool pipeline = (report->pipeline_features & 0x1u) != 0;
@@ -233,6 +238,11 @@ static int write_document(FILE *output, const PerformanceHtmlReport *report) {
       fputs("<a href=\"pipeline.html\" target=\"_blank\" rel=\"noopener\">查看流水线时间线</a>", output);
     }
     fputs("</div>", output);
+  }
+  if (report->trace_dropped != 0) {
+    fprintf(output, "<p class=\"muted\">逐指令 trace 前缀已截断，后续 %'" PRIu64
+            " 条提交未写入 HBM；分类统计仍覆盖完整运行。</p>",
+            report->trace_dropped);
   }
   fputs("</section></main><footer>阶段表统计的是每条已提交指令的阶段驻留与端到端延迟；全局 CPI/IPC 由硬件总周期与提交总数计算。</footer>"
         "<script>const buttons=[...document.querySelectorAll('[data-filter]')],rows=[...document.querySelectorAll('#timingRows tr')];buttons.forEach(button=>button.onclick=()=>{buttons.forEach(item=>item.classList.toggle('active',item===button));const filter=button.dataset.filter;rows.forEach(row=>row.hidden=filter!=='all'&&row.dataset.group!==filter)})</script></body></html>", output);

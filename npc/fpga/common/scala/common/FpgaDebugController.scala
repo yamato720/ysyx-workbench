@@ -31,23 +31,13 @@ class FpgaDebugController(width: Int) extends Module {
   val haltNextPc = RegInit(0.U(width.W))
   val commitCount = RegInit(0.U(64.W))
 
-  val terminalCommit = io.runtime.commitValid &&
-    io.runtime.commitInstruction === "h00100073".U
   val coreStable = !io.coreReset && !io.runtime.coreBusy
 
-  io.dispatchPermit := !terminalCommit && (state === runningState ||
-    (state === steppingState && stepCredit))
+  io.dispatchPermit := state === runningState ||
+    (state === steppingState && stepCredit)
 
   when(io.runtime.commitValid && !io.coreReset) {
     commitCount := commitCount + 1.U
-    when(terminalCommit) {
-      state := haltingState
-      stepCredit := false.B
-      stopReason := FpgaStopReason.ebreak
-      haltCode := io.runtime.gprs(10)
-      haltPc := io.runtime.commitPc
-      haltNextPc := io.runtime.commitNextPc
-    }
   }
 
   when(state === steppingState && io.runtime.dispatchFire) {
@@ -159,7 +149,6 @@ class FpgaDebugController(width: Int) extends Module {
   io.status.halted := state === haltedState
   io.status.stableHalted := io.status.halted && coreStable
   io.status.stepping := state === steppingState
-  io.status.terminalHalted := io.status.halted && stopReason === FpgaStopReason.ebreak
   io.status.protocolError := protocolError
   io.status.completedSequence := completedSequence
   io.status.stopReason := stopReason

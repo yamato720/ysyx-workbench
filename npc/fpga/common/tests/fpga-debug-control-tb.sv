@@ -17,8 +17,13 @@ module FpgaDebugControlTb;
   logic dispatch_fire = 0;
   logic commit_valid = 0;
   logic [31:0] commit_instruction = 32'h0000_0013;
+  logic completion_commit_valid = 0;
   logic [31:0] next_pc = 32'h8000_0000;
+  logic [31:0] gpr10 = 32'h0000_005a;
+  logic core_reset;
   logic dispatch_permit;
+  logic guest_external_interrupt;
+  logic mailbox_interrupt;
 
   always #5 clock = ~clock;
 
@@ -45,14 +50,21 @@ module FpgaDebugControlTb;
     .io_runtime_commitPc(next_pc - 4),
     .io_runtime_commitInstruction(commit_instruction),
     .io_runtime_commitNextPc(next_pc),
+    .io_runtime_completionCommitValid(completion_commit_valid),
+    .io_runtime_completionCommitPc(next_pc - 4),
+    .io_runtime_completionCommitNextPc(next_pc),
     .io_runtime_mstatus(32'h5566_7788),
     .io_runtime_mcause(32'h0506_0708),
     .io_runtime_mepc(32'h4433_2211),
     .io_runtime_mtvec(32'h8000_0100),
     .io_runtime_coreBusy(core_busy),
     .io_runtime_dispatchFire(dispatch_fire),
+    .io_runtime_gprs_10(gpr10),
     .io_putch_valid(1'b0),
-    .io_dispatchPermit(dispatch_permit)
+    .io_coreReset(core_reset),
+    .io_dispatchPermit(dispatch_permit),
+    .io_guestExternalInterrupt(guest_external_interrupt),
+    .io_mailboxInterrupt(mailbox_interrupt)
   );
 
   task automatic write_register(input logic [31:0] address, input logic [31:0] value);
@@ -90,7 +102,7 @@ module FpgaDebugControlTb;
     reset = 0;
 
     read_register(32'hfc, value);
-    if (value !== 32'h4e50_4305) $fatal(1, "missing v5 protocol signature: %h", value);
+    if (value !== 32'h4e50_4306) $fatal(1, "missing v6 protocol signature: %h", value);
     read_register(32'h3c, value);
     if ((value & 7) !== 7) $fatal(1, "missing debug capabilities: %h", value);
 
@@ -165,25 +177,44 @@ module FpgaDebugControlTb;
     read_register(32'h4c, value);
     if ((value & 32'h20) != 0) $fatal(1, "reset did not clear protocol error: %h", value);
 
+    write_register(32'h70, 1);
+    if (!guest_external_interrupt) $fatal(1, "mailbox did not raise guest MEIP");
+    read_register(32'h70, value);
+    if (value !== 1) $fatal(1, "guest MEIP register mismatch: %h", value);
+    write_register(32'h70, 0);
+    if (guest_external_interrupt) $fatal(1, "mailbox did not lower guest MEIP");
+
     command(6, 2);
-    commit_instruction = 32'h0010_0073;
+    core_busy = 1;
+    commit_instruction = 32'h7c05_1073;
     commit_valid = 1;
+    completion_commit_valid = 1;
     next_pc = 32'h8000_0008;
     #1;
-    if (dispatch_permit) $fatal(1, "ebreak commit did not close dispatch combinationally");
+    if (!dispatch_permit) $fatal(1, "mtestexit changed debug dispatch state");
     @(negedge clock);
     commit_valid = 0;
+    completion_commit_valid = 0;
+    if (!core_reset) $fatal(1, "completion was not latched at the mtestexit commit boundary");
     repeat (2) @(negedge clock);
+    if (!core_reset) $fatal(1, "completion did not hold the core in reset");
+    if (!mailbox_interrupt) $fatal(1, "completion did not notify the host");
+    read_register(32'h84, value);
+    if ((value & 32'h10) == 0) $fatal(1, "completion pending bit is clear: %h", value);
+    read_register(32'h60, value);
+    if (value !== 32'h8000_0004) $fatal(1, "completion PC mismatch: %h", value);
+    read_register(32'h68, value);
+    if (value !== 32'h8000_0008) $fatal(1, "completion next PC mismatch: %h", value);
+    read_register(32'hd8, value);
+    if (value !== 32'h0000_005a) $fatal(1, "completion exit code mismatch: %h", value);
     read_register(32'h4c, value);
-    if ((value & 32'h2) == 0) $fatal(1, "ebreak did not reach halted state: %h", value);
-    read_register(32'h58, value);
-    if (value !== 3) $fatal(1, "ebreak stop reason mismatch: %h", value);
-    read_register(32'h50, value);
-    if (value !== 32'h8000_0008) $fatal(1, "ebreak stop PC mismatch: %h", value);
-    read_register(32'hb4, value);
-    if (value !== 32'h8000_0004) $fatal(1, "ebreak last commit PC mismatch: %h", value);
+    if ((value & 32'h1) == 0 || (value & 32'h2) != 0)
+      $fatal(1, "mtestexit was reclassified as a debug halt: %h", value);
+    write_register(32'h80, 32'h0000_000a);
+    if (core_reset || mailbox_interrupt)
+      $fatal(1, "start did not acknowledge completion and release reset");
 
-    $display("FPGA v5 debug control RTL tests passed");
+    $display("FPGA debug control RTL tests passed");
     $finish;
   end
 endmodule

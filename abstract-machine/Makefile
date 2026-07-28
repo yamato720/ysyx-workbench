@@ -58,6 +58,7 @@ endif
 WORK_DIR  = $(shell pwd)
 # Config 批量运行会为每个“版本 × 用例”传入独立目录。源文件仍从 WORK_DIR 读取，
 # 仅编译、链接和 NEMU 日志产物进入 AM_BUILD_ROOT，避免并行任务争用 build/。
+AM_BUILD_ROOT_ORIGIN := $(origin AM_BUILD_ROOT)
 AM_BUILD_ROOT ?= $(WORK_DIR)/build
 DST_DIR   = $(AM_BUILD_ROOT)/$(ARCH)
 $(shell mkdir -p $(DST_DIR))
@@ -135,9 +136,14 @@ $(ARCHIVE): $(OBJS)
 else
 # $(1): library name
 define LIB_TEMPLATE =
-$$(AM_HOME)/$(1)/build/$(1)-$$(ARCH).a: force
+ifeq ($$(AM_BUILD_ROOT_ORIGIN),undefined)
+LIB_ARCHIVE_$(1) := $$(AM_HOME)/$(1)/build/$(1)-$$(ARCH).a
+else
+LIB_ARCHIVE_$(1) := $$(AM_BUILD_ROOT)/$(1)-$$(ARCH).a
+endif
+$$(LIB_ARCHIVE_$(1)): force
 	@$$(MAKE) -s -C $$(AM_HOME)/$(1) archive
-LINKAGE += $$(AM_HOME)/$(1)/build/$(1)-$$(ARCH).a
+LINKAGE += $$(LIB_ARCHIVE_$(1))
 endef
 
 ### Rule (recursive make): build a dependent library (am, klib, ...)

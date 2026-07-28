@@ -26,8 +26,6 @@ final case class NemuHostConfig(
     "NEMU VCD only supports the local Verilator host")
   require(!pipelineHtml || performanceHtml,
     "NEMU pipeline HTML requires performance HTML")
-  require(!pipelineHtml || backend == NemuBackend.LocalVerilator,
-    "NEMU pipeline HTML only supports the local Verilator host")
   require(!softwareDifftest || backend == NemuBackend.LocalVerilator,
     "NEMU software difftest only supports the local Verilator host")
 }
@@ -70,7 +68,7 @@ object NemuHostConfig {
     trace = false,
     watchpoint = true,
     vcd = false,
-    performanceHtml = false,
+    performanceHtml = true,
     pipelineHtml = false,
     softwareDifftest = false,
     devices = false,
@@ -78,6 +76,13 @@ object NemuHostConfig {
     debug = false,
     lto = false,
     asan = false
+  )
+
+  /** U55C v12 trace host recipe.  Trace availability is still discovered from
+    * the loaded xclbin mailbox; this preset only asks NEMU to render reports.
+    */
+  val U55cRuntimeTrace: NemuHostConfig = U55cBase.copy(
+    pipelineHtml = true
   )
 
   /** ZCU102 PS Linux host 的完整基础配方。 */
@@ -102,6 +107,7 @@ object NemuHostConfig {
     Preset("LocalPerformance", LocalPerformance),
     Preset("LocalPipelineTrace", LocalPipelineTrace),
     Preset("U55cBase", U55cBase),
+    Preset("U55cRuntimeTrace", U55cRuntimeTrace),
     Preset("Zcu102Base", Zcu102Base)
   )
 

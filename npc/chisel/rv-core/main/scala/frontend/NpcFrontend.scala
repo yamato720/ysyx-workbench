@@ -20,6 +20,9 @@ class NpcFrontend(config: NpcConfig) extends Module {
     val redirectValid = Input(Bool())
     val redirectTarget = Input(UInt(cfg.xlen.W))
     val dispatch = Decoupled(new DecodedDispatchPayload(cfg))
+    // 两条已提交指令之间若要接收异步中断，后端以此作为 mepc。取指级至多
+    // 缓冲一条尚未派发的指令，因此该值不会跳过任何未提交的架构指令。
+    val interruptPc = Output(UInt(cfg.xlen.W))
     val axi = new AxiLiteMasterIO(axiConfig.addrWidth, axiConfig.dataWidth)
     val memoryFault = Output(new MemoryFault(axiConfig.addrWidth))
 
@@ -68,6 +71,7 @@ class NpcFrontend(config: NpcConfig) extends Module {
 
   io.dispatch.valid := fetchDecodeReg.io.out.valid && !io.redirectValid
   fetchDecodeReg.io.out.ready := io.dispatch.ready && !io.redirectValid
+  io.interruptPc := Mux(fetchDecodeReg.io.out.valid, fetchDecodeReg.io.out.bits.pc, programCounter.io.pc)
   io.dispatch.bits.pc := fetchDecodeReg.io.out.bits.pc
   io.dispatch.bits.instruction := instruction
   io.dispatch.bits.perfFetchCycles := fetchDecodeReg.io.out.bits.perfFetchCycles

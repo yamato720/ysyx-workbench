@@ -17,6 +17,8 @@ struct u55c_xrt_implementation {
   std::unique_ptr<xrt::ip> control;
   std::unique_ptr<xrt::bo> memory;
   uint8_t *mapped_memory = nullptr;
+  std::unique_ptr<xrt::bo> trace;
+  uint8_t *mapped_trace = nullptr;
 };
 
 static void record_error(struct nemu_fpga_u55c_xrt *runtime, const char *message) {
@@ -165,6 +167,68 @@ extern "C" int nemu_fpga_u55c_xrt_write(struct nemu_fpga_u55c_xrt *runtime,
   try {
     std::memcpy(implementation->mapped_memory + offset, source, size);
     implementation->memory->sync(XCL_BO_SYNC_BO_TO_DEVICE, size, offset);
+    return 0;
+  } catch (const std::exception &error) {
+    record_error(runtime, error.what());
+    errno = EIO;
+    return -1;
+  }
+}
+
+extern "C" int nemu_fpga_u55c_xrt_allocate_trace(
+    struct nemu_fpga_u55c_xrt *runtime, unsigned memory_group, size_t trace_size) {
+  if (runtime == nullptr || trace_size == 0) {
+    errno = EINVAL;
+    return -1;
+  }
+  auto *implementation = static_cast<u55c_xrt_implementation *>(runtime->implementation);
+  if (implementation == nullptr || implementation->device == nullptr ||
+      implementation->trace != nullptr) {
+    errno = implementation == nullptr ? ENODEV : EALREADY;
+    return -1;
+  }
+  try {
+    implementation->trace = std::make_unique<xrt::bo>(
+        *implementation->device, trace_size, xrt::bo::flags::normal, memory_group);
+    implementation->mapped_trace = implementation->trace->map<uint8_t *>();
+    if (implementation->mapped_trace == nullptr)
+      throw std::runtime_error("XRT returned a null trace HBM mapping");
+    runtime->trace_size = trace_size;
+    return 0;
+  } catch (const std::exception &error) {
+    implementation->trace.reset();
+    implementation->mapped_trace = nullptr;
+    record_error(runtime, error.what());
+    errno = EIO;
+    return -1;
+  }
+}
+
+extern "C" uint64_t nemu_fpga_u55c_xrt_trace_address(
+    const struct nemu_fpga_u55c_xrt *runtime) {
+  if (runtime == nullptr || runtime->implementation == nullptr) return 0;
+  const auto *implementation =
+      static_cast<const u55c_xrt_implementation *>(runtime->implementation);
+  return implementation->trace == nullptr ? 0 : implementation->trace->address();
+}
+
+extern "C" int nemu_fpga_u55c_xrt_read_trace(struct nemu_fpga_u55c_xrt *runtime,
+                                               size_t offset, void *destination,
+                                               size_t size) {
+  if (runtime == nullptr || destination == nullptr || offset > runtime->trace_size ||
+      size > runtime->trace_size - offset) {
+    errno = EINVAL;
+    return -1;
+  }
+  auto *implementation = static_cast<u55c_xrt_implementation *>(runtime->implementation);
+  if (implementation == nullptr || implementation->trace == nullptr ||
+      implementation->mapped_trace == nullptr) {
+    errno = ENODEV;
+    return -1;
+  }
+  try {
+    implementation->trace->sync(XCL_BO_SYNC_BO_FROM_DEVICE, size, offset);
+    std::memcpy(destination, implementation->mapped_trace + offset, size);
     return 0;
   } catch (const std::exception &error) {
     record_error(runtime, error.what());

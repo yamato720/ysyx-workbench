@@ -3,8 +3,8 @@ package npc.fpga.u55c
 import org.chipsalliance.cde.config.{Config => CDEConfig}
 import _root_.npc.fpga.FpgaBoard
 import _root_.npc.fpga.FpgaPlatformSettings
-import _root_.npc.fpga.{WithFpgaBoardConfig, WithFpgaClockMHzConfig, WithFpgaPlatformConfig}
-import _root_.npc.{FpgaIpAttachment, OperatorIpTimingConfig, WithFpgaIpAttachmentConfig, XilinxIntegerIpAttachment}
+import _root_.npc.fpga.{FpgaRuntimeTraceConfig, WithFpgaBoardConfig, WithFpgaClockMHzConfig, WithFpgaPlatformConfig, WithFpgaRuntimeTraceConfig}
+import _root_.npc.{FpgaIpAttachment, OperatorIpTimingConfig, RuntimeTraceProfile, WithFpgaIpAttachmentConfig, XilinxIntegerIpAttachment}
 
 /** U55C 复用的 Xilinx 整数 IP attachment；板卡 core 可在此基础上覆盖算子时序。 */
 object U55cXilinxIpAttachment {
@@ -52,4 +52,16 @@ class U55c300MHzBoardConfig extends U55cBoardConfig(
     ),
     dividerNonBlocking = true
   )
+)
+
+/** U55C 300 MHz 调试板卡策略。
+  *
+  * 该策略的第二个 AXI master 是 v12 硬件 ABI 的一部分。普通 300 MHz Config
+  * 保持使用 [[U55c300MHzBoardConfig]]，不会出现 trace HBM 端口。
+  */
+class U55c300MHzDebugBoardConfig(
+  traceProfile: RuntimeTraceProfile = RuntimeTraceProfile.U55cDebug
+) extends CDEConfig(
+  new WithFpgaRuntimeTraceConfig(FpgaRuntimeTraceConfig.from(traceProfile)) ++
+    new U55c300MHzBoardConfig
 )

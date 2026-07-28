@@ -23,6 +23,7 @@ object ConstructionProfile {
   ): Seq[(String, String)] = {
     val capability = host.capability
     val settings = host.nemuConfig
+    val runtimeTrace = host.runtimeTraceProfile
     val mulDiv = config.operators.mulDiv
     val floating = config.operators.floating
     val isaExtensions = Seq(
@@ -47,14 +48,19 @@ object ConstructionProfile {
       actual = settings.backend.id
     } require(actual == expected,
       s"Config ${entry.className} 的 NEMU host=$actual 与 $entry 作用域/板卡要求的 $expected 不兼容")
-    val protocolAbi = entry.scope match {
-      case "npc" => "npc-dpi-v1"
-      case "soc" => "ysyx-dpi-v1"
-      case "fpga" => "npc-fpga-runtime-v5"
-      case scope => throw new IllegalArgumentException(s"未知终端作用域：$scope")
+    require(!runtimeTrace.enabled || (entry.scope == "fpga" && entry.board.contains("u55c") &&
+      entry.target == "NPC"),
+      s"runtime trace is only supported by the U55C bare-NPC terminal: ${entry.className}")
+    val protocolAbi = (entry.scope, entry.board, runtimeTrace.enabled) match {
+      case ("npc", _, _) => "npc-dpi-v1"
+      case ("soc", _, _) => "ysyx-dpi-v1"
+      case ("fpga", Some("u55c"), true) => "npc-fpga-runtime-v12"
+      case ("fpga", Some("u55c"), false) => "npc-fpga-runtime-v11"
+      case ("fpga", _, _) => "npc-fpga-runtime-v7"
+      case (scope, _, _) => throw new IllegalArgumentException(s"未知终端作用域：$scope")
     }
     val base = Seq(
-      "PROFILE_FORMAT" -> "16",
+      "PROFILE_FORMAT" -> "18",
       "CONFIG_SHORT_NAME" -> entry.shortName,
       "CONFIG_FQCN" -> entry.className,
       "SCOPE" -> entry.scope,
@@ -74,6 +80,11 @@ object ConstructionProfile {
       "NEMU_LTO" -> bit(settings.lto),
       "NEMU_ASAN" -> bit(settings.asan),
       "PROTOCOL_ABI" -> protocolAbi,
+      "FPGA_RUNTIME_TRACE" -> bit(runtimeTrace.enabled),
+      "FPGA_TRACE_HBM_BANK" -> runtimeTrace.hbmBank.toString,
+      "FPGA_TRACE_BUFFER_BYTES" -> runtimeTrace.bufferBytes.toString,
+      "FPGA_TRACE_MAX_RECORDS" -> runtimeTrace.maxRecords.toString,
+      "FPGA_TRACE_CACHE_RECORDS" -> runtimeTrace.cacheRecords.toString,
       "TARGET" -> entry.target,
       "XLEN" -> config.isa.xlen.toString,
       "ISA_STRING" -> s"rv${config.isa.xlen}i$isaExtensions",

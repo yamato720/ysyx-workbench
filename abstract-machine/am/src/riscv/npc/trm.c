@@ -15,7 +15,11 @@ void putch(char ch) {
 }
 
 void halt(int code) {
+#ifdef AM_NEMU_FPGA_MTESTEXIT
+  asm volatile("mv a0, %0; csrw 0x7c0, a0" : : "r"(code) : "memory");
+#else
   asm volatile("mv a0, %0; ebreak" : : "r"(code));
+#endif
   while (1);
 }
 

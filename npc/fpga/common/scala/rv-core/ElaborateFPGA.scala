@@ -16,6 +16,7 @@ object ElaborateFPGA extends App {
   implicit val parameters: Parameters = construction
   val config = FpgaConfigParameters.npcCoreConfig
   val platform = FpgaConfigParameters.platform
+  val runtimeTrace = FpgaConfigParameters.runtimeTrace
   val ipAttachment = FpgaConfigParameters.ipAttachment
   val toolchain = construction match {
     case value: FpgaConstruction => value.fpgaToolchainConfig
@@ -38,5 +39,5 @@ object ElaborateFPGA extends App {
   )
   ElaborateOutput.stripBlackBoxFileList(s"$output/NpcFpgaTop.sv")
   FpgaElaborationManifest.write(
-    Array("--target-dir", output), config, platform, ipAttachment, toolchain, entry.className, entry.target)
+    Array("--target-dir", output), config, platform, runtimeTrace, ipAttachment, toolchain, entry.className, entry.target)
 }

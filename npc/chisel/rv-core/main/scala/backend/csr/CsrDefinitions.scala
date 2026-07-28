@@ -19,6 +19,10 @@ object CsrAddress {
   val mcause = 0x342
   val mtval = 0x343
   val mip = 0x344
+
+  // FPGA runtime's non-standard machine CSR. A committed write is the
+  // mailbox completion boundary; ordinary software must not rely on it.
+  val mtestexit = 0x7c0
 }
 
 /** mip 与 mie 共用的位位置。 */
@@ -32,4 +36,12 @@ object CsrInterruptBit {
   val ueip = 8
   val seip = 9
   val meip = 11
+}
+
+/** Machine-mode interrupt-state bit positions in mstatus. */
+object CsrStatusBit {
+  val mie = 3
+  val mpie = 7
+  val mppLow = 11
+  val mppHigh = 12
 }

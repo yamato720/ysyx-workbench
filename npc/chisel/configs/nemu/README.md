@@ -15,6 +15,7 @@
 | `NemuHostConfig.LocalPerformance` | local | 增加性能主页与逐指令明细 |
 | `NemuHostConfig.LocalPipelineTrace` | local | 增加流水线 HTML 与逐提交软件自查 |
 | `NemuHostConfig.U55cBase` | u55c | U55C XRT host |
+| `NemuHostConfig.U55cRuntimeTrace` | u55c | U55C v12 Debug trace host |
 | `NemuHostConfig.Zcu102Base` | zcu102 | ZCU102 PS Linux host |
 
 所有 Base 都显式填写 backend、trace、watchpoint、VCD、performance、pipeline、difftest、devices、
@@ -23,8 +24,9 @@ optimization、debug、LTO 和 ASAN 字段。内置 Config 和普通示例直接
 `core/NemuHostConfig.scala` 定义并登记为具名完整预设。
 
 XLEN、F、NPC/SoC、板卡地址、mailbox ABI 与 FPGA 平台始终从硬件 Config 派生，不能被 NEMU 配方
-改写。本地仿真只接受 local backend；VCD 依赖 trace；`pipelineHtml` 依赖 `performanceHtml`，且
-pipeline、VCD 和软件 difftest 只支持本地 Verilator。
+改写。本地仿真只接受 local backend；VCD 依赖 trace；`pipelineHtml` 依赖 `performanceHtml`；VCD 和
+软件 difftest 只支持本地 Verilator。U55C 的 pipeline HTML 仅在加载 v12 Debug xclbin 后从 HBM trace
+回放；v11 xclbin 保留性能主页，但明确报告硬件监测不可用。
 
 `performanceHtml` 生成 `performance.html` 主页和 `instructions.html`；`pipelineHtml` 复用同一份
 提交记录生成 `pipeline.html`，不会隐式开启 VCD 或 ITRACE。
