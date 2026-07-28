@@ -1,0 +1,21 @@
+{
+    "metals.customProjectRoot": ".",
+    "metals.autoImportBuilds": "all",
+    "files.watcherExclude": {
+        "**/.bloop/**": true,
+        "**/target/**": true,
+        "**/generated/**": true,
+        "**/generated-dpi/**": true,
+        "**/intermediate/**": true,
+        "**/out/**": true
+    },
+    "search.exclude": {
+        "**/.bloop/**": true,
+        "**/.metals/**": true,
+        "**/target/**": true,
+        "**/generated/**": true,
+        "**/generated-dpi/**": true,
+        "**/intermediate/**": true,
+        "**/out/**": true
+    }
+}

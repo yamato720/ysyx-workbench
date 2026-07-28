@@ -42,6 +42,11 @@ out/
 /project/metals.sbt
 /project/project/
 
+# 共享的 Metals 导入配置；.metals、.bloop 和其他生成状态保持忽略。
+!/.vscode/
+!/.vscode/settings.json
+!/project/metals.sbt
+
 # 保留 FPGA IP 生成器的固定 source/generated 目录骨架，仅允许占位文件进入 Git。
 !/fpga-ip-generator/**/generated/
 !/fpga-ip-generator/**/generated/*/
