@@ -29,7 +29,7 @@
 | U55C 时钟 | `new U55cBoardConfig(clockMHz = 125)` | `core/U55cBoardConfig.scala` | U55C 目标必需；允许频率由 `npc/fpga/u55c/config.mk` 的物理能力表限制 |
 | U55C 地址与时钟 | `new WithFpgaPlatformConfig(FpgaPlatformSettings(...))` | `core/U55cBoardConfig.scala` | U55C 目标必需 |
 | U55C 整数 IP | `U55cXilinxIpAttachment(...)` | `core/U55cBoardConfig.scala` | U55C 目标必需；同一 attachment 同时挂接 NPC 与 SoC |
-| U55C 器件与实现策略 | `FpgaToolchainConfig.U55cBase` | 根部 `U55cNpcTerminal`/`U55cSocTerminal` 预设 | U55C 目标必需；不进入 CDE |
+| U55C 器件与实现策略 | `FpgaToolchainConfig.U55cBase` | 根部 U55C terminal 预设 | U55C 目标必需；不进入 CDE |
 | Vitis XRT 环境策略 | `U55cBase.flow.vitisXrtMode = "unset"` | `FpgaToolchainConfig.scala` | U55C 构造必需；只为 `v++` 选择 Vitis 自带的封装工具 |
 | U55C 构造并行度、策略搜索和实现后报告 | `U55cBase.flow`、`U55cBase.reports` | `FpgaToolchainConfig.scala` | 是；worker jobs、策略搜索、时序路径深度和诊断报告开关均由终端冻结 |
 | 默认 NPC 覆盖 | `new Rv64PipelineDualForwardingFpgaConfig` 等完整 L1 Config | L1 `core/IntegrationCore.scala` | 是；仅 IM_Zicsr |
@@ -48,7 +48,9 @@ attachment 封装为命名板卡策略，仍保持 `II=1`。`U55cRv64Npc300MHzFp
 普通整数路径两拍、串行控制路径三拍、首拍取指请求寄存器化、串行整数 ALU 分离、串行结果 ID 前递关闭的 RV64 核心。这些均是
 频率对应的独立开关，不会由 `clockMHz` 自动推导，因此未来 250 MHz 终端可逐项选择。
 
-`U55cRv64Npc300MHzDebugFpgaConfig` 在同一 RV64 300 MHz 核上叠加 `U55c300MHzDebugBoardConfig`。
-它通过 `RuntimeTraceProfile.U55cDebug` 冻结 v12 trace ABI；如需调整片上 FIFO 深度，应在 Config 中用
-`RuntimeTraceProfile.U55cDebug.copy(cacheRecords = <2 的幂>)` 构造新的 profile，再传给
-`U55c300MHzDebugBoardConfig`。这会改变 URAM 数量和生成 RTL，不能以 `host-build` 替代 `rebuild`。
+`U55cRv64Npc300MHzDebugFpgaConfig` 在同一 RV64 300 MHz 核上叠加 `U55c300MHzDebugBoardConfig`，并只挂载
+完整的 `U55cDebugNpcTerminal` 与 `FpgaIpTerminal`。前者选择 `NemuHostConfig.U55cRuntimeTrace` 的报告行为；
+后者不拥有硬件能力。硬件 trace 由 `U55c300MHzDebugBoardConfig` 的
+`FpgaRuntimeTraceConfig.U55cDebug` 冻结；如需调整片上 FIFO 深度，应以
+`FpgaRuntimeTraceConfig.U55cDebug.copy(cacheRecords = <2 的幂>)` 构造新值，再传给该 Board Config。
+这会改变 URAM 数量和生成 RTL，不能以 `host-build` 替代 `rebuild`。

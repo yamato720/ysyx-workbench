@@ -2,29 +2,6 @@ package npc
 
 import org.chipsalliance.cde.config.View
 
-/** Runtime-visible trace ABI fields shared by terminal profile generation and
-  * board-specific CDE configuration.  The FIFO depth changes generated RTL,
-  * so it is deliberately frozen in the construction profile.
-  */
-final case class RuntimeTraceProfile(
-  enabled: Boolean,
-  hbmBank: Int,
-  bufferBytes: Int,
-  maxRecords: Int,
-  cacheRecords: Int
-)
-
-object RuntimeTraceProfile {
-  val Disabled: RuntimeTraceProfile = RuntimeTraceProfile(false, 0, 0, 0, 0)
-  val U55cDebug: RuntimeTraceProfile = RuntimeTraceProfile(
-    enabled = true,
-    hbmBank = 1,
-    bufferBytes = 16 * 1024 * 1024,
-    maxRecords = 200000,
-    cacheRecords = 4096
-  )
-}
-
 private[npc] object ConstructionValidation {
   def localNemu(config: NemuHostConfig): NemuHostConfig = {
     require(config.backend == NemuBackend.LocalVerilator,
@@ -48,12 +25,10 @@ private[npc] object ConstructionValidation {
 /** profile 与反射解析器共享的最小运行构造接口。 */
 trait HostConstruction {
   protected def configuredNemu: NemuHostConfig
-  protected def configuredRuntimeTraceProfile: RuntimeTraceProfile = RuntimeTraceProfile.Disabled
 
   final val capability: String = "run"
   def nemuConfig: NemuHostConfig = configuredNemu
   final def nemuPreset: String = NemuHostConfig.presetName(nemuConfig)
-  final def runtimeTraceProfile: RuntimeTraceProfile = configuredRuntimeTraceProfile
 }
 
 /** 与运行宿主平行的计算 IP 挂载合同。

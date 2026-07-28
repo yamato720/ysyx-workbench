@@ -3,6 +3,24 @@ package npc
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 
+/** FPGA runtime trace 写入 `profile.env` 的投影。
+  *
+  * 它不选择或启用硬件；唯一的硬件来源是板级 CDE
+  * `FpgaRuntimeTraceConfigKey`。该投影只让通用 profile 代码保持对 FPGA
+  * 实现类型无依赖。
+  */
+final case class RuntimeTraceProfile(
+  enabled: Boolean,
+  hbmBank: Int,
+  bufferBytes: Int,
+  maxRecords: Int,
+  cacheRecords: Int
+)
+
+object RuntimeTraceProfile {
+  val Disabled: RuntimeTraceProfile = RuntimeTraceProfile(false, 0, 0, 0, 0)
+}
+
 /** Make、NEMU 和 FPGA 工具共同消费的规范化构造描述。 */
 object ConstructionProfile {
   private def bit(value: Boolean): String = if (value) "1" else "0"
@@ -19,11 +37,11 @@ object ConstructionProfile {
     entry: ConfigCatalog.Entry,
     host: HostConstruction,
     config: NpcConfig,
-    extra: Seq[(String, String)] = Seq.empty
+    extra: Seq[(String, String)] = Seq.empty,
+    runtimeTrace: RuntimeTraceProfile = RuntimeTraceProfile.Disabled
   ): Seq[(String, String)] = {
     val capability = host.capability
     val settings = host.nemuConfig
-    val runtimeTrace = host.runtimeTraceProfile
     val mulDiv = config.operators.mulDiv
     val floating = config.operators.floating
     val isaExtensions = Seq(
@@ -48,17 +66,7 @@ object ConstructionProfile {
       actual = settings.backend.id
     } require(actual == expected,
       s"Config ${entry.className} 的 NEMU host=$actual 与 $entry 作用域/板卡要求的 $expected 不兼容")
-    require(!runtimeTrace.enabled || (entry.scope == "fpga" && entry.board.contains("u55c") &&
-      entry.target == "NPC"),
-      s"runtime trace is only supported by the U55C bare-NPC terminal: ${entry.className}")
-    val protocolAbi = (entry.scope, entry.board, runtimeTrace.enabled) match {
-      case ("npc", _, _) => "npc-dpi-v1"
-      case ("soc", _, _) => "ysyx-dpi-v1"
-      case ("fpga", Some("u55c"), true) => "npc-fpga-runtime-v12"
-      case ("fpga", Some("u55c"), false) => "npc-fpga-runtime-v11"
-      case ("fpga", _, _) => "npc-fpga-runtime-v7"
-      case (scope, _, _) => throw new IllegalArgumentException(s"未知终端作用域：$scope")
-    }
+    val protocolAbi = protocolAbiFor(entry, runtimeTrace)
     val base = Seq(
       "PROFILE_FORMAT" -> "18",
       "CONFIG_SHORT_NAME" -> entry.shortName,
@@ -134,6 +142,21 @@ object ConstructionProfile {
     val duplicates = all.groupBy(_._1).collect { case (key, values) if values.size > 1 => key }
     require(duplicates.isEmpty, s"profile 含重复字段：${duplicates.toSeq.sorted.mkString(", ")}")
     all
+  }
+
+  /** 从终端范围与板级 trace 投影推导硬件协议 ABI。 */
+  def protocolAbiFor(entry: ConfigCatalog.Entry, runtimeTrace: RuntimeTraceProfile): String = {
+    require(!runtimeTrace.enabled || (entry.scope == "fpga" && entry.board.contains("u55c") &&
+      entry.target == "NPC"),
+      s"runtime trace is only supported by the U55C bare-NPC terminal: ${entry.className}")
+    (entry.scope, entry.board, runtimeTrace.enabled) match {
+      case ("npc", _, _) => "npc-dpi-v1"
+      case ("soc", _, _) => "ysyx-dpi-v1"
+      case ("fpga", Some("u55c"), true) => "npc-fpga-runtime-v12"
+      case ("fpga", Some("u55c"), false) => "npc-fpga-runtime-v11"
+      case ("fpga", _, _) => "npc-fpga-runtime-v7"
+      case (scope, _, _) => throw new IllegalArgumentException(s"未知终端作用域：$scope")
+    }
   }
 
   def write(path: Path, values: Seq[(String, String)]): Unit = {

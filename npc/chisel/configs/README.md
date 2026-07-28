@@ -28,7 +28,7 @@ Scala 检查分层并只扫描各终端领域根部的 `Configs.scala`；组合�
   不引用 `core/`，也不直接表达某个可运行目标。
 - `core/` 调用 `base/`，把 ISA、流水线、接口、内存、SoC 或板卡策略组合成名称直观、含义完整的
   成品。终端必须直接引用这些成品，不能在终端文件里重新展开底层片段。
-- 终端级文件与 `base/`、`core/` 文件夹分离，直接位于领域根部。当前六种共享 Make 终端预设 trait
+- 终端级文件与 `base/`、`core/` 文件夹分离，直接位于领域根部。当前七种共享 Make 终端预设 trait
   统一位于 `common/TerminalTraits.scala`；`common/IpTerminalTraits.scala` 只定义非 Make 的
   `FpgaIpTerminal` 与 `NemuSimulationIpTerminal`。通用计算单元合同位于
   `common/base/IpComputeSelectionTraits.scala`，让两种终端消费同一组时序属性。每个运行 terminal Config
@@ -120,9 +120,11 @@ FPGA 上板和 check-only Config 保持关闭。
 
 `HostConstruction`、`NemuSimulationConstruction`、`FpgaConstruction` 和 `MakeTerminal` 是
 `common/base/ConstructionTraits.scala` 中的底层接口，只供 terminal 层组合，终端不能直接混入。
-`LocalNpcTerminal`、`LocalSocTerminal`、`U55cNpcTerminal`、`U55cSocTerminal`、
-`Zcu102NpcTerminal`、`Zcu102SocTerminal` 是 `common/TerminalTraits.scala` 中仅有的六种 Make 终端
-预设；每个终端只挂载其中一个。工具链按 `device`、`flow`、`reports`、`runtime` 分组。显式自定义终端
+`LocalNpcTerminal`、`LocalSocTerminal`、`U55cNpcTerminal`、`U55cDebugNpcTerminal`、
+`U55cSocTerminal`、`Zcu102NpcTerminal`、`Zcu102SocTerminal` 是
+`common/TerminalTraits.scala` 中仅有的七种 Make 终端预设；每个终端只挂载其中一个。
+`U55cDebugNpcTerminal` 只选择 `NemuHostConfig.U55cRuntimeTrace` 的报告行为；v12 trace 硬件仍由
+`U55c300MHzDebugBoardConfig` 的 CDE 键唯一决定。工具链按 `device`、`flow`、`reports`、`runtime` 分组。显式自定义终端
 可通过嵌套 `copy(...)` 局部重载 NEMU/FPGA 配方；重复使用或需要进入普通示例的配方应提升为 `core/`
 中的具名完整 preset，必要时再增加根部 terminal trait。`CheckOnlyConstruction` 是检查构造直接挂载的
 core trait，不进入 Make 目录。公共构造 trait 名称不使用 `Trait` 后缀，承载这些 trait 的文件统一使用

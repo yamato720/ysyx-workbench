@@ -17,7 +17,7 @@
 | `core/CheckTraits.scala` | 非 Make 的检查构造行为 | 检查 Config 直接挂载 `CheckOnlyConstruction` |
 | `core/TerminalCoreTraits.scala` | 本地、U55C、ZCU102 终端直接需要的运行子项集群 | 根部 Make terminal trait 只继承对应集群 |
 | `core/IpTerminalCoreTraits.scala` | FPGA/NEMU 计算单元终端直接需要的子项集群 | 根部 IP terminal trait 只继承对应集群 |
-| `TerminalTraits.scala` | 六种提供 scope 和 target 的 Make 终端预设 | 根部终端协议；每个终端只挂载其中一个 trait |
+| `TerminalTraits.scala` | 七种提供 scope 和 target 的 Make 终端预设 | 根部终端协议；每个终端只挂载其中一个 trait |
 | `IpTerminalTraits.scala` | `NemuSimulationIpTerminal` 与 `FpgaIpTerminal` 两种计算单元终端 | 由运行 Config 显式混入；不是 Make terminal |
 
 | 名称 | 用途 | 终端可否直接挂载 |
@@ -26,9 +26,10 @@
 | `CheckOnlyConstruction` | 仅检查硬件 | 不适用；由检查 Config 直接挂载 |
 | `LocalNpcTerminal`、`LocalSocTerminal` | 完整的本地 NPC/SoC 终端预设；默认 `LocalPipelineTrace` | 是；对应终端只挂载其中一个 |
 | `U55cNpcTerminal`、`U55cSocTerminal` | 完整的 U55C NPC/SoC 终端预设；默认 U55C NEMU 与工具链配方 | 是；对应终端只挂载其中一个 |
+| `U55cDebugNpcTerminal` | U55C 裸 NPC 的 v12 trace 报告预设；绑定 `U55cRuntimeTrace` host | 是；trace 硬件仍须由 Debug Board Config 提供 |
 | `Zcu102NpcTerminal`、`Zcu102SocTerminal` | 完整的 ZCU102 NPC/SoC 终端预设；默认 ZCU102 NEMU 与工具链配方 | 是；对应终端只挂载其中一个 |
 
-六种 terminal 层预设 trait 同时提供 NEMU/FPGA 配方、运行行为、自动目录身份、scope 和 target；一个终端只挂载一个，且
+七种 terminal 层预设 trait 同时提供 NEMU/FPGA 配方、运行行为、自动目录身份、scope 和 target；一个终端只挂载一个，且
 不得越过 terminal 层直接混入 base 构造 trait。公共构造 trait 名称不加 `Trait` 后缀，承载这些 trait 的
 文件统一使用 `*Traits.scala`。除计算 IP 选择外，实际硬件参数仍由 L1-L4 的 CDE 或 NPC `++` 链固定。
 `NemuHostConfig` 与 `FpgaToolchainConfig` 是普通 case class，不进入 CDE 图。内置终端与普通示例只选择预设：
@@ -59,7 +60,7 @@ backend，`NemuSimulationIpTerminal` 选择周期精确的内建 M/F 功能模�
 这些 trait 只服务硬件组合，既不提供 scope/target，也不参与 Make 目录发现。公开运行 Config 在自身
 显式混入它们以提供 `IpConstruction`，和 `HostConstruction` 提供 NEMU 配方的方式相同；
 `ConstructionConfig` 与 `WithTerminalIpCoreConfig` 只能读取已挂载的选择，不能接收 IP 构造参数或在
-CDE `++` 链中选择后端。公开终端还必须混入 `TerminalTraits.scala` 的六种运行预设之一。
+CDE `++` 链中选择后端。公开终端还必须混入 `TerminalTraits.scala` 的七种运行预设之一。
 
 ## 算子 IP 配置
 

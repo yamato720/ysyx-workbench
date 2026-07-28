@@ -2,7 +2,7 @@ package ysyx
 
 import java.nio.file.Path
 import org.chipsalliance.cde.config.Parameters
-import _root_.npc.{CdeConfigResolver, ConstructionProfile, FpgaConstruction, HostConstruction}
+import _root_.npc.{CdeConfigResolver, ConstructionProfile, FpgaConstruction, HostConstruction, U55cDebugNpcTerminal}
 import _root_.npc.fpga.FpgaConfigParameters
 
 /** Generates the profile for board-backed ysyxSoC or bare-NPC terminals. */
@@ -12,6 +12,7 @@ object DescribeFpgaConfig extends App {
   val metadata: HostConstruction = construction
   implicit val parameters: Parameters = construction
   val platform = FpgaConfigParameters.platform
+  val runtimeTrace = FpgaConfigParameters.runtimeTrace
   val ipAttachment = FpgaConfigParameters.ipAttachment
   val fpga = construction match {
     case value: FpgaConstruction => value
@@ -22,6 +23,8 @@ object DescribeFpgaConfig extends App {
     s"catalog board ${entry.board.getOrElse("none")} does not match toolchain board ${toolchain.device.board}")
   require(platform.board.name == toolchain.device.board,
     s"hardware board ${platform.board.name} does not match toolchain board ${toolchain.device.board}")
+  require(runtimeTrace.enabled == construction.isInstanceOf[U55cDebugNpcTerminal],
+    s"${entry.className} 的 U55C trace 硬件与 NEMU 报告终端不一致")
   val extra = Seq(
     "FPGA_BOARD" -> platform.board.name,
     "FPGA_CLOCK_MHZ" -> platform.clockMHz.toString,
@@ -31,6 +34,6 @@ object DescribeFpgaConfig extends App {
   ) ++ ipAttachment.manifestValues ++ toolchain.profileValues
   ConstructionProfile.write(
     Path.of(args(0)),
-    ConstructionProfile.values(entry, metadata, FpgaConfigParameters.npcCoreConfig, extra)
+    ConstructionProfile.values(entry, metadata, FpgaConfigParameters.npcCoreConfig, extra, runtimeTrace.profile)
   )
 }

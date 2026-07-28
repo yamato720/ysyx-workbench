@@ -20,6 +20,12 @@ trait U55cNpcTerminal extends U55cFpgaTerminalCore {
   final override val constructionTarget: String = "NPC"
 }
 
+/** U55C 裸 NPC 的 v12 trace 报告终端预设。 */
+trait U55cDebugNpcTerminal extends U55cRuntimeTraceFpgaTerminalCore {
+  final override val constructionScope: String = "fpga"
+  final override val constructionTarget: String = "NPC"
+}
+
 /** U55C ysyxSoC 的完整终端预设。 */
 trait U55cSocTerminal extends U55cFpgaTerminalCore {
   final override val constructionScope: String = "fpga"

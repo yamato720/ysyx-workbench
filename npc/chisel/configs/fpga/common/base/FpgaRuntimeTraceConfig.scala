@@ -25,6 +25,15 @@ final case class FpgaRuntimeTraceConfig(
     s"trace buffer $bufferBytes is smaller than $maxRecords trace records")
   require(!enabled || (hbmBank == 1 && bufferBytes == 16 * 1024 * 1024 && maxRecords == 200000),
     "the public FPGA trace ABI is fixed to HBM[1], 16 MiB, and 200000 records")
+
+  /** 只投影到构造 profile；硬件启用状态始终由本 CDE 值持有。 */
+  def profile: RuntimeTraceProfile = RuntimeTraceProfile(
+    enabled = enabled,
+    hbmBank = hbmBank,
+    bufferBytes = bufferBytes,
+    maxRecords = maxRecords,
+    cacheRecords = cacheRecords
+  )
 }
 
 object FpgaRuntimeTraceConfig {
@@ -45,12 +54,4 @@ object FpgaRuntimeTraceConfig {
     )
 
   val U55cDebug: FpgaRuntimeTraceConfig = u55cDebug()
-
-  def from(profile: RuntimeTraceProfile): FpgaRuntimeTraceConfig = FpgaRuntimeTraceConfig(
-    enabled = profile.enabled,
-    hbmBank = profile.hbmBank,
-    bufferBytes = profile.bufferBytes,
-    maxRecords = profile.maxRecords,
-    cacheRecords = profile.cacheRecords
-  )
 }

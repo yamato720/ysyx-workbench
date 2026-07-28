@@ -200,7 +200,7 @@ FPGA 分支的唯一来源，无需重复叠加平台标签。
 `ConfigResolver` 得到 `ConstructionConfig`；SoC/FPGA 入口通过 `CdeConfigResolver` 得到 CDE
 `Config`，并从 `NpcCoreConfigKey` 取得完成的 L1 `NpcConfig`。每个运行终端只挂载一个与本地/板卡及
 NPC/SoC 目标精确匹配的 `LocalNpcTerminal`、`LocalSocTerminal`、`U55cNpcTerminal`、
-`U55cSocTerminal`、`Zcu102NpcTerminal` 或 `Zcu102SocTerminal`。这些预设已经提供完整
+`U55cDebugNpcTerminal`、`U55cSocTerminal`、`Zcu102NpcTerminal` 或 `Zcu102SocTerminal`。这些预设已经提供完整
 `NemuHostConfig` 默认值，FPGA 预设同时提供分组式 `FpgaToolchainConfig` 默认值；当前内置
 `Configs.scala` 均一步挂载，不重复展开配方。每个 Config 显式混入一个计算 IP terminal，绝不通过
 Config 构造参数或 CDE `++` 链单独选择。显式自定义终端仍可在保持 scope、target 与板卡匹配的

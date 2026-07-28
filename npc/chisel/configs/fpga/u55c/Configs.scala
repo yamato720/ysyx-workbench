@@ -5,10 +5,9 @@ import _root_.npc.{
   FpgaConfig,
   FpgaIpTerminal,
   Rv64PipelineDualForwardingFpgaConfig,
-  Rv64PipelineDualForwardingTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecuteFpgaConfig,
-  RuntimeTraceProfile
+  Rv64PipelineDualForwardingTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecuteFpgaConfig
 }
-import _root_.npc.{NemuHostConfig, U55cNpcTerminal, U55cSocTerminal}
+import _root_.npc.{U55cDebugNpcTerminal, U55cNpcTerminal, U55cSocTerminal}
 import _root_.ysyx.YsyxElaborateConfig
 
 /** U55C 的所有可运行终端构造。
@@ -52,10 +51,7 @@ class U55cRv64Npc300MHzFpgaConfig extends CDEConfig(
 class U55cRv64Npc300MHzDebugFpgaConfig extends CDEConfig(
   new U55c300MHzDebugBoardConfig ++
     new Rv64PipelineDualForwardingTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecuteFpgaConfig
-) with U55cNpcTerminal with FpgaIpTerminal {
-  override protected def configuredNemu: NemuHostConfig = NemuHostConfig.U55cRuntimeTrace
-  override protected def configuredRuntimeTraceProfile: RuntimeTraceProfile = RuntimeTraceProfile.U55cDebug
-}
+) with U55cDebugNpcTerminal with FpgaIpTerminal
 
 /** U55C 的 ysyxSoC FPGA 终端构造。
   *

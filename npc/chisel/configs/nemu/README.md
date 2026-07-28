@@ -2,7 +2,7 @@
 
 本目录定义普通 Scala `NemuHostConfig` 数据，不是独立硬件 Config，不能传给 `make config=`。
 每个可运行终端通过唯一挂载的 `LocalNpcTerminal`、`LocalSocTerminal`、`U55cNpcTerminal`、
-`U55cSocTerminal`、`Zcu102NpcTerminal` 或 `Zcu102SocTerminal` 取得完整默认配方，并将结果冻结到
+`U55cDebugNpcTerminal`、`U55cSocTerminal`、`Zcu102NpcTerminal` 或 `Zcu102SocTerminal` 取得完整默认配方，并将结果冻结到
 `profile.env`、`abi/nemu/host.defconfig` 和 `abi/nemu/host.env`。
 
 底层后端枚举位于 `base/NemuBackend.scala`；终端只直接使用
@@ -25,7 +25,8 @@ optimization、debug、LTO 和 ASAN 字段。内置 Config 和普通示例直接
 
 XLEN、F、NPC/SoC、板卡地址、mailbox ABI 与 FPGA 平台始终从硬件 Config 派生，不能被 NEMU 配方
 改写。本地仿真只接受 local backend；VCD 依赖 trace；`pipelineHtml` 依赖 `performanceHtml`；VCD 和
-软件 difftest 只支持本地 Verilator。U55C 的 pipeline HTML 仅在加载 v12 Debug xclbin 后从 HBM trace
+软件 difftest 只支持本地 Verilator。`U55cDebugNpcTerminal` 只选择 U55C 的报告配方，硬件 trace 必须由
+`U55c300MHzDebugBoardConfig` 启用；U55C 的 pipeline HTML 仅在加载 v12 Debug xclbin 后从 HBM trace
 回放；v11 xclbin 保留性能主页，但明确报告硬件监测不可用。
 
 `performanceHtml` 生成 `performance.html` 主页和 `instructions.html`；`pipelineHtml` 复用同一份

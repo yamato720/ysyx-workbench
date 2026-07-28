@@ -4,8 +4,8 @@ import npc.CdeConfigResolver
 import org.chipsalliance.cde.config.Parameters
 import org.scalatest.flatspec.AnyFlatSpec
 import npc.ExternalAxiConfig
-import npc.{ArithmeticRouteOperation, ComputeBackend, ConfigCatalog, ConstructionConfig, ConstructionProfile, FloatingCheckConfig, FpgaIpTerminal, FpgaToolchainConfig, NemuHostConfig, NemuSimulationIpTerminal, NpcConfig, NpcCoreComponents, NpcCoreConfigKey, OperatorIpTimingConfig, OperatorRouteTarget, Rv64IMFZicsrConfig, WithNpcCoreConfig}
-import npc.fpga.u55c.{U55cNpcFpgaConfig, U55cRv64Npc300MHzFpgaConfig, U55cRv64NpcFpgaConfig, U55cXilinxIpAttachment, U55cYsyxSocFpgaConfig}
+import npc.{ArithmeticRouteOperation, ComputeBackend, ConfigCatalog, ConstructionConfig, ConstructionProfile, FloatingCheckConfig, FpgaIpTerminal, FpgaToolchainConfig, NemuHostConfig, NemuSimulationIpTerminal, NpcConfig, NpcCoreComponents, NpcCoreConfigKey, OperatorIpTimingConfig, OperatorRouteTarget, Rv64IMFZicsrConfig, U55cDebugNpcTerminal, WithNpcCoreConfig}
+import npc.fpga.u55c.{U55cNpcFpgaConfig, U55cRv64Npc300MHzDebugFpgaConfig, U55cRv64Npc300MHzFpgaConfig, U55cRv64NpcFpgaConfig, U55cXilinxIpAttachment, U55cYsyxSocFpgaConfig}
 import npc.fpga.zcu102.{Zcu102NpcFpgaConfig, Zcu102YsyxSocFpgaConfig}
 import ysyx.{YsyxPlatformParameters, YsyxSimulationConfig, YsyxSocConfig}
 
@@ -107,6 +107,27 @@ class FpgaConfigCompositionTest extends AnyFlatSpec {
     assert(profile("SERIAL_EXECUTE_RESULT_FORWARDING") == "0")
     assert(FpgaConfigParameters.ipAttachment.manifestValues.toMap.apply("FPGA_DIVIDER_NON_BLOCKING") == "1")
     assertXilinxRoutes(config, 64)
+  }
+
+  "U55cRv64Npc300MHzDebugFpgaConfig" should "compose board trace hardware with the complete report terminal" in {
+    val terminal = new U55cRv64Npc300MHzDebugFpgaConfig
+    assert(terminal.isInstanceOf[U55cDebugNpcTerminal])
+    assert(terminal.nemuConfig == NemuHostConfig.U55cRuntimeTrace)
+    assert(terminal.fpgaToolchainConfig == FpgaToolchainConfig.U55cBase)
+
+    implicit val parameters: Parameters = terminal
+    val runtimeTrace = FpgaConfigParameters.runtimeTrace
+    assert(runtimeTrace == FpgaRuntimeTraceConfig.U55cDebug)
+    val profile = ConstructionProfile.values(
+      ConfigCatalog.resolve("U55cRv64Npc300MHzDebugFpgaConfig", Set("fpga")),
+      terminal,
+      FpgaConfigParameters.npcCoreConfig,
+      runtimeTrace = runtimeTrace.profile
+    ).toMap
+    assert(profile("NEMU_PRESET") == "U55cRuntimeTrace")
+    assert(profile("PROTOCOL_ABI") == "npc-fpga-runtime-v12")
+    assert(profile("FPGA_RUNTIME_TRACE") == "1")
+    assert(profile("FPGA_TRACE_CACHE_RECORDS") == "4096")
   }
 
   "Zcu102NpcFpgaConfig" should "use the PS UIO notification path with the same strict routes" in {
@@ -229,6 +250,10 @@ class FpgaConfigCompositionTest extends AnyFlatSpec {
       assert(terminal.nemuConfig == NemuHostConfig.U55cBase)
       assert(terminal.fpgaToolchainConfig == FpgaToolchainConfig.U55cBase)
     }
+
+    val debug = new U55cRv64Npc300MHzDebugFpgaConfig
+    assert(debug.nemuConfig == NemuHostConfig.U55cRuntimeTrace)
+    assert(debug.fpgaToolchainConfig == FpgaToolchainConfig.U55cBase)
 
     val zcu102 = Seq(new Zcu102NpcFpgaConfig, new Zcu102YsyxSocFpgaConfig)
     zcu102.foreach { terminal =>

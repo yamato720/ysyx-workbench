@@ -153,6 +153,7 @@ check_terminal() {
   grep -qx 'HOST_ABI=nemu-construction-v1' "$profile" || fail "$config host ABI 缺失"
   grep -qx "PROTOCOL_ABI=$expected_protocol_abi" "$profile" || fail "$config 协议 ABI 缺失"
   if [[ $config == U55cRv64Npc300MHzDebugFpgaConfig ]]; then
+    grep -qx 'NEMU_PRESET=U55cRuntimeTrace' "$profile" || fail "$config 未选择 trace 报告 NEMU 配方"
     grep -qx 'NEMU_PERFORMANCE_HTML=1' "$profile" || fail "$config 未启用性能主页"
     grep -qx 'NEMU_PIPELINE_HTML=1' "$profile" || fail "$config 未启用流水页面"
     grep -qx 'NEMU_TRACE=0' "$profile" || fail "$config 不应启用软件 trace"

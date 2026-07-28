@@ -46,6 +46,7 @@ class ConfigCatalogTest extends AnyFlatSpec {
     assert(names.contains("U55cRv64OperatorSimulationConfig"))
     assert(names.contains("U55cRv64NpcFpgaConfig"))
     assert(names.contains("U55cRv64Npc300MHzFpgaConfig"))
+    assert(names.contains("U55cRv64Npc300MHzDebugFpgaConfig"))
     assert(!names.contains("U55cFullIsa64NpcFpgaConfig"))
     assert(!names.contains("FpgaConfig"))
     assert(!names.contains("ExternalAxiConfig"))
@@ -145,7 +146,7 @@ class ConfigCatalogTest extends AnyFlatSpec {
     val construction = new SimulationConfig
     val values = ConstructionProfile.values(entry, construction, construction.config).toMap
 
-    assert(values("PROFILE_FORMAT") == "16")
+    assert(values("PROFILE_FORMAT") == "18")
     assert(values("HOST_ABI") == "nemu-construction-v1")
     assert(values("NEMU_PRESET") == "LocalPipelineTrace")
     assert(values("NEMU_BACKEND") == "local")
