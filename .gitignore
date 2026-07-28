@@ -20,3 +20,8 @@ fceux-am.worktrees/
 !.github/*
 !.*.md
 !document/*
+
+# 共享的 VS Code/Metals 工作区配置；运行时状态仍由上面的通配规则忽略。
+!/.vscode/
+!/.vscode/settings.json
+!/.vscode/extensions.json

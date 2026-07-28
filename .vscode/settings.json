@@ -1,0 +1,21 @@
+{
+    "metals.customProjectRoot": "npc/chisel/ysyxSoC",
+    "metals.autoImportBuilds": "initial",
+    "files.watcherExclude": {
+        "**/.bloop/**": true,
+        "**/target/**": true,
+        "**/npc/generated/**": true,
+        "**/npc/generated-dpi/**": true,
+        "**/npc/intermediate/**": true,
+        "**/npc/out/**": true
+    },
+    "search.exclude": {
+        "**/.bloop/**": true,
+        "**/.metals/**": true,
+        "**/target/**": true,
+        "**/npc/generated/**": true,
+        "**/npc/generated-dpi/**": true,
+        "**/npc/intermediate/**": true,
+        "**/npc/out/**": true
+    }
+}
