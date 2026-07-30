@@ -40,6 +40,10 @@ int halt_count = 0;
 const int HALT_THRESHOLD = 100;
 int inst_count = 0;
 uint64_t committed_instruction_count = 0;
+static uint64_t last_store_sequence = 0;
+static uint64_t last_store_address = 0;
+static uint64_t last_store_data = 0;
+static uint32_t last_store_strobe = 0;
 static uint64_t last_pc = 0;
 static uint64_t last_commit_pc = 0;
 static uint64_t last_commit_next_pc = 0;
@@ -419,6 +423,10 @@ void init_npc() {
     cycle_count = 0;
     inst_count = 0;
     committed_instruction_count = 0;
+    last_store_sequence = 0;
+    last_store_address = 0;
+    last_store_data = 0;
+    last_store_strobe = 0;
     last_pc = 0;
     last_commit_pc = 0;
     last_commit_next_pc = 0;
@@ -528,6 +536,12 @@ static bool run_one_cycle() {
         record_committed_pipeline_timing(last_commit_pc, last_commit_inst);
         inst_count++;
         committed_instruction_count++;
+        if (NPC_DEBUG_BACKEND(commitStoreValid)) {
+            last_store_sequence++;
+            last_store_address = NPC_DEBUG_BACKEND(commitStoreAddress);
+            last_store_data = NPC_DEBUG_BACKEND(commitStoreData);
+            last_store_strobe = NPC_DEBUG_BACKEND(commitStoreMask);
+        }
 #ifndef NPC_STANDALONE
         record_mem_access();
 #endif
@@ -947,6 +961,39 @@ extern "C" {
 
     uint64_t npc_get_commit_count() {
         return get_npc_commit_count();
+    }
+
+    uint64_t npc_get_cache_counter(uint32_t cache, uint32_t counter) {
+        if (!npc_cpu) return 0;
+        if (cache == 0) {
+            switch (counter) {
+                case 0: return NPC_DEBUG_CORE(cache_instruction_hits);
+                case 1: return NPC_DEBUG_CORE(cache_instruction_misses);
+                case 2: return NPC_DEBUG_CORE(cache_instruction_refills);
+                case 3: return NPC_DEBUG_CORE(cache_instruction_writebacks);
+                case 4: return NPC_DEBUG_CORE(cache_instruction_evictions);
+                default: return 0;
+            }
+        }
+        if (cache == 1) {
+            switch (counter) {
+                case 0: return NPC_DEBUG_CORE(cache_data_hits);
+                case 1: return NPC_DEBUG_CORE(cache_data_misses);
+                case 2: return NPC_DEBUG_CORE(cache_data_refills);
+                case 3: return NPC_DEBUG_CORE(cache_data_writebacks);
+                case 4: return NPC_DEBUG_CORE(cache_data_evictions);
+                default: return 0;
+            }
+        }
+        return 0;
+    }
+
+    uint64_t npc_get_last_store_sequence() { return last_store_sequence; }
+    uint64_t npc_get_last_store_address() { return last_store_address; }
+    uint64_t npc_get_last_store_data() { return last_store_data; }
+    uint32_t npc_get_last_store_strobe() { return last_store_strobe; }
+    uint32_t npc_get_last_store_word_bytes() {
+        return npc_cpu ? static_cast<uint32_t>(sizeof(NPC_DEBUG_BACKEND(commitStoreData))) : 0;
     }
 
     uint32_t npc_get_backpressure_reasons() {

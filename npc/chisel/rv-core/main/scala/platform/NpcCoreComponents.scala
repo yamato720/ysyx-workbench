@@ -13,6 +13,7 @@ trait NpcCoreComponents {
   def arithmeticIp: ArithmeticIpProvider
 
   def exposesDispatchControl(config: NpcConfig): Boolean = false
+  def supportsUram: Boolean = false
 }
 
 /** 普通 Verilator/NEMU 构建使用的模型和 DPI 算子组件。 */
@@ -38,4 +39,5 @@ private final class ExternalArithmeticCoreComponents(
   override val arithmeticIp: ArithmeticIpProvider
 ) extends NpcCoreComponents {
   override def exposesDispatchControl(config: NpcConfig): Boolean = true
+  override def supportsUram: Boolean = true
 }

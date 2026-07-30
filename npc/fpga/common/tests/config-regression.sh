@@ -13,6 +13,7 @@ source_manifest_tool="$npc_root/scripts/ip-source-manifest.sh"
 u55c_build_mk="$npc_root/fpga/common/build.mk"
 u55c_package_tcl="$npc_root/fpga/u55c/tcl/package-xo.tcl"
 u55c_wrapper="$npc_root/fpga/u55c/rtl/npc-u55c-kernel-wrapper.sv"
+u55c_clock_verifier="$npc_root/fpga/u55c/scripts/verify-data-clock.sh"
 zcu102_link_tcl="$npc_root/fpga/zcu102/tcl/link.tcl"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT INT TERM
@@ -96,7 +97,14 @@ if grep -q '^FPGA_BOARD=' "$soc_profile"; then
   fail 'SoC profile 意外包含 FPGA 板卡字段'
 fi
 
-for name in U55cNpcFpgaConfig U55cRv64NpcFpgaConfig U55cRv64Npc300MHzFpgaConfig U55cRv64Npc300MHzDebugFpgaConfig U55cYsyxSocFpgaConfig Zcu102NpcFpgaConfig Zcu102YsyxSocFpgaConfig; do
+for name in U55cNpcFpgaConfig U55cCacheNpcFpgaConfig U55cRv64NpcFpgaConfig \
+  U55cRv64Npc300MHzFpgaConfig U55cRv64CacheNpc300MHzFpgaConfig \
+  U55cRv64CacheNpc150MHzPerformanceMonitorFpgaConfig U55cRv64CacheNpc300MHzPerformanceMonitorFpgaConfig \
+  U55cRv64Npc100MHzPerformanceMonitorFpgaConfig U55cRv64Npc125MHzPerformanceMonitorFpgaConfig \
+  U55cRv64Npc150MHzPerformanceMonitorFpgaConfig U55cRv64Npc200MHzPerformanceMonitorFpgaConfig \
+  U55cRv64Npc250MHzPerformanceMonitorFpgaConfig U55cRv64Npc300MHzPerformanceMonitorFpgaConfig \
+  U55cYsyxSocFpgaConfig U55cCacheYsyxSocFpgaConfig \
+  Zcu102NpcFpgaConfig Zcu102YsyxSocFpgaConfig; do
   grep -Eq "^${name}[[:space:]]" "$catalog" || fail "自动目录缺少 $name"
 done
 [[ $($resolver "$catalog" U55cYsyxSocFpgaConfig fpga) == 'npc.fpga.u55c.U55cYsyxSocFpgaConfig|fpga|u55c|SOC' ]] ||
@@ -107,16 +115,17 @@ if $resolver "$catalog" U55cYsyxSocFpgaConfig npc >/dev/null 2>&1; then fail '�
 if $resolver "$catalog" UnknownConfig fpga >/dev/null 2>&1; then fail '未知 Config 未被拒绝'; fi
 
 check_terminal() {
-  local config=$1 expected_board=$2 expected_target=$3 expected_xlen=$4 expected_clock=$5 expected_xrt_mode expected_protocol_abi expected_integer_execute_stages=1 expected_serial_execute_stages=1 expected_register_initial_fetch_request=0 expected_separate_serial_integer_alu=0 expected_serial_execute_result_forwarding=1 expected_divider_non_blocking=0 resolved profile output
+  local config=$1 expected_board=$2 expected_target=$3 expected_xlen=$4 expected_clock=$5 expected_xrt_mode expected_protocol_abi expected_capability=run expected_sdb=1 expected_trace=0 expected_integer_execute_stages=1 expected_serial_execute_stages=1 expected_register_initial_fetch_request=0 expected_separate_serial_integer_alu=0 expected_serial_execute_result_forwarding=1 expected_divider_non_blocking=0 resolved profile output
   case "$config" in
-    U55cRv64Npc300MHzFpgaConfig) expected_xrt_mode=unset; expected_protocol_abi=npc-fpga-runtime-v11; expected_integer_execute_stages=2; expected_serial_execute_stages=3; expected_register_initial_fetch_request=1; expected_separate_serial_integer_alu=1; expected_serial_execute_result_forwarding=0; expected_divider_non_blocking=1 ;;
-    U55cRv64Npc300MHzDebugFpgaConfig) expected_xrt_mode=unset; expected_protocol_abi=npc-fpga-runtime-v12; expected_integer_execute_stages=2; expected_serial_execute_stages=3; expected_register_initial_fetch_request=1; expected_separate_serial_integer_alu=1; expected_serial_execute_result_forwarding=0; expected_divider_non_blocking=1 ;;
+    U55cRv64Npc300MHzFpgaConfig|U55cRv64CacheNpc300MHzFpgaConfig) expected_xrt_mode=unset; expected_protocol_abi=npc-fpga-runtime-v11; expected_integer_execute_stages=2; expected_serial_execute_stages=3; expected_register_initial_fetch_request=1; expected_separate_serial_integer_alu=1; expected_serial_execute_result_forwarding=0; expected_divider_non_blocking=1 ;;
+    U55cRv64CacheNpc*MHzPerformanceMonitorFpgaConfig|U55cRv64Npc*MHzPerformanceMonitorFpgaConfig) expected_xrt_mode=unset; expected_protocol_abi=npc-fpga-runtime-v13-performance-monitor; expected_capability=batch; expected_sdb=0; expected_trace=1; expected_integer_execute_stages=2; expected_serial_execute_stages=3; expected_register_initial_fetch_request=1; expected_separate_serial_integer_alu=1; expected_serial_execute_result_forwarding=0; expected_divider_non_blocking=1 ;;
     U55c*) expected_xrt_mode=unset; expected_protocol_abi=npc-fpga-runtime-v11 ;;
     Zcu102*) expected_xrt_mode=inherit; expected_protocol_abi=npc-fpga-runtime-v7 ;;
     *) fail "$config 缺少 Vitis XRT 环境策略预期" ;;
   esac
   resolved=$($manager resolve "$npc_root" "$config" '')
   profile=${resolved##*|}
+  grep -qx "CAPABILITY=$expected_capability" "$profile" || fail "$config capability 错误"
   grep -qx "INTEGER_EXECUTE_STAGES=$expected_integer_execute_stages" "$profile" ||
     fail "$config 的整数执行级数 profile 错误"
   grep -qx "SERIAL_EXECUTE_STAGES=$expected_serial_execute_stages" "$profile" ||
@@ -135,6 +144,9 @@ check_terminal() {
   grep -qx "target=$expected_target" <<< "$output" || fail "$config 目标错误"
   grep -qx "xlen=$expected_xlen" <<< "$output" || fail "$config XLEN 错误"
   grep -qx "clock_mhz=$expected_clock" <<< "$output" || fail "$config 频率错误"
+  if [[ $expected_board == u55c ]]; then
+    grep -qx 'platform_clock_mhz=300' <<< "$output" || fail "$config U55C platform 频率错误"
+  fi
   grep -qx 'vivado_synth_jobs=4' <<< "$output" || fail "$config 综合并行度错误"
   grep -qx 'vivado_impl_jobs=8' <<< "$output" || fail "$config 实现并行度错误"
   grep -qx 'vivado_impl_strategy_candidate=Performance_ExplorePostRoutePhysOpt' <<< "$output" || fail "$config 实现策略候选错误"
@@ -152,28 +164,46 @@ check_terminal() {
   grep -qx 'backend=fpga' <<< "$output" || fail "$config 未使用 FPGA 算术策略"
   grep -qx 'HOST_ABI=nemu-construction-v1' "$profile" || fail "$config host ABI 缺失"
   grep -qx "PROTOCOL_ABI=$expected_protocol_abi" "$profile" || fail "$config 协议 ABI 缺失"
-  if [[ $config == U55cRv64Npc300MHzDebugFpgaConfig ]]; then
-    grep -qx 'NEMU_PRESET=U55cRuntimeTrace' "$profile" || fail "$config 未选择 trace 报告 NEMU 配方"
-    grep -qx 'NEMU_PERFORMANCE_HTML=1' "$profile" || fail "$config 未启用性能主页"
-    grep -qx 'NEMU_PIPELINE_HTML=1' "$profile" || fail "$config 未启用流水页面"
-    grep -qx 'NEMU_TRACE=0' "$profile" || fail "$config 不应启用软件 trace"
-    grep -qx 'FPGA_RUNTIME_TRACE=1' "$profile" || fail "$config 未启用 runtime trace"
+  grep -qx "FPGA_RUNTIME_SDB=$expected_sdb" "$profile" || fail "$config SDB 状态错误"
+  grep -qx "FPGA_RUNTIME_TRACE=$expected_trace" "$profile" || fail "$config runtime trace 状态错误"
+  if [[ $expected_trace == 1 ]]; then
     grep -qx 'FPGA_TRACE_HBM_BANK=1' "$profile" || fail "$config trace HBM bank 错误"
-    grep -qx 'FPGA_TRACE_BUFFER_BYTES=16777216' "$profile" || fail "$config trace BO 大小错误"
-    grep -qx 'FPGA_TRACE_MAX_RECORDS=200000' "$profile" || fail "$config trace 记录上限错误"
-    grep -qx 'FPGA_TRACE_CACHE_RECORDS=4096' "$profile" || fail "$config URAM FIFO 深度错误"
-    grep -qx 'runtime_trace=1' <<< "$output" || fail "$config 未传递 trace 开关给 FPGA recipe"
-    grep -qx 'trace_cache_records=4096' <<< "$output" || fail "$config 未传递 URAM FIFO 深度给 FPGA recipe"
-  else
-    grep -qx 'FPGA_RUNTIME_TRACE=0' "$profile" || fail "$config 意外启用 runtime trace"
-    if [[ $config == U55c* ]]; then
-      grep -qx 'NEMU_PERFORMANCE_HTML=1' "$profile" || fail "$config 未启用性能主页"
-      grep -qx 'NEMU_PIPELINE_HTML=0' "$profile" || fail "$config 意外启用流水页面"
-    fi
+    grep -qx 'FPGA_TRACE_BUFFER_BYTES=8388608' "$profile" || fail "$config trace BO 大小错误"
+    grep -qx 'FPGA_TRACE_MAX_RECORDS=200000' "$profile" || fail "$config trace 上限错误"
+    grep -qx 'FPGA_TRACE_CACHE_RECORDS=2048' "$profile" || fail "$config trace FIFO 深度错误"
+    grep -qx 'FPGA_TRACE_FORMAT=2' "$profile" || fail "$config trace 格式错误"
+    grep -qx 'FPGA_TRACE_RECORD_BYTES=32' "$profile" || fail "$config trace 记录大小错误"
+    grep -qx 'FPGA_TRACE_DATA_WIDTH=256' "$profile" || fail "$config trace AXI 宽度错误"
+    grep -qx 'FPGA_TRACE_BURST_RECORDS=16' "$profile" || fail "$config trace burst 错误"
+  fi
+  if [[ $config == U55c* && $expected_trace == 0 ]]; then
+    grep -qx 'NEMU_PERFORMANCE_HTML=0' "$profile" || fail "$config 不应启用性能主页"
+    grep -qx 'NEMU_CACHE_HTML=0' "$profile" || fail "$config 不应启用缓存报告"
+    grep -qx 'NEMU_PIPELINE_HTML=0' "$profile" || fail "$config 不应启用流水页面"
+  fi
+  if [[ $expected_trace == 1 ]]; then
+    grep -qx 'NEMU_PERFORMANCE_HTML=1' "$profile" || fail "$config 应启用性能主页"
+    grep -qx 'NEMU_CACHE_HTML=1' "$profile" || fail "$config 应启用缓存报告"
+    grep -qx 'NEMU_PIPELINE_HTML=1' "$profile" || fail "$config 应启用流水页面"
   fi
   grep -qx 'M=1' "$profile" || fail "$config 未启用 M 扩展"
   grep -qx 'F=0' "$profile" || fail "$config 不应启用 F 扩展"
   grep -qx 'D=0' "$profile" || fail "$config 不应启用 D 扩展"
+  if [[ $config == *Cache* ]]; then
+    grep -qx 'ICACHE_ENABLED=1' "$profile" || fail "$config 未启用 I$"
+    grep -qx 'DCACHE_ENABLED=1' "$profile" || fail "$config 未启用 D$"
+    grep -qx 'ICACHE_CAPACITY_BYTES=4096' "$profile" || fail "$config I$ 容量错误"
+    grep -qx 'DCACHE_CAPACITY_BYTES=4096' "$profile" || fail "$config D$ 容量错误"
+    grep -qx 'ICACHE_LINE_BYTES=16' "$profile" || fail "$config I$ line 错误"
+    grep -qx 'DCACHE_LINE_BYTES=16' "$profile" || fail "$config D$ line 错误"
+    grep -qx 'DCACHE_WRITE_POLICY=write-back' "$profile" || fail "$config D$ 写策略错误"
+    grep -qx 'DCACHE_WRITE_MISS=write-allocate' "$profile" || fail "$config D$ 写未命中策略错误"
+    grep -qx 'INSTRUCTION_BUFFER_ENTRIES=4' "$profile" || fail "$config 取指缓冲深度错误"
+    grep -qx 'ZIFENCEI=1' "$profile" || fail "$config 未启用 Zifencei"
+  else
+    grep -qx 'ICACHE_ENABLED=0' "$profile" || fail "$config 意外启用 I$"
+    grep -qx 'DCACHE_ENABLED=0' "$profile" || fail "$config 意外启用 D$"
+  fi
   grep -qx "FPGA_IP_ATTACHMENT=xilinx-$expected_board" "$profile" ||
     fail "$config FPGA IP attachment 错误"
   if grep -q 'ASSIST' "$profile"; then
@@ -218,28 +248,44 @@ check_operator_routes() {
   fi
 }
 
-check_terminal U55cNpcFpgaConfig u55c NPC 32 125
-check_terminal U55cRv64NpcFpgaConfig u55c NPC 64 125
+check_terminal U55cNpcFpgaConfig u55c NPC 32 300
+check_terminal U55cCacheNpcFpgaConfig u55c NPC 32 300
+check_terminal U55cRv64NpcFpgaConfig u55c NPC 64 300
 check_terminal U55cRv64Npc300MHzFpgaConfig u55c NPC 64 300
-check_terminal U55cRv64Npc300MHzDebugFpgaConfig u55c NPC 64 300
-check_terminal U55cYsyxSocFpgaConfig u55c SOC 32 125
+check_terminal U55cRv64CacheNpc300MHzFpgaConfig u55c NPC 64 300
+check_terminal U55cRv64CacheNpc150MHzPerformanceMonitorFpgaConfig u55c NPC 64 150
+check_terminal U55cRv64CacheNpc300MHzPerformanceMonitorFpgaConfig u55c NPC 64 300
+check_terminal U55cRv64Npc100MHzPerformanceMonitorFpgaConfig u55c NPC 64 100
+check_terminal U55cRv64Npc125MHzPerformanceMonitorFpgaConfig u55c NPC 64 125
+check_terminal U55cRv64Npc150MHzPerformanceMonitorFpgaConfig u55c NPC 64 150
+check_terminal U55cRv64Npc200MHzPerformanceMonitorFpgaConfig u55c NPC 64 200
+check_terminal U55cRv64Npc250MHzPerformanceMonitorFpgaConfig u55c NPC 64 250
+check_terminal U55cRv64Npc300MHzPerformanceMonitorFpgaConfig u55c NPC 64 300
+check_terminal U55cYsyxSocFpgaConfig u55c SOC 32 300
+check_terminal U55cCacheYsyxSocFpgaConfig u55c SOC 32 300
 check_terminal Zcu102NpcFpgaConfig zcu102 NPC 32 300
 check_terminal Zcu102YsyxSocFpgaConfig zcu102 SOC 32 300
 
 # profile 缓存必须随着 Scala Config 输入变化失效；否则 `resolve` 能在板卡已调频后
 # 仍返回旧 profile，直到构造阶段的强制刷新才暴露问题。
 profile=$($manager resolve "$npc_root" U55cRv64NpcFpgaConfig '' | awk -F'|' '{print $NF}')
-sed -i 's/^FPGA_CLOCK_MHZ=.*/FPGA_CLOCK_MHZ=300/' "$profile"
+sed -i 's/^FPGA_CLOCK_MHZ=.*/FPGA_CLOCK_MHZ=100/' "$profile"
 printf 'stale-profile-inputs\n' > "$profile.inputs.sha256"
 profile=$($manager resolve "$npc_root" U55cRv64NpcFpgaConfig '' | awk -F'|' '{print $NF}')
-grep -qx 'FPGA_CLOCK_MHZ=125' "$profile" || fail 'profile 输入变更后没有重新生成'
+grep -qx 'FPGA_CLOCK_MHZ=300' "$profile" || fail 'profile 输入变更后没有重新生成'
 
 profile=$($manager resolve "$npc_root" U55cYsyxSocFpgaConfig '' | awk -F'|' '{print $NF}')
 bad_profile="$work/bad-profile.env"
-sed 's/^FPGA_CLOCK_MHZ=.*/FPGA_CLOCK_MHZ=301/' "$profile" > "$bad_profile"
+sed 's/^FPGA_CLOCK_MHZ=.*/FPGA_CLOCK_MHZ=99/' "$profile" > "$bad_profile"
 if make --no-print-directory -s -C "$npc_root" fpga-config INTERNAL_CONSTRUCTION=1 \
   config=U55cYsyxSocFpgaConfig CONSTRUCTION_PROFILE="$bad_profile" FPGA_TOOL_DRY_RUN=1 >/dev/null 2>&1; then
   fail 'Scala profile 与板卡 config.mk 的漂移未被拒绝'
+fi
+monitor_profile=$($manager resolve "$npc_root" U55cRv64Npc300MHzPerformanceMonitorFpgaConfig '' | awk -F'|' '{print $NF}')
+sed 's/^FPGA_RUNTIME_SDB=0$/FPGA_RUNTIME_SDB=1/' "$monitor_profile" > "$bad_profile"
+if make --no-print-directory -s -C "$npc_root" fpga-config INTERNAL_CONSTRUCTION=1 \
+  config=U55cRv64Npc300MHzPerformanceMonitorFpgaConfig CONSTRUCTION_PROFILE="$bad_profile" FPGA_TOOL_DRY_RUN=1 >/dev/null 2>&1; then
+  fail 'SDB 与性能监测同时启用未被 FPGA recipe 拒绝'
 fi
 custom_profile="$work/custom-toolchain-profile.env"
 sed -e 's/^FPGA_PART=.*/FPGA_PART=custom-compatible-part/' \
@@ -301,6 +347,22 @@ grep -q 'Materialize the XLEN define' "$u55c_package_tcl" || fail 'U55C XO 未�
 grep -q 'vitis_drc {ctrl_protocol ap_ctrl_hs}' "$u55c_package_tcl" || fail 'U55C XO 未声明 ap_ctrl_hs Vitis DRC'
 grep -q 'set_property interface_mode slave' "$u55c_package_tcl" || fail 'U55C XO 未显式标记 AXI-Lite slave 接口'
 grep -q 'set_property interface_mode master' "$u55c_package_tcl" || fail 'U55C XO 未显式标记 AXI master 接口'
+[[ -x $u55c_clock_verifier ]] || fail 'U55C DATA_CLK 校验器不可执行'
+fake_xclbinutil="$work/xclbinutil"
+fake_xclbin="$work/u55c.xclbin"
+touch "$fake_xclbin"
+printf '%s\n' '#!/usr/bin/env bash' \
+  'printf "%s\\n" "Scalable Clocks" "   Name:      DATA_CLK" "   Frequency:  300 MHz" "System Clocks"' > "$fake_xclbinutil"
+chmod +x "$fake_xclbinutil"
+XCLBINUTIL="$fake_xclbinutil" "$u55c_clock_verifier" "$fake_xclbin" 300 || fail 'U55C DATA_CLK 校验器拒绝正确频率'
+if XCLBINUTIL="$fake_xclbinutil" "$u55c_clock_verifier" "$fake_xclbin" 250 >/dev/null 2>&1; then
+  fail 'U55C DATA_CLK 校验器接受了错误 platform 频率'
+fi
+grep -q 'MMCME4_BASE' "$u55c_wrapper" || fail 'U55C wrapper 未生成慢核心物理时钟'
+grep -q 'xpm_fifo_async' "$u55c_wrapper" || fail 'U55C wrapper 未跨时钟域缓冲 AXI 通道'
+grep -q 'NPC_FPGA_PLATFORM_CLOCK_MHZ' "$u55c_package_tcl" || fail 'U55C XO 未固化 platform clock'
+grep -q 'NPC_FPGA_CORE_CLOCK_MHZ' "$u55c_package_tcl" || fail 'U55C XO 未固化 core clock'
+grep -q 'NPC_FPGA_CLOCKED_CORE' "$u55c_package_tcl" || fail 'U55C XO 未隔离性能监测时钟域'
 if grep -q 'user_managed' "$u55c_package_tcl"; then fail 'U55C XO 仍使用 user_managed 控制协议'; fi
 grep -q 'input  wire \[11:0\]                  s_axi_control_awaddr' "$u55c_wrapper" || fail 'U55C wrapper 控制写地址不是 12 位'
 grep -q 'input  wire \[11:0\]                  s_axi_control_araddr' "$u55c_wrapper" || fail 'U55C wrapper 控制读地址不是 12 位'

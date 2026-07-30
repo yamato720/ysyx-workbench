@@ -1,9 +1,16 @@
-if {$argc != 9} {
-  puts stderr "usage: package-xo.tcl PROJECT PART TOP SOURCE_MANIFEST XO XLEN SYNTH_JOBS CLOCK_MHZ RUNTIME_TRACE"
+if {$argc != 10} {
+  puts stderr "usage: package-xo.tcl PROJECT PART TOP SOURCE_MANIFEST XO XLEN SYNTH_JOBS PLATFORM_CLOCK_MHZ CORE_CLOCK_MHZ RUNTIME_TRACE"
   exit 2
 }
-lassign $argv project_dir part top source_manifest xo xlen synth_jobs clock_mhz runtime_trace
+lassign $argv project_dir part top source_manifest xo xlen synth_jobs platform_clock_mhz core_clock_mhz runtime_trace
 if {$runtime_trace ni {0 1}} { error "RUNTIME_TRACE must be 0 or 1" }
+if {$platform_clock_mhz != 300} { error "U55C platform DATA_CLK must be 300 MHz, got $platform_clock_mhz" }
+if {$core_clock_mhz ni {100 125 150 200 250 300}} {
+  error "U55C core clock must be one of 100, 125, 150, 200, 250, 300 MHz, got $core_clock_mhz"
+}
+if {$core_clock_mhz > $platform_clock_mhz} {
+  error "U55C core clock $core_clock_mhz MHz exceeds platform DATA_CLK $platform_clock_mhz MHz"
+}
 
 proc load_source_manifest {manifest} {
   if {![file isfile $manifest]} { error "source manifest not found: $manifest" }
@@ -45,6 +52,9 @@ foreach source [dict get $sources rtl] {
     close $source_file
     set wrapper_file [open $packaged_wrapper_source w]
     puts $wrapper_file "`define NPC_FPGA_XLEN $xlen"
+    puts $wrapper_file "`define NPC_FPGA_PLATFORM_CLOCK_MHZ $platform_clock_mhz"
+    puts $wrapper_file "`define NPC_FPGA_CORE_CLOCK_MHZ $core_clock_mhz"
+    if {$runtime_trace == 1} { puts $wrapper_file "`define NPC_FPGA_CLOCKED_CORE 1" }
     if {$runtime_trace == 1} { puts $wrapper_file "`define NPC_FPGA_RUNTIME_TRACE 1" }
     puts -nonewline $wrapper_file $source_text
     close $wrapper_file
@@ -57,13 +67,14 @@ foreach source [dict get $sources rtl] {
 if {!$packaged_wrapper} { error "synthesis manifest has no U55C kernel wrapper" }
 add_files -norecurse $packaging_rtl
 set_property verilog_define "NPC_FPGA_XLEN=$xlen" [current_fileset]
+
 if {$runtime_trace == 1} {
   # Chisel 7.0.0-M2 cannot emit a memory attribute with this project's
   # dependency set.  Constrain the explicitly named SyncReadMem here so the
-  # v12 FIFO is implemented in U55C URAM rather than BRAM or registers.
+  # v13 FIFO is implemented in U55C URAM rather than BRAM or registers.
   set trace_uram_xdc [file join $project_dir trace-uram.xdc]
   set trace_uram_file [open $trace_uram_xdc w]
-  puts $trace_uram_file {set_property RAM_STYLE ultra [get_cells -hier -filter {NAME =~ *trace_uram_fifo*}]}
+  puts $trace_uram_file {set_property RAM_STYLE ultra [get_cells -hier -filter {NAME =~ *performance_monitor_uram_fifo*}]}
   close $trace_uram_file
   add_files -fileset constrs_1 $trace_uram_xdc
 }
@@ -106,7 +117,7 @@ ipx::associate_bus_interfaces -clock ap_clk -reset ap_rst_n $core
 
 set clock_interface [ipx::get_bus_interfaces ap_clk -of_objects $core]
 set clock_frequency [ipx::add_bus_parameter -quiet FREQ_HZ $clock_interface]
-set_property value [expr {$clock_mhz * 1000000}] $clock_frequency
+set_property value [expr {$platform_clock_mhz * 1000000}] $clock_frequency
 set_property value_resolve_type user $clock_frequency
 
 # XRT 使用该指针参数把 guest-memory BO 绑定到 m_axi_gmem；RTL 从 mailbox
@@ -131,7 +142,7 @@ puts $kernel_xml_file [format {  <kernel name="%s" language="ip_c" vlnv="user.or
 puts $kernel_xml_file {    <ports>}
 puts $kernel_xml_file [format {      <port name="m_axi_gmem" mode="master" range="0xFFFFFFFFFFFFFFFF" dataWidth="%s" portType="addressable" base="0x0"/>} $xlen]
 if {$runtime_trace == 1} {
-  puts $kernel_xml_file [format {      <port name="m_axi_trace" mode="master" range="0xFFFFFFFFFFFFFFFF" dataWidth="%s" portType="addressable" base="0x0"/>} $xlen]
+  puts $kernel_xml_file {      <port name="m_axi_trace" mode="master" range="0xFFFFFFFFFFFFFFFF" dataWidth="256" portType="addressable" base="0x0"/>}
 }
 puts $kernel_xml_file {      <port name="s_axi_control" mode="slave" range="0x1000" dataWidth="32" portType="addressable" base="0x0"/>}
 puts $kernel_xml_file {    </ports>}

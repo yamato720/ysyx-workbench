@@ -7,7 +7,8 @@ import _root_.npc.{FpgaIpAttachment, FpgaIpAttachmentKey, NpcConfig, NpcCoreConf
 case object FpgaPlatformSettingsKey extends Field[Option[FpgaPlatformSettings]](None)
 case object FpgaBoardKey extends Field[Option[FpgaBoard]](None)
 case object FpgaClockMHzKey extends Field[Option[Int]](None)
-case object FpgaRuntimeTraceConfigKey extends Field[FpgaRuntimeTraceConfig](FpgaRuntimeTraceConfig.Disabled)
+case object FpgaPerformanceMonitorConfigKey extends Field[FpgaPerformanceMonitorConfig](FpgaPerformanceMonitorConfig.Disabled)
+case object FpgaRuntimeSdbConfigKey extends Field[FpgaRuntimeSdbConfig](FpgaRuntimeSdbConfig.Enabled)
 
 object FpgaConfigParameters {
   /** 取得当前 CDE 图选择的已完成 NPC 参数。 */
@@ -27,9 +28,17 @@ object FpgaConfigParameters {
 
   def board(implicit parameters: Parameters): Option[FpgaBoard] = parameters(FpgaBoardKey)
 
-  /** Runtime trace is disabled unless a board terminal explicitly enables it. */
-  def runtimeTrace(implicit parameters: Parameters): FpgaRuntimeTraceConfig =
-    parameters(FpgaRuntimeTraceConfigKey)
+  /** Performance monitoring is disabled unless a U55C terminal explicitly enables it. */
+  def performanceMonitor(implicit parameters: Parameters): FpgaPerformanceMonitorConfig =
+    parameters(FpgaPerformanceMonitorConfigKey)
+
+  /** Interactive halt/step and architectural snapshot support. */
+  def runtimeSdb(implicit parameters: Parameters): FpgaRuntimeSdbConfig = {
+    val sdb = parameters(FpgaRuntimeSdbConfigKey)
+    require(!(sdb.enabled && performanceMonitor.enabled),
+      "interactive SDB and the batch performance monitor are mutually exclusive FPGA modes")
+    sdb
+  }
 
   /** 取得 NPC/SoC 共同消费的 FPGA IP attachment。 */
   def ipAttachment(implicit parameters: Parameters): FpgaIpAttachment =

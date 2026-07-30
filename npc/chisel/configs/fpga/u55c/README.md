@@ -5,8 +5,8 @@
 
 | 文件 | 职责 | 是否可被更高层复用或覆盖 |
 | --- | --- | --- |
-| `core/U55cBoardConfig.scala` | 板卡标识、频率、U55C Xilinx IP 合同与 Debug trace 策略 | 是；`U55cBoardConfig`、`U55c300MHzBoardConfig` 与 `U55c300MHzDebugBoardConfig` 是可叠加的 L4 板卡策略 |
-| `Configs.scala` | U55C 裸 NPC、RV64IM 裸 NPC、300 MHz 时序实验与 ysyxSoC 的所有终端构造 | 是；根部只放终端 |
+| `core/U55cBoardConfig.scala` | 板卡标识、核心/平台时钟与 U55C Xilinx IP 合同 | 是；`U55cBoardConfig`、`U55c300MHzBoardConfig` 与 `U55cPerformanceMonitorBoardConfig` 是可叠加的 L4 板卡策略 |
+| `Configs.scala` | U55C 裸 NPC、RV64IM 裸 NPC、性能监测频点与 ysyxSoC 的所有终端构造 | 是；根部只放终端 |
 
 `U55cNpcFpgaConfig` 直接组合 `U55cBoardConfig ++ FpgaConfig`。
 `U55cYsyxSocFpgaConfig` 以 `U55cBoardConfig ++ FpgaConfig ++ YsyxElaborateConfig` 覆盖通用 SoC
@@ -22,11 +22,11 @@
 | U55C 裸 NPC 终端 | `new U55cNpcFpgaConfig` | `Configs.scala` | 是 |
 | U55C RV64IM 裸 NPC 终端 | `new U55cRv64NpcFpgaConfig` | `Configs.scala` | 是；F/D 禁用 |
 | U55C RV64IM 300 MHz 时序实验终端 | `new U55cRv64Npc300MHzFpgaConfig` | `Configs.scala` | 是；F/D 禁用 |
-| U55C RV64IM 300 MHz Debug 终端 | `new U55cRv64Npc300MHzDebugFpgaConfig` | `Configs.scala` | 是；仅此终端启用 v12 trace |
-| U55C Debug trace 策略 | `new U55c300MHzDebugBoardConfig` | `core/U55cBoardConfig.scala` | 是；HBM[1]、16 MiB、200000 条，URAM FIFO 默认 4096 条 |
+| U55C RV64IM 性能监测终端 | `new U55cRv64Npc{100,125,150,200,250,300}MHzPerformanceMonitorFpgaConfig` | `Configs.scala` | 是；仅 `run-bat`，v13 HBM trace ABI，SDB 硬件关闭 |
+| U55C RV64 缓存性能监测终端 | `new U55cRv64CacheNpc{150,300}MHzPerformanceMonitorFpgaConfig` | `Configs.scala` | 是；仅 `run-bat`，教学 I$/D$，v13 trace 加 mailbox cache 状态 |
 | U55C SoC 终端 | `new U55cYsyxSocFpgaConfig` | `Configs.scala` | 是 |
 | U55C 板卡标识 | `new WithFpgaBoardConfig(FpgaBoard.U55c)` | L3 `common/base/FpgaConfigFragments.scala` | U55C 目标必需 |
-| U55C 时钟 | `new U55cBoardConfig(clockMHz = 125)` | `core/U55cBoardConfig.scala` | U55C 目标必需；允许频率由 `npc/fpga/u55c/config.mk` 的物理能力表限制 |
+| U55C 时钟 | `new U55cBoardConfig(coreClockMHz = ...)` | `core/U55cBoardConfig.scala` | U55C 目标必需；核心允许 100/125/150/200/250/300 MHz，platform HBM data kernel 固定为 300 MHz |
 | U55C 地址与时钟 | `new WithFpgaPlatformConfig(FpgaPlatformSettings(...))` | `core/U55cBoardConfig.scala` | U55C 目标必需 |
 | U55C 整数 IP | `U55cXilinxIpAttachment(...)` | `core/U55cBoardConfig.scala` | U55C 目标必需；同一 attachment 同时挂接 NPC 与 SoC |
 | U55C 器件与实现策略 | `FpgaToolchainConfig.U55cBase` | 根部 U55C terminal 预设 | U55C 目标必需；不进入 CDE |
@@ -43,14 +43,16 @@
 `MEIP`。
 
 `U55cBoardConfig` 不接收 XLEN：attachment 通过右侧完成的 `NpcCoreConfigKey` 自动生成匹配
-RV32/RV64 的整数 IP 路由。`U55c300MHzBoardConfig` 把物理时钟、乘法 6 拍与 non-blocking Divider
+RV32/RV64 的整数 IP 路由。`U55c300MHzBoardConfig` 把 300 MHz 核心时钟、乘法 6 拍与 non-blocking Divider
 attachment 封装为命名板卡策略，仍保持 `II=1`。`U55cRv64Npc300MHzFpgaConfig` 显式组合该板卡策略与
 普通整数路径两拍、串行控制路径三拍、首拍取指请求寄存器化、串行整数 ALU 分离、串行结果 ID 前递关闭的 RV64 核心。这些均是
-频率对应的独立开关，不会由 `clockMHz` 自动推导，因此未来 250 MHz 终端可逐项选择。
+频率对应的独立开关。所有 U55C monitor 终端将 HBM/control shell 固定在 300 MHz；低于 300 MHz 的 Config
+在 wrapper 内以 MMCM 生成精确核心时钟，并经每条 AXI 通道的异步 FIFO 跨域，因此核心频率不会超过 Config 后缀。
 
-`U55cRv64Npc300MHzDebugFpgaConfig` 在同一 RV64 300 MHz 核上叠加 `U55c300MHzDebugBoardConfig`，并只挂载
-完整的 `U55cDebugNpcTerminal` 与 `FpgaIpTerminal`。前者选择 `NemuHostConfig.U55cRuntimeTrace` 的报告行为；
-后者不拥有硬件能力。硬件 trace 由 `U55c300MHzDebugBoardConfig` 的
-`FpgaRuntimeTraceConfig.U55cDebug` 冻结；如需调整片上 FIFO 深度，应以
-`FpgaRuntimeTraceConfig.U55cDebug.copy(cacheRecords = <2 的幂>)` 构造新值，再传给该 Board Config。
-这会改变 URAM 数量和生成 RTL，不能以 `host-build` 替代 `rebuild`。
+普通 U55C v11 终端固定 `FPGA_RUNTIME_TRACE=0`、`NEMU_PERFORMANCE_HTML=0` 与
+`NEMU_PIPELINE_HTML=0`，不会生成第二个 HBM master、trace BO 或 URAM FIFO，且仍支持 SDB 的单步、继续执行、
+寄存器和内存调试。`U55cRv64Npc{100,125,150,200,250,300}MHzPerformanceMonitorFpgaConfig` 与
+`U55cRv64CacheNpc{150,300}MHzPerformanceMonitorFpgaConfig` 是独立 v13 batch-only 终端：
+它在 HBM[1] 分配 8 MiB trace BO，写入前 200000 条 32-byte 记录，并使用 2048-record URAM FIFO 和
+16-record 256-bit AXI bursts。缓存版本还将当前 I$/D$ 配置、instruction buffer 深度和五类计数映射到 4 KiB
+mailbox 的只读寄存器，保持 trace record 不变。它支持上述核心频点，`FPGA_RUNTIME_SDB=0` 与 trace 互斥；每个频点要求独立完整 `rebuild`。

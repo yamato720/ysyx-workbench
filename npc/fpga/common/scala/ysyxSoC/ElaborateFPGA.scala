@@ -13,7 +13,8 @@ object ElaborateFPGA extends App {
   implicit val parameters: Parameters = construction
   val npcConfig = FpgaConfigParameters.npcCoreConfig
   val platform = FpgaConfigParameters.platform
-  val runtimeTrace = FpgaConfigParameters.runtimeTrace
+  val performanceMonitor = FpgaConfigParameters.performanceMonitor
+  val runtimeSdb = FpgaConfigParameters.runtimeSdb
   val ipAttachment = FpgaConfigParameters.ipAttachment
   val toolchain = construction match {
     case value: FpgaConstruction => value.fpgaToolchainConfig
@@ -25,6 +26,8 @@ object ElaborateFPGA extends App {
     s"Config catalog selected ${entry.board.getOrElse("no board")}, but ${entry.className} selected ${platform.board.name}")
   require(toolchain.device.board == platform.board.name,
     s"FPGA toolchain selected ${toolchain.device.board}, but hardware CDE selected ${platform.board.name}")
+  require(!performanceMonitor.enabled,
+    s"${entry.className} 的 FPGA 性能监测只支持裸 NPC")
   val firtoolOptions = Array("--disable-annotation-unknown")
   // Chisel 7.0.0-M2 does not enable split output in emitSystemVerilogFile.
   // Keep each generated module in its own source file for Vivado/Vitis.
@@ -36,5 +39,6 @@ object ElaborateFPGA extends App {
     args ++ Array("--split-verilog"),
     firtoolOptions
   )
-  FpgaElaborationManifest.write(args, npcConfig, platform, runtimeTrace, ipAttachment, toolchain, entry.className, entry.target)
+  FpgaElaborationManifest.write(args, npcConfig, platform, performanceMonitor, runtimeSdb,
+    ipAttachment, toolchain, entry.className, entry.target)
 }

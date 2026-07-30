@@ -66,12 +66,14 @@ awk -F= '
   seen[$1]++ { exit 1 }
   index(substr($0, index($0, "=") + 1), "\r") { exit 1 }
   END {
-    if (!seen["PROFILE_FORMAT"] || !seen["CAPABILITY"] || !seen["XLEN"] || !seen["NEMU_PRESET"] ||
+    if (!seen["PROFILE_FORMAT"] || !seen["CAPABILITY"] || !seen["XLEN"] || !seen["NEMU_PRESET"] || !seen["NEMU_CACHE_HTML"] ||
         !seen["INTEGER_EXECUTE_STAGES"] || !seen["SERIAL_EXECUTE_STAGES"] || !seen["REGISTER_INITIAL_FETCH_REQUEST"] ||
         !seen["SEPARATE_SERIAL_INTEGER_ALU"] || !seen["SERIAL_EXECUTE_RESULT_FORWARDING"] ||
-        (scope == "fpga" && (!seen["FPGA_DIVIDER_NON_BLOCKING"] || !seen["FPGA_RUNTIME_TRACE"] ||
+        (scope == "fpga" && (!seen["FPGA_PLATFORM_CLOCK_MHZ"] || !seen["FPGA_DIVIDER_NON_BLOCKING"] || !seen["FPGA_RUNTIME_SDB"] || !seen["FPGA_RUNTIME_TRACE"] ||
           !seen["FPGA_TRACE_HBM_BANK"] || !seen["FPGA_TRACE_BUFFER_BYTES"] || !seen["FPGA_TRACE_MAX_RECORDS"] ||
-          !seen["FPGA_TRACE_CACHE_RECORDS"]))) exit 1
+          !seen["FPGA_TRACE_CACHE_RECORDS"] || !seen["FPGA_TRACE_FORMAT"] ||
+          !seen["FPGA_TRACE_RECORD_BYTES"] || !seen["FPGA_TRACE_DATA_WIDTH"] ||
+          !seen["FPGA_TRACE_BURST_RECORDS"]))) exit 1
   }
 ' "$temporary" || { echo "Scala profile 格式无效：$temporary" >&2; exit 1; }
 mv "$temporary" "$output"

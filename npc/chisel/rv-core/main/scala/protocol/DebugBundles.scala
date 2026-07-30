@@ -2,7 +2,7 @@ package npc.protocol
 
 import chisel3._
 import chisel3.util.log2Ceil
-import npc.ISAConfig
+import npc.{CacheStatistics, ISAConfig}
 
 /** 取指和译码产生的调试遥测信息。 */
 class NpcFrontendDebugBundle(cfg: ISAConfig) extends Bundle {
@@ -45,6 +45,10 @@ class NpcBackendDebugBundle(cfg: ISAConfig) extends Bundle {
   val commitPc = UInt(cfg.xlen.W)
   val commitInstruction = UInt(32.W)
   val commitNextPc = UInt(cfg.xlen.W)
+  val commitStoreValid = Bool()
+  val commitStoreAddress = UInt(cfg.xlen.W)
+  val commitStoreData = UInt(cfg.xlen.W)
+  val commitStoreMask = UInt((cfg.xlen / 8).W)
   val sampleCommitValid = Bool()
   val sampleCommitPc = UInt(cfg.xlen.W)
   val sampleCommitInstruction = UInt(32.W)
@@ -92,6 +96,12 @@ class NpcMasterDebugBundle(addrWidth: Int, dataWidth: Int) extends Bundle {
   val rData = UInt(dataWidth.W)
 }
 
+class NpcCacheDebugBundle extends Bundle {
+  val instruction = new CacheStatistics
+  val data = new CacheStatistics
+  val drained = Bool()
+}
+
 /** 前端、后端和主总线遥测信息在内核级的聚合。 */
 class NpcCoreDebugBundle(
   cfg: ISAConfig,
@@ -101,6 +111,7 @@ class NpcCoreDebugBundle(
   val frontend = new NpcFrontendDebugBundle(cfg)
   val backend = new NpcBackendDebugBundle(cfg)
   val master = new NpcMasterDebugBundle(masterAddrWidth, masterDataWidth)
+  val cache = new NpcCacheDebugBundle
 
   val backpressureReasons = UInt(9.W)
   val coreBusy = Bool()

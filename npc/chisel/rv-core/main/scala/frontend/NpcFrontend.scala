@@ -19,6 +19,7 @@ class NpcFrontend(config: NpcConfig) extends Module {
   val io = IO(new Bundle {
     val redirectValid = Input(Bool())
     val redirectTarget = Input(UInt(cfg.xlen.W))
+    val fenceHold = Input(Bool())
     val dispatch = Decoupled(new DecodedDispatchPayload(cfg))
     // 两条已提交指令之间若要接收异步中断，后端以此作为 mepc。取指级至多
     // 缓冲一条尚未派发的指令，因此该值不会跳过任何未提交的架构指令。
@@ -29,7 +30,20 @@ class NpcFrontend(config: NpcConfig) extends Module {
     val debug = Output(new NpcFrontendDebugBundle(cfg))
   })
 
-  val fetchDecodeReg = Module(new PipelineRegister(new FetchDecodePayload(cfg)))
+  val fetchBufferIn = Wire(Decoupled(new FetchDecodePayload(cfg)))
+  val fetchBufferOut = Wire(Decoupled(new FetchDecodePayload(cfg)))
+  if (config.cache.instructionBuffer.enabled) {
+    val instructionBuffer = Module(new InstructionBuffer(config.cache.instructionBuffer.entries, cfg))
+    instructionBuffer.io.flush := io.redirectValid
+    instructionBuffer.io.dropYounger := io.fenceHold
+    instructionBuffer.io.in <> fetchBufferIn
+    fetchBufferOut <> instructionBuffer.io.out
+  } else {
+    val fetchDecodeReg = Module(new PipelineRegister(new FetchDecodePayload(cfg)))
+    fetchDecodeReg.io.flush := io.redirectValid
+    fetchDecodeReg.io.in <> fetchBufferIn
+    fetchBufferOut <> fetchDecodeReg.io.out
+  }
   val programCounter = Module(new ProgramCounter(cfg.xlen, config.memory.resetVector))
   val instructionFetchUnit = Module(new IFetchAXIAdapter(
     axiConfig.addrWidth,
@@ -44,38 +58,39 @@ class NpcFrontend(config: NpcConfig) extends Module {
   val fetchStartCycle = if (debugEnabled) Some(RegInit(0.U(64.W))) else None
 
   val pcWriteEnable = WireDefault(false.B)
-  programCounter.io.nextPc := Mux(io.redirectValid, io.redirectTarget, programCounter.io.pcPlus4)
+  programCounter.io.nextPc := Mux(io.redirectValid, io.redirectTarget,
+    Mux(io.fenceHold, fetchBufferOut.bits.pc + 4.U, programCounter.io.pcPlus4))
   programCounter.io.writeEnable := pcWriteEnable
   instructionFetchUnit.io.pc := programCounter.io.pc(31, 0)
+  instructionFetchUnit.io.flush := io.redirectValid || io.fenceHold
   instructionFetchUnit.io.axi <> io.axi
   io.memoryFault := instructionFetchUnit.io.fault
 
-  fetchDecodeReg.io.flush := io.redirectValid
-  fetchDecodeReg.io.in.valid := instructionFetchUnit.io.responseValid && !io.redirectValid
-  fetchDecodeReg.io.in.bits.pc := programCounter.io.pc
-  fetchDecodeReg.io.in.bits.instruction := instructionFetchUnit.io.inst
-  fetchDecodeReg.io.in.bits.perfFetchCycles := (
+  fetchBufferIn.valid := instructionFetchUnit.io.responseValid && !io.redirectValid && !io.fenceHold
+  fetchBufferIn.bits.pc := programCounter.io.pc
+  fetchBufferIn.bits.instruction := instructionFetchUnit.io.inst
+  fetchBufferIn.bits.perfFetchCycles := (
     if (debugEnabled) performanceCycle - fetchStartCycle.get else 0.U(64.W)
   )
-  fetchDecodeReg.io.in.bits.perfDecodeStartCycle := performanceCycle
-  instructionFetchUnit.io.responseReady := fetchDecodeReg.io.in.ready && !io.redirectValid
+  fetchBufferIn.bits.perfDecodeStartCycle := performanceCycle
+  instructionFetchUnit.io.responseReady := fetchBufferIn.ready && !io.redirectValid && !io.fenceHold
 
-  pcWriteEnable := io.redirectValid || fetchDecodeReg.io.in.fire
+  pcWriteEnable := io.redirectValid || io.fenceHold || fetchBufferIn.fire
   fetchStartCycle.foreach { start =>
     when(pcWriteEnable) { start := performanceCycle }
   }
 
-  val instruction = fetchDecodeReg.io.out.bits.instruction
+  val instruction = fetchBufferOut.bits.instruction
   val decodeSignals = decodeUnit.io.signals
   decodeUnit.io.instruction := instruction
 
-  io.dispatch.valid := fetchDecodeReg.io.out.valid && !io.redirectValid
-  fetchDecodeReg.io.out.ready := io.dispatch.ready && !io.redirectValid
-  io.interruptPc := Mux(fetchDecodeReg.io.out.valid, fetchDecodeReg.io.out.bits.pc, programCounter.io.pc)
-  io.dispatch.bits.pc := fetchDecodeReg.io.out.bits.pc
+  io.dispatch.valid := fetchBufferOut.valid && !io.redirectValid
+  fetchBufferOut.ready := io.dispatch.ready && !io.redirectValid
+  io.interruptPc := Mux(fetchBufferOut.valid, fetchBufferOut.bits.pc, programCounter.io.pc)
+  io.dispatch.bits.pc := fetchBufferOut.bits.pc
   io.dispatch.bits.instruction := instruction
-  io.dispatch.bits.perfFetchCycles := fetchDecodeReg.io.out.bits.perfFetchCycles
-  io.dispatch.bits.perfDecodeStartCycle := fetchDecodeReg.io.out.bits.perfDecodeStartCycle
+  io.dispatch.bits.perfFetchCycles := fetchBufferOut.bits.perfFetchCycles
+  io.dispatch.bits.perfDecodeStartCycle := fetchBufferOut.bits.perfDecodeStartCycle
   io.dispatch.bits.immediate := RiscvImmediateGenerator(instruction, cfg.xlen)
   io.dispatch.bits.rd := instruction(11, 7)
   io.dispatch.bits.rs1 := instruction(19, 15)
@@ -115,11 +130,11 @@ class NpcFrontend(config: NpcConfig) extends Module {
   when(io.redirectValid) { redirectFlushCount := redirectFlushCount + 1.U }
 
   io.debug.pcWriteEnable := pcWriteEnable
-  io.debug.fetchDecodeFire := fetchDecodeReg.io.in.fire
+  io.debug.fetchDecodeFire := fetchBufferIn.fire
   io.debug.currentPc := programCounter.io.pc
-  io.debug.nextArchitecturalPc := Mux(fetchDecodeReg.io.out.valid,
-    fetchDecodeReg.io.out.bits.pc, programCounter.io.pc)
-  io.debug.frontendInstruction := Mux(fetchDecodeReg.io.out.valid, instruction, instructionFetchUnit.io.inst)
+  io.debug.nextArchitecturalPc := Mux(fetchBufferOut.valid,
+    fetchBufferOut.bits.pc, programCounter.io.pc)
+  io.debug.frontendInstruction := Mux(fetchBufferOut.valid, instruction, instructionFetchUnit.io.inst)
   io.debug.decodeImmediate := RiscvImmediateGenerator(instruction, cfg.xlen)
   io.debug.decodeOpcode := instruction(6, 0)
   io.debug.decodeFunct3 := instruction(14, 12)
@@ -127,5 +142,5 @@ class NpcFrontend(config: NpcConfig) extends Module {
   io.debug.fetchAxiWaitCycles := fetchAxiWaitCycles
   io.debug.redirectFlushCount := redirectFlushCount
   io.debug.fetchBusy := instructionFetchUnit.io.busy
-  io.debug.dispatchBackpressured := fetchDecodeReg.io.out.valid && !fetchDecodeReg.io.out.ready
+  io.debug.dispatchBackpressured := fetchBufferOut.valid && !fetchBufferOut.ready
 }

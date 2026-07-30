@@ -46,6 +46,14 @@ void npc_pipeline_html_record(
     const char *disassembly,
     uint64_t commit_cycle,
     const uint64_t stage_cycles[PIPELINE_HTML_STAGE_COUNT]);
+void npc_pipeline_html_record_hardware(
+    uint64_t sequence,
+    uint64_t pc,
+    uint32_t instruction,
+    const char *disassembly,
+    uint64_t commit_cycle,
+    const uint64_t stage_cycles[PIPELINE_HTML_STAGE_COUNT],
+    uint8_t saturation);
 void npc_pipeline_html_set_dropped(uint64_t dropped);
 void npc_pipeline_html_finalize(
     const uint64_t stalls[PIPELINE_HTML_STAGE_COUNT],

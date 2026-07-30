@@ -85,12 +85,6 @@ const char *fault_reason(int reason) {
     }
 }
 
-uint64_t last_store_sequence = 0;
-uint32_t last_store_address = 0;
-uint64_t last_store_data = 0;
-uint8_t last_store_strobe = 0;
-int last_store_word_bytes = 0;
-
 void report_memory_fault(uint32_t addr, bool write, int len, int reason) {
     fprintf(stderr, "[NPC-MEM-FAULT] addr=0x%08x %s len=%d reason=%s\n",
         addr, write ? "write" : "read", len, fault_reason(reason));
@@ -141,23 +135,12 @@ void pmem_write_word(int addr, int word_bytes, uint64_t data, uint8_t strb) {
       report_memory_fault(uaddr, true, word_bytes, 4);
       return;
     }
-    last_store_sequence++;
-    last_store_address = uaddr;
-    last_store_data = data;
-    last_store_strobe = strb;
-    last_store_word_bytes = word_bytes;
     for (int lane = 0; lane < word_bytes; lane++) {
         if ((strb & (UINT8_C(1) << lane)) != 0) {
             p[lane] = static_cast<uint8_t>(data >> (lane * 8));
         }
     }
 }
-
-uint64_t npc_get_last_store_sequence() { return last_store_sequence; }
-uint64_t npc_get_last_store_address() { return last_store_address; }
-uint64_t npc_get_last_store_data() { return last_store_data; }
-uint32_t npc_get_last_store_strobe() { return last_store_strobe; }
-uint32_t npc_get_last_store_word_bytes() { return static_cast<uint32_t>(last_store_word_bytes); }
 
 // MMIO ABI：以指令的原始地址和长度恰好调用一次设备，数据在总线字内按 lane 放置。
 void mmio_read_word(int addr, int len, int word_bytes, uint64_t *word_data) {

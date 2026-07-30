@@ -171,12 +171,22 @@ config NPC_PERFORMANCE_HTML
     home page plus instructions.html for searchable per-instruction details.
     Pipeline analysis is an optional child report.
 
+config NPC_CACHE_HTML
+  depends on NPC_PERFORMANCE_HTML
+  bool "Generate separate NPC cache HTML"
+  default n
+  help
+    When the running core has an enabled I-cache or D-cache, write cache.html
+    with the cache geometry, policies, instruction-buffer setting, and cache
+    counters. The performance home page links to it when it is generated.
+
 config NPC_PIPELINE_HTML
   depends on NPC_PERFORMANCE_HTML
   bool "Generate committed-instruction pipeline HTML"
   default n
   help
-    Use local committed-instruction records or U55C v12 HBM trace replay to
+    Use local committed-instruction records or U55C v13 performance-monitor
+    HBM trace replay to
     write a self-contained pipeline.html timeline. This does not enable VCD
     or the regular instruction trace.
 

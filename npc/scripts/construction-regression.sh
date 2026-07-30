@@ -8,9 +8,11 @@ manager="$npc_root/scripts/construction-manager.sh"
 work=$(mktemp -d)
 build_hold=''
 build_pid=''
+parallel_build_pid=''
 cleanup() {
   if [[ -n ${build_hold:-} ]]; then : > "$build_hold/release" 2>/dev/null || true; fi
   if [[ -n ${build_pid:-} ]]; then wait "$build_pid" 2>/dev/null || true; fi
+  if [[ -n ${parallel_build_pid:-} ]]; then wait "$parallel_build_pid" 2>/dev/null || true; fi
   rm -rf "$work"
 }
 trap cleanup EXIT INT TERM
@@ -40,6 +42,7 @@ host_only="$CONSTRUCTION_TEST_ROOT/.hosts/$host_only_fqcn"
   fail 'host-only 缓存没有生成完整 NEMU host'
 [[ $(value "$host_only/profile.env" CONFIG_FQCN) == "$host_only_fqcn" &&
   $(value "$host_only/abi/nemu/host.env" NEMU_BACKEND) == u55c &&
+  $(value "$host_only/abi/nemu/host.env" CORE_CLOCK_MHZ) == $(value "$host_only/profile.env" FPGA_CLOCK_MHZ) &&
   $(value "$host_only/construction.env" HOST_ONLY) == 1 ]] ||
   fail 'host-only 缓存没有冻结匹配的 U55C Config profile'
 [[ ! -e $host_only/version.tag && ! -d "$CONSTRUCTION_TEST_ROOT/$host_only_fqcn" &&
@@ -48,6 +51,28 @@ host_only="$CONSTRUCTION_TEST_ROOT/.hosts/$host_only_fqcn"
 if "$manager" resolve "$npc_root" '' 1 >/dev/null 2>&1; then
   fail 'host-only 缓存错误地成为正式 version'
 fi
+
+# The monitor is deliberately a separate v13, batch-only host profile.  A
+# host-only cache can prepare an external v13 xclbin, but it must never turn a
+# regular `run` invocation into an interactive monitor session.
+monitor_fqcn=npc.fpga.u55c.U55cRv64Npc300MHzPerformanceMonitorFpgaConfig
+monitor_host_only="$CONSTRUCTION_TEST_ROOT/.hosts/$monitor_fqcn"
+"$manager" host-build "$npc_root" U55cRv64Npc300MHzPerformanceMonitorFpgaConfig 0 1
+[[ -x $monitor_host_only/abi/nemu/nemu-exec && -f $monitor_host_only/profile.env &&
+  $(value "$monitor_host_only/profile.env" CAPABILITY) == batch &&
+  $(value "$monitor_host_only/profile.env" PROTOCOL_ABI) == npc-fpga-runtime-v13-performance-monitor &&
+  $(value "$monitor_host_only/profile.env" FPGA_RUNTIME_SDB) == 0 &&
+  $(value "$monitor_host_only/profile.env" FPGA_RUNTIME_TRACE) == 1 &&
+  $(value "$monitor_host_only/profile.env" FPGA_TRACE_CACHE_RECORDS) == 2048 &&
+  $(value "$monitor_host_only/abi/nemu/host.env" NEMU_PRESET) == U55cPerformanceMonitor ]] ||
+  fail '性能监测 host-only 缓存没有冻结 v13 batch trace ABI'
+cpu_tests=$(realpath "$npc_root/../am-kernels/tests/cpu-tests")
+if interactive_monitor=$(make -C "$cpu_tests" run ALL=add \
+    config=U55cRv64Npc300MHzPerformanceMonitorFpgaConfig LOG_ROOT="$work/log" 2>&1); then
+  fail 'batch-only 性能监测 Config 错误地接受了 run'
+fi
+[[ $interactive_monitor == *'PerformanceMonitor Config 仅支持 run-bat'* ]] ||
+  fail 'batch-only 性能监测 Config 的 run 拒绝提示不明确'
 
 build_hold="$work/first-build-hold"
 CONSTRUCTION_TEST_HOLD_DIR="$build_hold" "$manager" build "$npc_root" SimulationConfig > "$work/first-build.log" 2>&1 &
@@ -66,11 +91,40 @@ building_line=$(awk '$1 == 1 { print; exit }' <<< "$building_list")
 if find "$CONSTRUCTION_TEST_ROOT" -mindepth 1 -maxdepth 1 -type d \( -name '.staging-*' -o -name 'staging-*' \) -print -quit | grep -q .; then
   fail '首次构造创建了非稳定的 staging 目录'
 fi
+
+# 不同 FQCN 的长构造不能继续占用全局元数据锁；第二个 dry-run 必须在第一个
+# 构造仍被 test hold 阻塞时发布完成。相同 Config 重入和删除/重编号则必须被
+# 对应 FQCN 锁拒绝，不能破坏正在使用的稳定目录或版本号。
+parallel_pipeline="$CONSTRUCTION_TEST_ROOT/npc.PipelineSimulationConfig"
+"$manager" build "$npc_root" PipelineSimulationConfig > "$work/parallel-build.log" 2>&1 &
+parallel_build_pid=$!
+for _ in $(seq 1 500); do
+  kill -0 "$parallel_build_pid" 2>/dev/null || break
+  sleep 0.02
+done
+if kill -0 "$parallel_build_pid" 2>/dev/null; then
+  kill "$parallel_build_pid" 2>/dev/null || true
+  wait "$parallel_build_pid" 2>/dev/null || true
+  parallel_build_pid=''
+  fail '不同 Config 构造仍被第一个长构造阻塞'
+fi
+wait "$parallel_build_pid" || fail '并行的不同 Config 构造失败'
+parallel_build_pid=''
+[[ -f $parallel_pipeline/construction.env && $(value "$parallel_pipeline/version.tag" STATE) == complete ]] ||
+  fail '并行的不同 Config 没有在首个构造完成前发布'
+if same_config=$($manager rebuild "$npc_root" SimulationConfig 2>&1); then
+  fail '同一 Config 在构造中仍接受重入 rebuild'
+fi
+[[ $same_config == *'正在构造'* ]] || fail '同一 Config 构造锁拒绝提示不明确'
+if deleting_build=$($manager delete "$npc_root" 1,2 2>&1); then
+  fail '构造中仍接受删除/重编号'
+fi
+[[ $deleting_build == *'正在构造'* && -d $initial && -d $parallel_pipeline ]] ||
+  fail '构造中删除没有拒绝或发生了部分删除'
 : > "$build_hold/release"
 wait "$build_pid" || fail '首次构造失败'
 build_pid=''
 build_hold=''
-"$manager" build "$npc_root" PipelineSimulationConfig
 dpi="$CONSTRUCTION_TEST_ROOT/npc.SimulationConfig"
 pipeline="$CONSTRUCTION_TEST_ROOT/npc.PipelineSimulationConfig"
 [[ $(value "$dpi/construction.env" CONSTRUCTION_ID) == 2026071815304200 ]] || fail '首个编号不是 00'
@@ -87,11 +141,17 @@ pipeline="$CONSTRUCTION_TEST_ROOT/npc.PipelineSimulationConfig"
   fail '成功构造仍保留未完成标志'
 [[ $(value "$dpi/profile.env" NEMU_PERFORMANCE_HTML) == 1 &&
   $(value "$pipeline/profile.env" NEMU_PERFORMANCE_HTML) == 1 &&
+  $(value "$dpi/profile.env" NEMU_CACHE_HTML) == 1 &&
+  $(value "$pipeline/profile.env" NEMU_CACHE_HTML) == 1 &&
   $(value "$dpi/profile.env" NEMU_PIPELINE_HTML) == 1 &&
   $(value "$pipeline/profile.env" NEMU_PIPELINE_HTML) == 1 ]] ||
   fail '本地性能/流水 HTML profile 选择不正确'
 [[ -s $dpi/logs/build/all.log && -s $dpi/logs/build/chisel.log ]] ||
   fail '成功构造没有保存最新阶段日志'
+[[ -x $dpi/logs/build/driver-scripts/build-construction.sh &&
+  -f $dpi/logs/build/driver-scripts/SHA256SUMS &&
+  $(grep -c "^BUILD_DRIVER_SNAPSHOT=$dpi/logs/build/driver-scripts$" "$dpi/logs/build/all.log") == 1 ]] ||
+  fail '构造没有固定并使用启动时的 shell 驱动快照'
 if valid_build=$($manager build "$npc_root" SimulationConfig 2>&1); then
   fail '有效构造仍接受 build'
 fi
@@ -220,6 +280,7 @@ sed -i -e 's/^PROFILE_FORMAT=.*/PROFILE_FORMAT=2/' -e 's/^CAPABILITY=run$/CAPABI
   -e '/^INTEGER_EXECUTE_STAGES=/d' -e '/^REGISTER_INITIAL_FETCH_REQUEST=/d' \
   -e '/^SERIAL_EXECUTE_STAGES=/d' \
   -e '/^SEPARATE_SERIAL_INTEGER_ALU=/d' -e '/^SERIAL_EXECUTE_RESULT_FORWARDING=/d' \
+  -e '/^NEMU_CACHE_HTML=/d' \
   -e '/^FPGA_DIVIDER_NON_BLOCKING=/d' "$dpi/profile.env"
 sed -i -e 's/^CAPABILITY=run$/CAPABILITY=verilator/' \
   -e 's/^NEMU_PRESET=LocalPipelineTrace$/NEMU_CONFIG_FQCN=npc.nemu.LocalVerilatorPipelineTraceConfig/' \
@@ -228,9 +289,10 @@ sed -i 's/^NEMU_PRESET=LocalPipelineTrace$/NEMU_CONFIG_FQCN=npc.nemu.LocalVerila
   "$dpi/profile.env"
 sed -i -e 's/^HOST_FORMAT=.*/HOST_FORMAT=4/' \
   -e 's/^NEMU_PRESET=LocalPipelineTrace$/NEMU_CONFIG_FQCN=npc.nemu.LocalVerilatorPipelineTraceConfig/' \
+  -e '/^NEMU_CACHE_HTML=/d' \
   "$dpi/abi/nemu/host.env"
 "$manager" ensure "$npc_root" SimulationConfig 0 0
-[[ $(value "$dpi/profile.env" PROFILE_FORMAT) == 16 && $(value "$dpi/profile.env" CAPABILITY) == run &&
+[[ $(value "$dpi/profile.env" PROFILE_FORMAT) == 21 && $(value "$dpi/profile.env" CAPABILITY) == run &&
   $(value "$dpi/profile.env" INTEGER_EXECUTE_STAGES) == 1 &&
   $(value "$dpi/profile.env" SERIAL_EXECUTE_STAGES) == 1 &&
   $(value "$dpi/profile.env" REGISTER_INITIAL_FETCH_REQUEST) == 0 &&
@@ -242,9 +304,11 @@ sed -i -e 's/^HOST_FORMAT=.*/HOST_FORMAT=4/' \
 [[ $(value "$dpi/profile.env" NEMU_PRESET) == LocalPipelineTrace &&
   $(value "$dpi/construction.env" NEMU_PRESET) == LocalPipelineTrace &&
   $(value "$dpi/abi/nemu/host.env" NEMU_PRESET) == LocalPipelineTrace &&
-  $(value "$dpi/abi/nemu/host.env" HOST_FORMAT) == 5 &&
+  $(value "$dpi/abi/nemu/host.env" HOST_FORMAT) == 7 &&
+  $(value "$dpi/abi/nemu/host.env" CORE_CLOCK_MHZ) == 300 &&
   $(value "$dpi/profile.env" NEMU_BACKEND) == local &&
-  $(value "$dpi/profile.env" NEMU_PERFORMANCE_HTML) == 1 ]] ||
+  $(value "$dpi/profile.env" NEMU_PERFORMANCE_HTML) == 1 &&
+  $(value "$dpi/profile.env" NEMU_CACHE_HTML) == 0 ]] ||
   fail '历史仿真 profile 升级时改变了已保存 NEMU host 预设'
 if grep -q '^NEMU_CONFIG_FQCN=' "$dpi/profile.env" "$dpi/construction.env" "$dpi/abi/nemu/host.env"; then
   fail '历史 NEMU 配置类名迁移后仍残留在保存元数据中'
@@ -256,9 +320,11 @@ mkdir -p "$dpi/runtime/preserve"; printf 'keep\n' > "$dpi/runtime/preserve/trace
 [[ -s $dpi/logs/host/all.log && -s $dpi/logs/host/nemu-host.log ]] ||
   fail 'host-build 没有保存最新阶段日志'
 [[ -f $dpi/runtime/preserve/trace ]] || fail 'host-build 删除了已有 runtime trace'
-[[ $(value "$dpi/abi/nemu/host.env" HOST_FORMAT) == 5 &&
+[[ $(value "$dpi/abi/nemu/host.env" HOST_FORMAT) == 7 &&
+  $(value "$dpi/abi/nemu/host.env" CORE_CLOCK_MHZ) == 300 &&
   $(value "$dpi/abi/nemu/host.env" NEMU_PRESET) == LocalPipelineTrace &&
   $(value "$dpi/abi/nemu/host.env" NEMU_PERFORMANCE_HTML) == 1 &&
+  $(value "$dpi/abi/nemu/host.env" NEMU_CACHE_HTML) == 1 &&
   $(value "$dpi/abi/nemu/host.env" NEMU_PIPELINE_HTML) == 1 ]] ||
   fail 'host 元数据没有升级性能/流水 HTML ABI'
 "$manager" host-build "$npc_root" '' 1 -1
@@ -322,6 +388,42 @@ fi
 [[ -s $u55c/fpga/ip-generated/logs/npc_int_multiplier_ip.log && -s $u55c/fpga/ip-generated/logs/npc_int_divider_ip.log ]] ||
   fail 'FPGA dry-run 未生成逐 IP 日志'
 
+# Vitis may have already completed implementation and xclbin packaging when a
+# post-link validator fails.  Resume must validate that saved xclbin, produce
+# its manifest, and build the host without rerunning the hardware phases.
+u55c_platform=$(value "$u55c/profile.env" FPGA_PLATFORM)
+u55c_version=$(value "$u55c/version.tag" VERSION_INDEX)
+u55c_xclbin="$u55c/fpga/artifacts/npc-$u55c_platform.xclbin"
+u55c_xclbin_sha_before=$(sha256sum "$u55c_xclbin" | cut -d' ' -f1)
+rm -rf "$u55c/abi/nemu"
+rm -f "$u55c/construction.env" "$u55c/.complete" "$u55c/fpga/.link.complete" \
+  "$u55c/fpga/artifacts/artifact-manifest.env" "$u55c/fpga/artifacts/SHA256SUMS" \
+  "$u55c/fpga/artifacts/npc.wns"
+# The dry-run flow has no physical Vivado phases, so model the synthesis stamp
+# that a genuine post-link recovery requires as evidence of implementation work.
+: > "$u55c/fpga/.synthesis.complete"
+printf 'CONSTRUCTION_INCOMPLETE=1\nCONFIG_FQCN=%s\nSTARTED_AT=2026-07-30T00:00:00Z\n' \
+  "$(value "$u55c/profile.env" CONFIG_FQCN)" > "$u55c/.incomplete"
+printf 'VERSION_TAG_FORMAT=1\nVERSION_INDEX=%s\nSTATE=failed\n' "$u55c_version" > "$u55c/version.tag"
+printf 'INFO: [v++ 60-1307] Run completed.\n' > "$u55c/logs/build/link.log"
+mkdir -p "$u55c/fpga/vitis-reports/link/imp"
+cat > "$u55c/fpga/vitis-reports/link/imp/test_timing_summary_routed.rpt" <<'EOF'
+WNS(ns)
+-------
+0.000
+EOF
+fake_xclbinutil="$work/xclbinutil"
+printf '%s\n' '#!/usr/bin/env bash' \
+  'printf "%s\\n" "Scalable Clocks" "   Name:      DATA_CLK" "   Frequency:  300 MHz" "System Clocks"' > "$fake_xclbinutil"
+chmod +x "$fake_xclbinutil"
+XCLBINUTIL="$fake_xclbinutil" "$manager" resume-post-link "$npc_root" U55cYsyxSocFpgaConfig
+[[ $(value "$u55c/version.tag" STATE) == complete && ! -e $u55c/.incomplete &&
+  -f $u55c/fpga/.link.complete && -f $u55c/fpga/artifacts/artifact-manifest.env &&
+  -x $u55c/abi/nemu/nemu-exec ]] ||
+  fail 'post-link 恢复没有完成资产校验、host 构造与版本发布'
+[[ $(sha256sum "$u55c_xclbin" | cut -d' ' -f1) == "$u55c_xclbin_sha_before" ]] ||
+  fail 'post-link 恢复意外重新生成了 xclbin'
+
 # 完整 FPGA 资产已经生成而末尾 NEMU host 失败时，host-build 必须只恢复 host。
 # 同时模拟旧版本失败目录没有 construction.env 的情形，确保无需重跑硬件即可迁移。
 if fpga_host_failure=$(CONSTRUCTION_TEST_HOST_FAIL=1 "$manager" rebuild "$npc_root" U55cYsyxSocFpgaConfig 2>&1); then
@@ -335,6 +437,7 @@ rm -f "$u55c/construction.env"
 "$manager" host-build "$npc_root" U55cYsyxSocFpgaConfig 0 1
 [[ $(value "$u55c/version.tag" STATE) == complete && ! -e $u55c/.incomplete &&
   -f $u55c/construction.env && -x $u55c/abi/nemu/nemu-exec &&
+  $(value "$u55c/abi/nemu/host.env" CORE_CLOCK_MHZ) == $(value "$u55c/profile.env" FPGA_CLOCK_MHZ) &&
   $(value "$u55c/construction.env" SOURCE_REV) == unknown ]] ||
   fail 'host-build 没有恢复旧失败 FPGA 构造'
 [[ $(find "$u55c/fpga" -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1) == "$u55c_assets_after_host_failure" ]] ||
@@ -375,13 +478,19 @@ fi
 "$manager" rebuild "$npc_root" U55cYsyxSocFpgaConfig
 sed -i -e 's/^PROFILE_FORMAT=.*/PROFILE_FORMAT=3/' -e 's/^SCOPE=fpga$/SCOPE=fpga-soc/' "$u55c/profile.env"
 "$manager" ensure "$npc_root" U55cYsyxSocFpgaConfig 0 0
-[[ $(value "$u55c/profile.env" PROFILE_FORMAT) == 16 && $(value "$u55c/profile.env" SCOPE) == fpga &&
+[[ $(value "$u55c/profile.env" PROFILE_FORMAT) == 21 && $(value "$u55c/profile.env" SCOPE) == fpga &&
   $(value "$u55c/profile.env" INTEGER_EXECUTE_STAGES) == 1 &&
   $(value "$u55c/profile.env" SERIAL_EXECUTE_STAGES) == 1 &&
   $(value "$u55c/profile.env" REGISTER_INITIAL_FETCH_REQUEST) == 0 &&
   $(value "$u55c/profile.env" SEPARATE_SERIAL_INTEGER_ALU) == 0 &&
   $(value "$u55c/profile.env" SERIAL_EXECUTE_RESULT_FORWARDING) == 1 &&
-  $(value "$u55c/profile.env" FPGA_DIVIDER_NON_BLOCKING) == 0 ]] ||
+  $(value "$u55c/profile.env" FPGA_DIVIDER_NON_BLOCKING) == 0 &&
+  $(value "$u55c/profile.env" FPGA_RUNTIME_SDB) == 1 &&
+  $(value "$u55c/profile.env" FPGA_RUNTIME_TRACE) == 0 &&
+  $(value "$u55c/profile.env" FPGA_TRACE_FORMAT) == 0 &&
+  $(value "$u55c/profile.env" FPGA_TRACE_RECORD_BYTES) == 0 &&
+  $(value "$u55c/profile.env" FPGA_TRACE_DATA_WIDTH) == 0 &&
+  $(value "$u55c/profile.env" FPGA_TRACE_BURST_RECORDS) == 0 ]] ||
   fail '已保存 FPGA profile 未迁移到统一 fpga 作用域'
 
 platform=$(value "$u55c/profile.env" FPGA_PLATFORM)
@@ -402,21 +511,40 @@ fi
 [[ $(value "$u55c/profile.env" FPGA_VIVADO_IMPL_JOBS) == 8 ]] ||
   fail 'rebuild 没有吸收当前 FPGA 工具链字段'
 
-make -C "$npc_root" version D="$pipeline_version" >/dev/null
-[[ ! -d $pipeline ]] || fail 'D= 未删除构造'
-[[ $(value "$u55c/construction.env" VERSION_INDEX) == 2 ]] || fail '删除后没有紧凑重映射版本序号'
+if make -C "$npc_root" version D=1,2 delete=1,3 >/dev/null 2>&1; then
+  fail '不同版本集合的 D= 与 delete= 冲突仍被接受'
+fi
+if make -C "$npc_root" version D=1--2 >/dev/null 2>&1; then
+  fail '非法版本列表仍被接受'
+fi
+
+# D=1-2-3 和 delete=1,2,3 必须按同一张删除前版本表解析；别名的顺序或
+# 分隔符不同不应构成冲突。一次性删除后不应保留任何旧构造目录。
+make -C "$npc_root" version D=1-2-3 delete=3,2,1 >/dev/null
+[[ ! -d $dpi && ! -d $pipeline && ! -d $u55c ]] ||
+  fail '多版本 D=/delete= 没有删除全部原始构造'
+
+# 重新建立 1、2、3 后，只通过 delete= 删除原始 1、2。若实现是在每次删除
+# 后立即重编号，第二次会错误地删除原始 3；这里必须保留它并只在最后压缩为 1。
+"$manager" build "$npc_root" SimulationConfig
+"$manager" build "$npc_root" PipelineSimulationConfig
 "$manager" build "$npc_root" StandaloneConfig
 standalone="$CONSTRUCTION_TEST_ROOT/npc.StandaloneConfig"
-[[ $(value "$standalone/construction.env" VERSION_INDEX) == 3 ]] ||
-  fail '删除后新构造没有使用紧凑序号'
-make -C "$npc_root" version delete=3 >/dev/null
-[[ ! -d $standalone ]] || fail 'delete= 未删除构造'
-"$manager" build "$npc_root" StandaloneConfig
-[[ $(value "$standalone/construction.env" VERSION_INDEX) == 3 ]] ||
-  fail 'delete= 后新构造没有使用紧凑序号'
-if make -C "$npc_root" version D=1 delete=3 >/dev/null 2>&1; then
-  fail 'D= 与 delete= 冲突仍被接受'
+[[ $(value "$dpi/construction.env" VERSION_INDEX) == 1 &&
+  $(value "$pipeline/construction.env" VERSION_INDEX) == 2 &&
+  $(value "$standalone/construction.env" VERSION_INDEX) == 3 ]] ||
+  fail '多版本删除回归没有建立连续的原始版本表'
+if make -C "$npc_root" version delete=1,4 >/dev/null 2>&1; then
+  fail '包含不存在编号的多版本删除仍被接受'
 fi
-make -C "$npc_root" version D=3 delete=3 >/dev/null
+[[ -d $dpi && -d $pipeline && -d $standalone ]] ||
+  fail '包含不存在编号的多版本删除发生了部分删除'
+make -C "$npc_root" version delete=1,2 >/dev/null
+[[ ! -d $dpi && ! -d $pipeline && -d $standalone ]] ||
+  fail 'delete=1,2 没有按原始版本表删除'
+[[ $(value "$standalone/construction.env" VERSION_INDEX) == 1 &&
+  $(value "$standalone/version.tag" VERSION_INDEX) == 1 ]] ||
+  fail '多版本删除没有只在全部删除后紧凑重映射'
+make -C "$npc_root" version D=1 delete=1 >/dev/null
 [[ ! -d $standalone ]] || fail '相同 D=/delete= 未删除构造'
 printf 'Config 构造生命周期回归通过\n'

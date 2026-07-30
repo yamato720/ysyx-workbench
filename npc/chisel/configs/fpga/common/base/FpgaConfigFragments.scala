@@ -17,7 +17,12 @@ class WithFpgaClockMHzConfig(clockMHz: Int) extends CDEConfig((_, _, _) => {
   case FpgaClockMHzKey => Some(clockMHz)
 })
 
-/** Adds the fixed runtime trace ABI to a board CDE graph. */
-class WithFpgaRuntimeTraceConfig(trace: FpgaRuntimeTraceConfig) extends CDEConfig((_, _, _) => {
-  case FpgaRuntimeTraceConfigKey => trace
+/** Adds the fixed U55C performance-monitor ABI to a board CDE graph. */
+class WithFpgaPerformanceMonitorConfig(monitor: FpgaPerformanceMonitorConfig) extends CDEConfig((_, _, _) => {
+  case FpgaPerformanceMonitorConfigKey => monitor
+})
+
+/** Selects the synthesized interactive SDB mailbox path. */
+class WithFpgaRuntimeSdbConfig(sdb: FpgaRuntimeSdbConfig) extends CDEConfig((_, _, _) => {
+  case FpgaRuntimeSdbConfigKey => sdb
 })

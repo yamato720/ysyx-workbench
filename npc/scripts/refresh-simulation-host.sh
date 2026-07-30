@@ -33,7 +33,7 @@ bit() {
   esac
 }
 
-[[ ${CAPABILITY:-} == run && ${HOST_ABI:-} == nemu-construction-v1 ]] || {
+[[ ${CAPABILITY:-} =~ ^(run|batch)$ && ${HOST_ABI:-} == nemu-construction-v1 ]] || {
   echo "Config ${CONFIG_FQCN:-unknown} 不是可构造 NEMU host 的运行 Config" >&2
   exit 2
 }
@@ -45,7 +45,7 @@ bit() {
   echo "Config ${CONFIG_FQCN:-unknown} 缺少 NEMU_PRESET" >&2
   exit 2
 }
-for field in NEMU_TRACE NEMU_WATCHPOINT NEMU_VCD NEMU_PERFORMANCE_HTML NEMU_PIPELINE_HTML NEMU_NPC_DIFFTEST NEMU_DEVICES NEMU_DEBUG NEMU_LTO NEMU_ASAN; do
+for field in NEMU_TRACE NEMU_WATCHPOINT NEMU_VCD NEMU_PERFORMANCE_HTML NEMU_CACHE_HTML NEMU_PIPELINE_HTML NEMU_NPC_DIFFTEST NEMU_DEVICES NEMU_DEBUG NEMU_LTO NEMU_ASAN; do
   bit "${!field:-}" "$field"
 done
 [[ ${NEMU_OPTIMIZATION:-} =~ ^O[0-3]$ ]] || {
@@ -59,6 +59,8 @@ case "${SCOPE:-}" in
     }
     usenpc=1
     [[ $SCOPE == npc ]] && npc_soc=0 || npc_soc=1
+    # 本地 Verilator 没有独立的冻结板卡时钟；保留历史上的 300 MHz 报告基准。
+    core_clock_mhz=300
     ;;
   fpga)
     case "${FPGA_BOARD:-}" in
@@ -72,13 +74,24 @@ case "${SCOPE:-}" in
     }
     usenpc=0
     npc_soc=0
+    core_clock_mhz=${FPGA_CLOCK_MHZ:-}
     ;;
   *) echo "Config ${CONFIG_FQCN:-unknown} 的作用域非法：${SCOPE:-empty}" >&2; exit 2 ;;
 esac
+[[ $core_clock_mhz =~ ^[1-9][0-9]*$ ]] || {
+  echo "Config ${CONFIG_FQCN:-unknown} 的核心时钟非法：${core_clock_mhz:-empty} MHz" >&2
+  exit 2
+}
 
 if [[ $NEMU_PIPELINE_HTML == 1 ]]; then
   [[ $NEMU_PERFORMANCE_HTML == 1 ]] || {
     echo "流水线 HTML 必须同时启用性能 HTML" >&2
+    exit 2
+  }
+fi
+if [[ $NEMU_CACHE_HTML == 1 ]]; then
+  [[ $NEMU_PERFORMANCE_HTML == 1 ]] || {
+    echo "缓存 HTML 必须同时启用性能 HTML" >&2
     exit 2
   }
 fi
@@ -101,6 +114,7 @@ render_defconfig() {
     if [[ $NEMU_TRACE == 1 ]]; then echo 'CONFIG_TRACE=y'; else echo '# CONFIG_TRACE is not set'; fi
     if [[ $NEMU_VCD == 1 ]]; then echo 'CONFIG_NPC_VCD_TRACE=y'; else echo '# CONFIG_NPC_VCD_TRACE is not set'; fi
     if [[ $NEMU_PERFORMANCE_HTML == 1 ]]; then echo 'CONFIG_NPC_PERFORMANCE_HTML=y'; else echo '# CONFIG_NPC_PERFORMANCE_HTML is not set'; fi
+    if [[ $NEMU_CACHE_HTML == 1 ]]; then echo 'CONFIG_NPC_CACHE_HTML=y'; else echo '# CONFIG_NPC_CACHE_HTML is not set'; fi
     if [[ $NEMU_PIPELINE_HTML == 1 ]]; then echo 'CONFIG_NPC_PIPELINE_HTML=y'; else echo '# CONFIG_NPC_PIPELINE_HTML is not set'; fi
     if [[ $NEMU_NPC_DIFFTEST == 1 ]]; then echo 'CONFIG_NPC_DIFFTEST_NEMU=y'; else echo '# CONFIG_NPC_DIFFTEST_NEMU is not set'; fi
     if [[ $NEMU_WATCHPOINT == 1 ]]; then echo 'CONFIG_WATCHPOINT=y'; else echo '# CONFIG_WATCHPOINT is not set'; fi
@@ -153,7 +167,8 @@ else
   make -C "$nemu_root" ISA="riscv${XLEN}" app \
     NEMU_HOME="$nemu_root" NEMU_CONFIG_ROOT="$config_root" NEMU_BUILD_ROOT="$build_root" NEMU_OBJ_DIR="$objects" \
     USENPC="$usenpc" NPC_SOC="$npc_soc" NPC_OBJ_DIR="$construction/abi/verilator" \
-    NPC_GLUE_DIR="$construction/abi/glue/include" NPC_SOFTFLOAT_LIB="$construction/abi/softfloat/softfloat.a"
+    NPC_GLUE_DIR="$construction/abi/glue/include" NPC_SOFTFLOAT_LIB="$construction/abi/softfloat/softfloat.a" \
+    NPC_CLOCK_MHZ="$core_clock_mhz"
   host_binary=$(find "$build_root" -maxdepth 1 -type f -perm -u+x -print -quit)
   [[ -n ${host_binary:-} ]] || { echo "NEMU host 未生成可执行文件" >&2; exit 1; }
   install -m 0755 "$host_binary" "$stage/nemu-exec"
@@ -166,7 +181,7 @@ else
 fi
 
 {
-  echo 'HOST_FORMAT=5'
+  echo 'HOST_FORMAT=7'
   echo "CONFIG_FQCN=$CONFIG_FQCN"
   echo "NEMU_PRESET=$NEMU_PRESET"
   echo "NEMU_BACKEND=$NEMU_BACKEND"
@@ -174,6 +189,7 @@ fi
   echo "NEMU_WATCHPOINT=$NEMU_WATCHPOINT"
   echo "NEMU_VCD=$NEMU_VCD"
   echo "NEMU_PERFORMANCE_HTML=$NEMU_PERFORMANCE_HTML"
+  echo "NEMU_CACHE_HTML=$NEMU_CACHE_HTML"
   echo "NEMU_PIPELINE_HTML=$NEMU_PIPELINE_HTML"
   echo "NEMU_NPC_DIFFTEST=$NEMU_NPC_DIFFTEST"
   echo "NEMU_DEVICES=$NEMU_DEVICES"
@@ -186,6 +202,7 @@ fi
   echo "XLEN=$XLEN"
   echo "F=$F"
   echo "FPGA_BOARD=${FPGA_BOARD:-}"
+  echo "CORE_CLOCK_MHZ=$core_clock_mhz"
   echo "HOST_ABI=$HOST_ABI"
   echo "PROTOCOL_ABI=$PROTOCOL_ABI"
   echo "BUILT_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)"

@@ -22,6 +22,7 @@ class IFetchAXIAdapter(
     val inst = Output(UInt(32.W))
     val responseValid = Output(Bool())
     val responseReady = Input(Bool())
+    val flush = Input(Bool())
     val busy = Output(Bool())
     val fault = Output(new MemoryFault(addrWidth))
     val axi = new AxiLiteMasterIO(addrWidth, dataWidth)
@@ -32,6 +33,7 @@ class IFetchAXIAdapter(
   val instReg = RegInit(0x00000013.U(32.W))
   val cachedPc = RegInit(~0.U(addrWidth.W))
   val responsePending = RegInit(false.B)
+  val discardResponse = RegInit(false.B)
   val requestPc = RegInit(0.U(addrWidth.W))
   val faultAddrReg = RegInit(0.U(addrWidth.W))
   val faultReasonReg = RegInit(0.U(3.W))
@@ -50,7 +52,8 @@ class IFetchAXIAdapter(
     val byteOffset = requestPc(beatOffsetBits - 1, 0)
     responseData := (io.axi.r.bits.data >> (byteOffset << 3))(31, 0)
   }
-  val directResponseValid = state === sRWait && io.axi.r.valid && io.axi.r.bits.resp === 0.U && io.pc === requestPc
+  val directResponseValid = state === sRWait && io.axi.r.valid && io.axi.r.bits.resp === 0.U &&
+    io.pc === requestPc && !discardResponse && !io.flush
   io.inst := Mux(directResponseValid, responseData, instReg)
   io.responseValid := (responsePending && io.pc === cachedPc) || directResponseValid
   io.busy := needFetch || state =/= sIdle || responsePending
@@ -72,57 +75,75 @@ class IFetchAXIAdapter(
   io.axi.ar.bits.addr := beatAddr(requestPc)
   io.axi.ar.bits.size := log2Ceil(dataWidth / 8).U(3.W)
   io.axi.ar.bits.prot := "b100".U
-  io.axi.r.ready := false.B
+  io.axi.r.ready := state === sRWait && (!responsePending || io.flush)
 
   when(!reset.asBool) {
-    when(responsePending && (io.responseReady || io.pc =/= cachedPc)) {
+    when(io.flush) {
+      cachedPc := ~0.U
       responsePending := false.B
-    }
+      when(state === sRWait) {
+        when(io.axi.r.fire) {
+          discardResponse := false.B
+          state := sIdle
+        }.otherwise {
+          discardResponse := true.B
+        }
+      }.otherwise {
+        discardResponse := false.B
+        state := sIdle
+      }
+    }.otherwise {
+      when(responsePending && (io.responseReady || io.pc =/= cachedPc)) {
+        responsePending := false.B
+      }
 
-    switch(state) {
-      is(sIdle) {
-        when(needFetch) {
-          requestPc := io.pc
-          when(io.pc(1, 0).orR) {
-            latchFault(io.pc, MemoryFaultReason.misaligned)
-          }.otherwise {
-            if (registerInitialRequest) {
-              state := sArWait
-            } else {
-              io.axi.ar.valid := true.B
-              io.axi.ar.bits.addr := beatAddr(io.pc)
-              when(io.axi.ar.fire) {
-                state := sRWait
-              }.otherwise {
+      switch(state) {
+        is(sIdle) {
+          when(needFetch) {
+            requestPc := io.pc
+            when(io.pc(1, 0).orR) {
+              latchFault(io.pc, MemoryFaultReason.misaligned)
+            }.otherwise {
+              if (registerInitialRequest) {
                 state := sArWait
+              } else {
+                io.axi.ar.valid := true.B
+                io.axi.ar.bits.addr := beatAddr(io.pc)
+                when(io.axi.ar.fire) {
+                  state := sRWait
+                }.otherwise {
+                  state := sArWait
+                }
               }
             }
           }
         }
-      }
-      is(sArWait) {
-        io.axi.ar.valid := true.B
-        io.axi.ar.bits.addr := beatAddr(requestPc)
-        when(io.axi.ar.fire) {
-          state := sRWait
-        }
-      }
-      is(sRWait) {
-        io.axi.r.ready := !responsePending
-        when(io.axi.r.fire) {
-          when(io.axi.r.bits.resp =/= 0.U) {
-            latchFault(requestPc, MemoryFaultReason.readResponse)
-          }.otherwise {
-            when(io.pc === requestPc) {
-              instReg := responseData
-              cachedPc := requestPc
-              responsePending := !io.responseReady
-            }
-            state := sIdle
+        is(sArWait) {
+          io.axi.ar.valid := true.B
+          io.axi.ar.bits.addr := beatAddr(requestPc)
+          when(io.axi.ar.fire) {
+            state := sRWait
           }
         }
+        is(sRWait) {
+          when(io.axi.r.fire) {
+            when(discardResponse) {
+              discardResponse := false.B
+              state := sIdle
+            }.elsewhen(io.axi.r.bits.resp =/= 0.U) {
+              latchFault(requestPc, MemoryFaultReason.readResponse)
+            }.otherwise {
+              when(io.pc === requestPc) {
+                instReg := responseData
+                cachedPc := requestPc
+                responsePending := !io.responseReady
+              }
+              state := sIdle
+            }
+          }
+        }
+        is(sFault) {}
       }
-      is(sFault) {}
     }
   }
 }

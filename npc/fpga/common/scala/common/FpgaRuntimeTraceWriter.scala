@@ -4,18 +4,40 @@ import chisel3._
 import chisel3.util._
 import npc.protocol.Axi4FullMasterIO
 
-/** Snapshot and classify all committed instructions without feeding any ready
-  * signal back into the core.  The module lives outside the core reset domain;
-  * a host start command explicitly clears it, while mtestexit preserves the
-  * final counters for mailbox reads.
+class FpgaMonitorSample(width: Int) extends Bundle {
+  val valid = Bool()
+  val pc = UInt(width.W)
+  val instruction = UInt(32.W)
+  val cycle = UInt(64.W)
+  val stages = Vec(FpgaPerformanceMonitor.stageCount, UInt(64.W))
+  val pipelineFeatures = UInt(3.W)
+}
+
+class FpgaMonitorClassified(width: Int) extends Bundle {
+  val valid = Bool()
+  val classes = Vec(3, UInt(5.W))
+  val classValid = Vec(3, Bool())
+  val pc = UInt(width.W)
+  val instruction = UInt(32.W)
+  val stages = Vec(FpgaPerformanceMonitor.stageCount, UInt(64.W))
+  val total = UInt(64.W)
+}
+
+/** Exact aggregate counters for the batch monitor.
+  *
+  * The old monitor carried a 30-way match vector and all debug state through
+  * several wide stages.  This version has one commit sample stage followed by
+  * three concrete class updates (major class, instruction detail, all).  The
+  * aggregate counters remain exact; per-class "last instruction" data is
+  * reconstructed from the HBM records by the host, while this module only
+  * retains the globally last committed sample.
   */
 class FpgaRuntimeStatistics(width: Int, maxRecords: Int) extends Module {
   require(width == 32 || width == 64)
   require(maxRecords > 0)
 
   val io = IO(new Bundle {
-    val runtime = Input(new FpgaRuntimeDebug(width))
-    val coreReset = Input(Bool())
+    val telemetry = Input(new FpgaCommitTelemetry(width))
     val clear = Input(Bool())
     val classSelector = Input(UInt(5.W))
     val stageSelector = Input(UInt(3.W))
@@ -23,237 +45,260 @@ class FpgaRuntimeStatistics(width: Int, maxRecords: Int) extends Module {
     val status = Output(new FpgaRuntimeTraceStatus)
   })
 
-  val counts = RegInit(VecInit(Seq.fill(FpgaRuntimeTrace.classCount)(0.U(64.W))))
-  val totals = RegInit(VecInit(Seq.fill(FpgaRuntimeTrace.classCount)(
-    VecInit(Seq.fill(FpgaRuntimeTrace.stageCount)(0.U(64.W))))))
-  val maximums = RegInit(VecInit(Seq.fill(FpgaRuntimeTrace.classCount)(0.U(64.W))))
-  val lastPc = RegInit(VecInit(Seq.fill(FpgaRuntimeTrace.classCount)(0.U(64.W))))
-  val lastInstruction = RegInit(VecInit(Seq.fill(FpgaRuntimeTrace.classCount)(0.U(32.W))))
-  val lastStages = RegInit(VecInit(Seq.fill(FpgaRuntimeTrace.classCount)(
-    VecInit(Seq.fill(FpgaRuntimeTrace.stageCount)(0.U(64.W))))))
+  val counts = RegInit(VecInit(Seq.fill(FpgaPerformanceMonitor.classCount)(0.U(64.W))))
+  val totals = RegInit(VecInit(Seq.fill(FpgaPerformanceMonitor.classCount)(
+    VecInit(Seq.fill(FpgaPerformanceMonitor.stageCount)(0.U(64.W))))))
+  val maximums = RegInit(VecInit(Seq.fill(FpgaPerformanceMonitor.classCount)(0.U(64.W))))
+  val lastPc = RegInit(0.U(64.W))
+  val lastInstruction = RegInit(0.U(32.W))
   val lastClass = RegInit(0.U(5.W))
-  val lastStage = RegInit(VecInit(Seq.fill(FpgaRuntimeTrace.stageCount)(0.U(64.W))))
+  val lastStages = RegInit(VecInit(Seq.fill(FpgaPerformanceMonitor.stageCount)(0.U(64.W))))
   val storedCycles = RegInit(0.U(64.W))
-  val storedStalls = RegInit(VecInit(Seq.fill(FpgaRuntimeTrace.stallCount)(0.U(64.W))))
+  val storedStalls = RegInit(VecInit(Seq.fill(FpgaPerformanceMonitor.stallCount)(0.U(64.W))))
   val storedPipelineFeatures = RegInit(0.U(3.W))
 
-  val instruction = io.runtime.sampleCommitInstruction
-  val opcode = instruction(6, 0)
-  val funct3 = instruction(14, 12)
-  val funct7 = instruction(31, 25)
-  val isLoad = opcode === "b0000011".U
-  val isStore = opcode === "b0100011".U
-  val isM = (opcode === "b0110011".U || opcode === "b0111011".U) && funct7 === 1.U
-  val matches = Wire(Vec(FpgaRuntimeTrace.classCount, Bool()))
-  matches.foreach(_ := false.B)
-  val detailClass = WireDefault(0.U(5.W))
+  val sample = RegInit(0.U.asTypeOf(new FpgaMonitorSample(width)))
+  val classified = RegInit(0.U.asTypeOf(new FpgaMonitorClassified(width)))
 
-  when(isLoad) {
-    matches(1) := true.B
-    switch(funct3) {
-      is(0.U) { matches(4) := true.B; detailClass := 4.U }
-      is(1.U) { matches(5) := true.B; detailClass := 5.U }
-      is(2.U) { matches(6) := true.B; detailClass := 6.U }
-      is(3.U) { matches(7) := true.B; detailClass := 7.U }
-      is(4.U) { matches(8) := true.B; detailClass := 8.U }
-      is(5.U) { matches(9) := true.B; detailClass := 9.U }
-      is(6.U) { matches(10) := true.B; detailClass := 10.U }
-    }
-  }.elsewhen(isStore) {
-    matches(2) := true.B
-    switch(funct3) {
-      is(0.U) { matches(11) := true.B; detailClass := 11.U }
-      is(1.U) { matches(12) := true.B; detailClass := 12.U }
-      is(2.U) { matches(13) := true.B; detailClass := 13.U }
-      is(3.U) { matches(14) := true.B; detailClass := 14.U }
-    }
-  }.elsewhen(isM) {
-    matches(3) := true.B
-    when(opcode === "b0111011".U) {
-      switch(funct3) {
-        is(0.U) { matches(23) := true.B; detailClass := 23.U }
-        is(4.U) { matches(24) := true.B; detailClass := 24.U }
-        is(5.U) { matches(25) := true.B; detailClass := 25.U }
-        is(6.U) { matches(26) := true.B; detailClass := 26.U }
-        is(7.U) { matches(27) := true.B; detailClass := 27.U }
-      }
-    }.otherwise {
-      switch(funct3) {
-        is(0.U) { matches(15) := true.B; detailClass := 15.U }
-        is(1.U) { matches(16) := true.B; detailClass := 16.U }
-        is(2.U) { matches(17) := true.B; detailClass := 17.U }
-        is(3.U) { matches(18) := true.B; detailClass := 18.U }
-        is(4.U) { matches(19) := true.B; detailClass := 19.U }
-        is(5.U) { matches(20) := true.B; detailClass := 20.U }
-        is(6.U) { matches(21) := true.B; detailClass := 21.U }
-        is(7.U) { matches(22) := true.B; detailClass := 22.U }
+  def add64(left: UInt, right: UInt): UInt = (left +& right)(63, 0)
+
+  def classify(instruction: UInt): (UInt, Bool, UInt, Bool) = {
+    val opcode = instruction(6, 0)
+    val funct3 = instruction(14, 12)
+    val funct7 = instruction(31, 25)
+    val major = WireDefault(0.U(5.W))
+    val detail = WireDefault(0.U(5.W))
+    val hasDetail = WireDefault(false.B)
+    val isLoad = opcode === "b0000011".U
+    val isStore = opcode === "b0100011".U
+    val isM = (opcode === "b0110011".U || opcode === "b0111011".U) && funct7 === 1.U
+    when(isLoad) {
+      major := 1.U
+      hasDetail := true.B
+      detail := MuxLookup(funct3, 4.U)(Seq(
+        0.U -> 4.U, 1.U -> 5.U, 2.U -> 6.U, 3.U -> 7.U,
+        4.U -> 8.U, 5.U -> 9.U, 6.U -> 10.U
+      ))
+    }.elsewhen(isStore) {
+      major := 2.U
+      hasDetail := true.B
+      detail := MuxLookup(funct3, 11.U)(Seq(
+        0.U -> 11.U, 1.U -> 12.U, 2.U -> 13.U, 3.U -> 14.U
+      ))
+    }.elsewhen(isM) {
+      major := 3.U
+      hasDetail := true.B
+      detail := MuxLookup(funct3, 15.U)(Seq(
+        0.U -> 15.U, 1.U -> 16.U, 2.U -> 17.U, 3.U -> 18.U,
+        4.U -> 19.U, 5.U -> 20.U, 6.U -> 21.U, 7.U -> 22.U
+      ))
+      when(opcode === "b0111011".U) {
+        detail := MuxLookup(funct3, 23.U)(Seq(
+          0.U -> 23.U, 4.U -> 24.U, 5.U -> 25.U, 6.U -> 26.U, 7.U -> 27.U
+        ))
       }
     }
-  }.otherwise {
-    matches(0) := true.B
+    (major, hasDetail, detail, isLoad || isStore || isM)
   }
-  matches(29) := true.B
 
-  val stages = Wire(Vec(FpgaRuntimeTrace.stageCount, UInt(64.W)))
-  stages(0) := io.runtime.sampleFetchCycles
-  stages(1) := io.runtime.sampleDecodeCycles
-  stages(2) := io.runtime.sampleExecuteCycles
-  stages(3) := io.runtime.sampleMemoryCycles
-  stages(4) := io.runtime.sampleWritebackCycles
-  val total = stages.foldLeft(0.U(64.W)) { case (sum, stage) => (sum +& stage)(63, 0) }
+  val selectedClass = Mux(io.classSelector < FpgaPerformanceMonitor.classCount.U,
+    io.classSelector, 0.U)
+  val selectedStage = Mux(io.stageSelector < FpgaPerformanceMonitor.stageCount.U,
+    io.stageSelector, 0.U)
+  val selectedStall = Mux(io.stallSelector < FpgaPerformanceMonitor.stallCount.U,
+    io.stallSelector, 0.U)
 
   when(io.clear) {
     counts.foreach(_ := 0.U)
     totals.foreach(_.foreach(_ := 0.U))
     maximums.foreach(_ := 0.U)
-    lastPc.foreach(_ := 0.U)
-    lastInstruction.foreach(_ := 0.U)
-    lastStages.foreach(_.foreach(_ := 0.U))
+    lastPc := 0.U
+    lastInstruction := 0.U
     lastClass := 0.U
-    lastStage.foreach(_ := 0.U)
+    lastStages.foreach(_ := 0.U)
     storedCycles := 0.U
     storedStalls.foreach(_ := 0.U)
     storedPipelineFeatures := 0.U
+    sample.valid := false.B
+    classified.valid := false.B
   }.otherwise {
-    when(!io.coreReset) {
-      storedCycles := io.runtime.cycleCount
-      storedPipelineFeatures := io.runtime.pipelineFeatures
-      storedStalls(0) := io.runtime.fetchAxiWaitCycles
-      storedStalls(1) := io.runtime.idStallCycles
-      storedStalls(2) := io.runtime.executeStallCycles
-      storedStalls(3) := io.runtime.memoryStallCycles
-      storedStalls(4) := io.runtime.redirectFlushCount
+    sample.valid := io.telemetry.commitValid
+    when(io.telemetry.commitValid) {
+      sample.pc := io.telemetry.commitPc
+      sample.instruction := io.telemetry.commitInstruction
+      sample.cycle := io.telemetry.commitCycle
+      sample.stages := io.telemetry.stages
+      sample.pipelineFeatures := io.telemetry.pipelineFeatures
     }
-    when(io.runtime.sampleCommitValid) {
-      for (index <- 0 until FpgaRuntimeTrace.classCount) {
-        when(matches(index)) {
+
+    classified.valid := sample.valid
+    when(sample.valid) {
+      val (major, hasDetail, detail, _) = classify(sample.instruction)
+      classified.classes(0) := major
+      classified.classValid(0) := true.B
+      classified.classes(1) := detail
+      classified.classValid(1) := hasDetail
+      classified.classes(2) := (FpgaPerformanceMonitor.classCount - 1).U
+      classified.classValid(2) := true.B
+      classified.pc := sample.pc
+      classified.instruction := sample.instruction
+      classified.stages := sample.stages
+      classified.total := sample.stages.foldLeft(0.U(64.W)) {
+        case (sum, stage) => add64(sum, stage)
+      }
+    }
+
+    when(classified.valid) {
+      for (lane <- 0 until 3) {
+        when(classified.classValid(lane)) {
+          val index = classified.classes(lane)
           counts(index) := counts(index) + 1.U
-          maximums(index) := Mux(total > maximums(index), total, maximums(index))
-          lastPc(index) := io.runtime.sampleCommitPc
-          lastInstruction(index) := instruction
-          for (stage <- 0 until FpgaRuntimeTrace.stageCount) {
-            totals(index)(stage) := totals(index)(stage) + stages(stage)
-            lastStages(index)(stage) := stages(stage)
+          maximums(index) := Mux(classified.total > maximums(index),
+            classified.total, maximums(index))
+          for (stage <- 0 until FpgaPerformanceMonitor.stageCount) {
+            totals(index)(stage) := add64(totals(index)(stage), classified.stages(stage))
           }
         }
       }
-      lastClass := detailClass
-      for (stage <- 0 until FpgaRuntimeTrace.stageCount) lastStage(stage) := stages(stage)
+      lastPc := classified.pc.pad(64)
+      lastInstruction := classified.instruction
+      lastClass := classified.classes(1)
+      lastStages := classified.stages
+    }
+
+    // These counters are sampled exactly on the completion commit before the
+    // core reset domain clears its backend state.  Aggregate event stages keep
+    // draining independently afterwards.
+    when(io.telemetry.completionValid) {
+      storedCycles := io.telemetry.completionCycle
+      storedStalls := io.telemetry.completionStalls
+      storedPipelineFeatures := io.telemetry.pipelineFeatures
     }
   }
 
-  val selectedClass = Mux(io.classSelector < FpgaRuntimeTrace.classCount.U,
-    io.classSelector, 0.U)
-  val selectedStage = Mux(io.stageSelector < FpgaRuntimeTrace.stageCount.U,
-    io.stageSelector, 0.U)
-  val selectedStall = Mux(io.stallSelector < FpgaRuntimeTrace.stallCount.U,
-    io.stallSelector, 0.U)
   io.status.enabled := true.B
-  io.status.formatVersion := FpgaRuntimeTrace.formatVersion.U
-  io.status.recordBytes := FpgaRuntimeTrace.recordBytes.U
+  io.status.formatVersion := FpgaPerformanceMonitor.formatVersion.U
+  io.status.recordBytes := FpgaPerformanceMonitor.recordBytes.U
   io.status.maxRecords := maxRecords.U
   io.status.records := 0.U
   io.status.dropped := 0.U
-  io.status.drained := true.B
+  io.status.drained := !sample.valid && !classified.valid
   io.status.cycles := storedCycles
-  io.status.commits := counts(29)
+  io.status.commits := counts(FpgaPerformanceMonitor.classCount - 1)
   io.status.pipelineFeatures := storedPipelineFeatures
   io.status.classSampleCount := counts(selectedClass)
   io.status.classStageTotal := totals(selectedClass)(selectedStage)
   io.status.classMaxTotal := maximums(selectedClass)
-  io.status.classLastPc := lastPc(selectedClass)
-  io.status.classLastInstruction := lastInstruction(selectedClass)
-  io.status.classLastStage := lastStages(selectedClass)(selectedStage)
+  io.status.classLastPc := Mux(selectedClass === lastClass, lastPc, 0.U)
+  io.status.classLastInstruction := Mux(selectedClass === lastClass, lastInstruction, 0.U)
+  io.status.classLastStage := Mux(selectedClass === lastClass, lastStages(selectedStage), 0.U)
   io.status.lastClass := lastClass
-  io.status.lastStage := lastStage(selectedStage)
-  io.status.lastTotal := lastStage.foldLeft(0.U(64.W)) { case (sum, stage) => (sum +& stage)(63, 0) }
+  io.status.lastStage := lastStages(selectedStage)
+  io.status.lastTotal := lastStages.foldLeft(0.U(64.W)) { case (sum, stage) => add64(sum, stage) }
   io.status.selectedStall := storedStalls(selectedStall)
 }
 
-/** A bounded, non-blocking trace writer.
+/** Non-blocking, 256-bit HBM writer for the batch performance-monitor ABI.
   *
-  * The core-side producer writes one 72-byte commit record per cycle into a
-  * SyncReadMem FIFO.  The U55C packager applies `RAM_STYLE=ultra` to its
-  * stable generated name.  The AXI writer drains it independently; a full FIFO only
-  * increments `dropped` and never exerts backpressure on the CPU.
+  * A trace record is exactly one AXI beat.  The writer emits contiguous
+  * bursts and keeps up to four responses in flight, so B-channel latency does
+  * not serialize producer throughput.  A full FIFO turns the detail stream
+  * into a prefix and increments `dropped`; it never backpressures the CPU.
   */
 class FpgaRuntimeTraceWriter(
   width: Int,
   idWidth: Int,
   maxRecords: Int,
-  cacheRecords: Int
+  cacheRecords: Int,
+  burstRecords: Int
 ) extends Module {
   require(width == 32 || width == 64)
   require(maxRecords > 0)
-  require(cacheRecords >= 2 && (cacheRecords & (cacheRecords - 1)) == 0,
-    s"trace cache depth must be a power of two, got $cacheRecords")
-  private val wordsPerRecord = FpgaRuntimeTrace.recordBytes / (width / 8)
-  private val recordBits = FpgaRuntimeTrace.recordBytes * 8
-  private val pointerBits = log2Ceil(cacheRecords)
-  private val occupancyBits = log2Ceil(cacheRecords + 1)
+  require(cacheRecords >= 2 && (cacheRecords & (cacheRecords - 1)) == 0)
+  require(burstRecords >= 2 && (burstRecords & (burstRecords - 1)) == 0)
+
+  private val traceWidth = FpgaPerformanceMonitor.traceDataWidth
+  private val burstCountWidth = log2Ceil(burstRecords + 1)
+  private val pointerWidth = log2Ceil(cacheRecords)
+  private val occupancyWidth = log2Ceil(cacheRecords + 1)
+  private val maxOutstanding = 4
 
   val io = IO(new Bundle {
-    val runtime = Input(new FpgaRuntimeDebug(width))
+    val telemetry = Input(new FpgaCommitTelemetry(width))
     val traceBase = Input(UInt(64.W))
     val clear = Input(Bool())
-    val axi = new Axi4FullMasterIO(64, width, idWidth)
+    val axi = new Axi4FullMasterIO(64, traceWidth, idWidth)
     val records = Output(UInt(64.W))
     val dropped = Output(UInt(64.W))
     val drained = Output(Bool())
   })
 
-  val idle :: readRecord :: captureRead :: sendAddress :: sendData :: waitResponse :: Nil = Enum(6)
+  val idle :: sendAddress :: sendData :: Nil = Enum(3)
   val state = RegInit(idle)
   val captured = RegInit(0.U(64.W))
-  val completed = RegInit(0.U(64.W))
+  val written = RegInit(0.U(64.W))
   val dropped = RegInit(0.U(64.W))
   val captureStopped = RegInit(false.B)
-  val beat = RegInit(0.U(log2Ceil(wordsPerRecord).W))
-  val writePointer = RegInit(0.U(pointerBits.W))
-  val readPointer = RegInit(0.U(pointerBits.W))
-  val occupancy = RegInit(0.U(occupancyBits.W))
-  val traceMemory = SyncReadMem(cacheRecords, UInt(recordBits.W))
-  traceMemory.suggestName("trace_uram_fifo")
-  val activeRecord = Reg(UInt(recordBits.W))
+  val captureFinished = RegInit(false.B)
+  val writePointer = RegInit(0.U(pointerWidth.W))
+  val readPointer = RegInit(0.U(pointerWidth.W))
+  val occupancy = RegInit(0.U(occupancyWidth.W))
+  val burstLength = RegInit(0.U(burstCountWidth.W))
+  val burstSent = RegInit(0.U(burstCountWidth.W))
+  val burstReadsIssued = RegInit(0.U(burstCountWidth.W))
+  val outstanding = RegInit(0.U(3.W))
+  val readPending = RegInit(false.B)
+  val buffered0Valid = RegInit(false.B)
+  val buffered1Valid = RegInit(false.B)
+  val buffered0 = Reg(UInt(traceWidth.W))
+  val buffered1 = Reg(UInt(traceWidth.W))
+  val traceMemory = SyncReadMem(cacheRecords, UInt(traceWidth.W))
+  traceMemory.suggestName("performance_monitor_uram_fifo")
 
-  val statusWord = Cat(0.U(29.W), io.runtime.pipelineFeatures, io.runtime.sampleCommitInstruction)
+  def packedStage(value: UInt): UInt = Mux(value(63, 16).orR, "hffff".U(16.W), value(15, 0))
+  val saturation = VecInit(io.telemetry.stages.map(_.asUInt(63, 16).orR)).asUInt
   val incomingRecord = Cat(
-    io.runtime.sampleWritebackCycles,
-    io.runtime.sampleMemoryCycles,
-    io.runtime.sampleExecuteCycles,
-    io.runtime.sampleDecodeCycles,
-    io.runtime.sampleFetchCycles,
-    io.runtime.cycleCount,
-    statusWord,
-    io.runtime.sampleCommitPc.pad(64),
-    captured + 1.U
+    saturation.pad(8),
+    io.telemetry.pipelineFeatures.pad(8),
+    packedStage(io.telemetry.stages(4)),
+    packedStage(io.telemetry.stages(3)),
+    packedStage(io.telemetry.stages(2)),
+    packedStage(io.telemetry.stages(1)),
+    packedStage(io.telemetry.stages(0)),
+    io.telemetry.commitCycle,
+    io.telemetry.commitInstruction,
+    io.telemetry.commitPc.pad(64)
   )
-  val dequeue = state === waitResponse && io.axi.b.fire
-  val cacheHasRoom = occupancy < cacheRecords.U || dequeue
+
   val canCapture = io.traceBase =/= 0.U && !captureStopped &&
-    captured < maxRecords.U && cacheHasRoom
-  val enqueue = io.runtime.sampleCommitValid && canCapture
-  val readData = traceMemory.read(readPointer, state === readRecord)
-  val recordWords = Wire(Vec(wordsPerRecord, UInt(width.W)))
-  recordWords := activeRecord.asTypeOf(Vec(wordsPerRecord, UInt(width.W)))
-  val recordAddress = io.traceBase + completed * FpgaRuntimeTrace.recordBytes.U +
-    beat * (width / 8).U
+    captured < maxRecords.U && occupancy < cacheRecords.U
+  val enqueue = io.telemetry.commitValid && canCapture
+  val startingBurst = state === idle && occupancy =/= 0.U && outstanding < maxOutstanding.U &&
+    (occupancy >= burstRecords.U || captureFinished)
+  val nextBurstLength = Mux(occupancy >= burstRecords.U, burstRecords.U, occupancy)
+  val finalBeat = burstSent + 1.U === burstLength
+  val dequeued = state === sendData && buffered0Valid && io.axi.w.ready
+  val bufferOccupancy = buffered0Valid.asUInt +& buffered1Valid.asUInt
+  val issueRead = state === sendData && burstReadsIssued < burstLength &&
+    (bufferOccupancy +& readPending.asUInt - dequeued.asUInt < 2.U)
+  val readData = traceMemory.read(readPointer, issueRead)
+  val responseArrived = readPending
 
   io.axi.aw.valid := state === sendAddress
   io.axi.aw.bits.id := 0.U
-  io.axi.aw.bits.addr := recordAddress
-  io.axi.aw.bits.len := 0.U
-  io.axi.aw.bits.size := log2Ceil(width / 8).U
+  io.axi.aw.bits.addr := io.traceBase + (written * FpgaPerformanceMonitor.recordBytes.U)
+  io.axi.aw.bits.len := burstLength - 1.U
+  io.axi.aw.bits.size := log2Ceil(traceWidth / 8).U
   io.axi.aw.bits.burst := 1.U
   io.axi.aw.bits.lock := 0.U
   io.axi.aw.bits.cache := 0.U
   io.axi.aw.bits.prot := 0.U
   io.axi.aw.bits.qos := 0.U
-  io.axi.w.valid := state === sendData
-  io.axi.w.bits.data := recordWords(beat)
-  io.axi.w.bits.strb := Fill(width / 8, 1.U(1.W))
-  io.axi.w.bits.last := true.B
-  io.axi.b.ready := state === waitResponse && !io.clear
+  io.axi.w.valid := state === sendData && buffered0Valid
+  io.axi.w.bits.data := buffered0
+  io.axi.w.bits.strb := Fill(traceWidth / 8, 1.U(1.W))
+  io.axi.w.bits.last := finalBeat
+  io.axi.b.ready := !io.clear
   io.axi.ar.valid := false.B
   io.axi.ar.bits.id := 0.U
   io.axi.ar.bits.addr := 0.U
@@ -269,58 +314,94 @@ class FpgaRuntimeTraceWriter(
   when(io.clear) {
     state := idle
     captured := 0.U
-    completed := 0.U
+    written := 0.U
     dropped := 0.U
     captureStopped := false.B
-    beat := 0.U
+    captureFinished := false.B
     writePointer := 0.U
     readPointer := 0.U
     occupancy := 0.U
+    burstLength := 0.U
+    burstSent := 0.U
+    burstReadsIssued := 0.U
+    outstanding := 0.U
+    readPending := false.B
+    buffered0Valid := false.B
+    buffered1Valid := false.B
   }.otherwise {
-    when(io.runtime.sampleCommitValid) {
+    when(io.telemetry.completionValid) { captureFinished := true.B }
+    when(io.telemetry.commitValid) {
       when(enqueue) {
         traceMemory.write(writePointer, incomingRecord)
         writePointer := writePointer + 1.U
         captured := captured + 1.U
       }.elsewhen(io.traceBase =/= 0.U) {
-        // The HTML trace is intentionally a prefix.  Once the bounded FIFO
-        // cannot accept a commit, stop recording permanently while counters
-        // continue to observe every later commit without stalling the core.
         captureStopped := true.B
         dropped := dropped + 1.U
       }
     }
 
-    switch(Cat(enqueue, dequeue)) {
+    switch(Cat(enqueue, dequeued)) {
       is("b10".U) { occupancy := occupancy + 1.U }
       is("b01".U) { occupancy := occupancy - 1.U }
     }
 
-    when(state === idle && occupancy =/= 0.U) {
-      state := readRecord
-    }
-    when(state === readRecord) {
-      state := captureRead
-    }
-    when(state === captureRead) {
-      activeRecord := readData
-      beat := 0.U
+    when(io.axi.b.fire) { outstanding := outstanding - 1.U }
+    when(io.axi.aw.fire && !io.axi.b.fire) { outstanding := outstanding + 1.U }
+
+    when(startingBurst) {
+      burstLength := nextBurstLength
+      burstSent := 0.U
+      burstReadsIssued := 0.U
       state := sendAddress
     }
     when(io.axi.aw.fire) { state := sendData }
-    when(io.axi.w.fire) { state := waitResponse }
-    when(io.axi.b.fire) {
-      when(beat === (wordsPerRecord - 1).U) {
-        completed := completed + 1.U
-        readPointer := readPointer + 1.U
-        state := idle
+
+    // The two-entry output queue hides the synchronous URAM read latency.  A
+    // response can refill it in the same cycle that AXI consumes its head.
+    when(responseArrived && dequeued) {
+      when(buffered1Valid) {
+        buffered0 := buffered1
+        buffered0Valid := true.B
+        buffered1 := readData
+        buffered1Valid := true.B
       }.otherwise {
-        beat := beat + 1.U
-        state := sendAddress
+        buffered0 := readData
+        buffered0Valid := true.B
+        buffered1Valid := false.B
+      }
+    }.elsewhen(responseArrived) {
+      when(!buffered0Valid) {
+        buffered0 := readData
+        buffered0Valid := true.B
+      }.otherwise {
+        buffered1 := readData
+        buffered1Valid := true.B
+      }
+    }.elsewhen(dequeued) {
+      buffered0 := buffered1
+      buffered0Valid := buffered1Valid
+      buffered1Valid := false.B
+    }
+    readPending := issueRead
+    when(issueRead) {
+      readPointer := readPointer + 1.U
+      burstReadsIssued := burstReadsIssued + 1.U
+    }
+
+    when(dequeued) {
+      written := written + 1.U
+      burstSent := burstSent + 1.U
+      when(finalBeat) {
+        state := idle
+        burstSent := 0.U
+        burstReadsIssued := 0.U
       }
     }
   }
-  io.records := completed
+
+  io.records := written
   io.dropped := dropped
-  io.drained := state === idle && occupancy === 0.U
+  io.drained := captureFinished && state === idle && occupancy === 0.U &&
+    outstanding === 0.U && !readPending && !buffered0Valid && !buffered1Valid
 }

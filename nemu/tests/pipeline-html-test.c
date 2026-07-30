@@ -78,7 +78,12 @@ int main(void) {
   content = read_file(path);
   assert(strstr(content, "case\\u003c/script\\u003e") != NULL);
   assert(strstr(content, "addi a0, a0, \\u003c\\u0026") != NULL);
+  assert(strstr(content, "\"pc\":\"0x80000000\"") != NULL);
   assert(strstr(content, "\"dropped\":2") != NULL);
+  free(content);
+  assert(pipeline_html_write_instructions(escaped) == 0);
+  content = read_file(instruction_path);
+  assert(strstr(content, "\"pc\":\"0x80000000\"") != NULL);
   free(content);
   pipeline_html_destroy(escaped);
 

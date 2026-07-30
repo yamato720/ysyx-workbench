@@ -8,7 +8,7 @@ class FpgaDebugController(width: Int) extends Module {
   require(width == 32 || width == 64)
 
   val io = IO(new Bundle {
-    val runtime = Input(new FpgaRuntimeDebug(width))
+    val runtime = Input(new FpgaRuntimeDebug(width, sdbEnabled = true))
     val coreReset = Input(Bool())
     val command = Input(Valid(new FpgaDebugCommand))
     val resetControl = Input(Valid(new FpgaResetControl))
@@ -31,7 +31,8 @@ class FpgaDebugController(width: Int) extends Module {
   val haltNextPc = RegInit(0.U(width.W))
   val commitCount = RegInit(0.U(64.W))
 
-  val coreStable = !io.coreReset && !io.runtime.coreBusy
+  val sdb = io.runtime.sdb.get
+  val coreStable = !io.coreReset && !sdb.coreBusy
 
   io.dispatchPermit := state === runningState ||
     (state === steppingState && stepCredit)
@@ -40,7 +41,7 @@ class FpgaDebugController(width: Int) extends Module {
     commitCount := commitCount + 1.U
   }
 
-  when(state === steppingState && io.runtime.dispatchFire) {
+  when(state === steppingState && sdb.dispatchFire) {
     stepCredit := false.B
     stepDispatched := true.B
   }
@@ -49,7 +50,7 @@ class FpgaDebugController(width: Int) extends Module {
     state := haltedState
     stopReason := FpgaStopReason.step
     haltPc := io.runtime.commitPc
-    haltNextPc := io.runtime.nextArchitecturalPc
+    haltNextPc := sdb.nextArchitecturalPc
     when(commandPending) {
       completedSequence := acceptedSequence
       commandPending := false.B
@@ -58,7 +59,7 @@ class FpgaDebugController(width: Int) extends Module {
   when(state === haltingState && coreStable) {
     state := haltedState
     haltPc := io.runtime.commitPc
-    haltNextPc := io.runtime.nextArchitecturalPc
+    haltNextPc := sdb.nextArchitecturalPc
     when(commandPending) {
       completedSequence := acceptedSequence
       commandPending := false.B
@@ -87,7 +88,7 @@ class FpgaDebugController(width: Int) extends Module {
               completedSequence := io.command.bits.sequence
               commandPending := false.B
               haltPc := io.runtime.commitPc
-              haltNextPc := io.runtime.nextArchitecturalPc
+              haltNextPc := sdb.nextArchitecturalPc
             }
           }
           is(FpgaDebugOperation.resume) {

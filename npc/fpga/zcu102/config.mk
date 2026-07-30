@@ -2,6 +2,7 @@ include $(abspath $(dir $(lastword $(MAKEFILE_LIST)))../common/config.mk)
 
 FPGA_CONFIG_FORMAT := 4
 FPGA_NAME := zcu102
+FPGA_PLATFORM_CLOCK_MHZ := 300
 # 器件、平台与工具链均来自终端 FpgaToolchainConfig；本文件只保留独立的板卡
 # 硬件约束和 Tcl/IP 目录策略。
 FPGA_ALLOWED_CLOCK_MHZ := 300

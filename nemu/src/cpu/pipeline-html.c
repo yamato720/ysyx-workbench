@@ -28,6 +28,7 @@ struct PipelineHtmlRecorder {
   size_t capacity;
   size_t limit;
   uint64_t dropped;
+  uint64_t saturated_records;
   bool finished;
   bool instructions_finished;
 };
@@ -195,10 +196,10 @@ static int write_document(
   fputs("{\"label\":", output);
   write_json_string(output, recorder->label);
   fprintf(output,
-          ",\"captured\":%zu,\"dropped\":%" PRIu64
+          ",\"captured\":%zu,\"dropped\":%" PRIu64 ",\"saturated\":%" PRIu64
           ",\"stalls\":[%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 "]"
           ",\"records\":[",
-          recorder->count, recorder->dropped,
+          recorder->count, recorder->dropped, recorder->saturated_records,
           stalls[0], stalls[1], stalls[2], stalls[3], stalls[4]);
 
   for (size_t index = 0; index < recorder->count; index++) {
@@ -207,9 +208,9 @@ static int write_document(
     pipeline_html_compute_intervals(record->commit_cycle, record->stage, intervals);
     if (index != 0) fputc(',', output);
     fprintf(output,
-            "{\"n\":%" PRIu64 ",\"pc\":\"0x%016" PRIx64
+            "{\"n\":%" PRIu64 ",\"pc\":\"0x%08" PRIx32
             "\",\"inst\":\"0x%08" PRIx32 "\",\"asm\":",
-            record->sequence, record->pc, record->instruction);
+            record->sequence, (uint32_t)record->pc, record->instruction);
     write_json_string(output, record->disassembly);
     fprintf(output, ",\"commit\":%" PRIu64 ",\"d\":[", record->commit_cycle);
     for (size_t stage = 0; stage < PIPELINE_HTML_STAGE_COUNT; stage++) {
@@ -226,7 +227,7 @@ static int write_document(
       "]};const names=['IF','ID','EX','MEM','WB'];const colors=['var(--if)','var(--id)','var(--ex)','var(--mem)','var(--wb)'];"
       "let page=0,filtered=trace.records;const viewport=document.querySelector('.viewport'),hscroll=document.querySelector('#hscroll'),hscrollThumb=document.querySelector('#hscrollThumb'),rows=document.querySelector('#rows'),search=document.querySelector('#search'),size=document.querySelector('#pageSize'),zoom=document.querySelector('#zoom');"
       "const total=trace.captured+trace.dropped;document.querySelector('#summary').textContent=`${trace.label} · 提交 ${total.toLocaleString()} 条 · 记录 ${trace.captured.toLocaleString()} 条 · 背压周期 IF/ID/EX/MEM=${trace.stalls.slice(0,4).join('/')} · flush=${trace.stalls[4]}`;"
-      "if(trace.dropped){const w=document.querySelector('#warning');w.hidden=false;w.textContent=`已达到 200000 条记录上限，后续 ${trace.dropped.toLocaleString()} 条提交未写入时间线。统计仍包含全部提交。`}"
+      "if(trace.dropped||trace.saturated){const w=document.querySelector('#warning');w.hidden=false;w.textContent=`${trace.dropped?`后续 ${trace.dropped.toLocaleString()} 条提交未写入时间线。`:''}${trace.saturated?` ${trace.saturated.toLocaleString()} 条记录的阶段驻留达到 65535，显示值为下界。`:''}`}"
       "function render(){const count=+size.value,pages=Math.max(1,Math.ceil(filtered.length/count));page=Math.min(page,pages-1);const part=filtered.slice(page*count,(page+1)*count);rows.textContent='';"
       "if(!part.length){viewport.style.setProperty('--timeline-width','640px');rows.innerHTML='<div class=\"empty\">没有匹配的已提交指令。</div>';}else{const min=Math.min(...part.map(r=>r.s[0])),max=Math.max(...part.map(r=>r.commit));const cell=+zoom.value,timelineWidth=Math.max(640,(max-min+1)*cell);viewport.style.setProperty('--timeline-width',timelineWidth+'px');"
       "for(const r of part){const row=document.createElement('div');row.className='row';for(const value of [r.n,r.pc,r.inst,r.asm]){const m=document.createElement('div');m.className='meta';m.textContent=value;m.title=String(value);row.appendChild(m);}"
@@ -253,16 +254,16 @@ static int write_instruction_document(FILE *output, const PipelineHtmlRecorder *
   fputs(prefix, output);
   fputs("{\"label\":", output);
   write_json_string(output, recorder->label);
-  fprintf(output, ",\"captured\":%zu,\"dropped\":%" PRIu64 ",\"records\":[",
-          recorder->count, recorder->dropped);
+  fprintf(output, ",\"captured\":%zu,\"dropped\":%" PRIu64 ",\"saturated\":%" PRIu64 ",\"records\":[",
+          recorder->count, recorder->dropped, recorder->saturated_records);
   for (size_t index = 0; index < recorder->count; index++) {
     const PipelineHtmlRecord *record = &recorder->records[index];
     PipelineHtmlInterval intervals[PIPELINE_HTML_STAGE_COUNT];
     pipeline_html_compute_intervals(record->commit_cycle, record->stage, intervals);
     if (index != 0) fputc(',', output);
-    fprintf(output, "{\"n\":%" PRIu64 ",\"pc\":\"0x%016" PRIx64
+    fprintf(output, "{\"n\":%" PRIu64 ",\"pc\":\"0x%08" PRIx32
                     "\",\"inst\":\"0x%08" PRIx32 "\",\"asm\":",
-            record->sequence, record->pc, record->instruction);
+            record->sequence, (uint32_t)record->pc, record->instruction);
     write_json_string(output, record->disassembly);
     fprintf(output, ",\"commit\":%" PRIu64 ",\"d\":[", record->commit_cycle);
     for (size_t stage = 0; stage < PIPELINE_HTML_STAGE_COUNT; stage++) {
@@ -275,7 +276,7 @@ static int write_instruction_document(FILE *output, const PipelineHtmlRecorder *
     fputs("]}", output);
   }
   static const char *suffix =
-      "]};let page=0,filtered=trace.records;const rows=document.querySelector('#rows'),search=document.querySelector('#search'),size=document.querySelector('#pageSize');const total=trace.captured+trace.dropped;document.querySelector('#summary').textContent=`${trace.label} · 提交 ${total.toLocaleString()} 条 · 逐条记录 ${trace.captured.toLocaleString()} 条`;if(trace.dropped){const warning=document.querySelector('#warning');warning.hidden=false;warning.textContent=`已达到 200000 条记录上限，后续 ${trace.dropped.toLocaleString()} 条提交仅计入汇总。`}function render(){const count=+size.value,pages=Math.max(1,Math.ceil(filtered.length/count));page=Math.min(page,pages-1);rows.textContent='';for(const r of filtered.slice(page*count,(page+1)*count)){const tr=document.createElement('tr'),values=[r.n,r.pc,r.inst,r.asm,r.commit,...r.d,r.d.reduce((a,b)=>a+b,0)];values.forEach((value,index)=>{const td=document.createElement('td');td.textContent=value;if(index>=5&&index<=9){const stage=index-5,end=r.s[stage]+r.d[stage]-1;td.title=`周期 ${r.s[stage]}–${end}`}tr.appendChild(td)});rows.appendChild(tr)}if(!rows.children.length){const td=document.createElement('td');td.colSpan=11;td.className='empty';td.textContent='没有匹配的已提交指令。';const tr=document.createElement('tr');tr.appendChild(td);rows.appendChild(tr)}document.querySelector('#page').textContent=`第 ${page+1}/${pages} 页，共 ${filtered.length.toLocaleString()} 条`;document.querySelector('#prev').disabled=page===0;document.querySelector('#next').disabled=page>=pages-1}function filter(){const query=search.value.trim().toLowerCase();filtered=query?trace.records.filter(r=>String(r.n).includes(query)||r.pc.toLowerCase().includes(query)||r.inst.toLowerCase().includes(query)||r.asm.toLowerCase().includes(query)):trace.records;page=0;render()}search.addEventListener('input',filter);size.addEventListener('change',()=>{page=0;render()});document.querySelector('#prev').onclick=()=>{page--;render()};document.querySelector('#next').onclick=()=>{page++;render()};render();</script></main></body></html>";
+      "]};let page=0,filtered=trace.records;const rows=document.querySelector('#rows'),search=document.querySelector('#search'),size=document.querySelector('#pageSize');const total=trace.captured+trace.dropped;document.querySelector('#summary').textContent=`${trace.label} · 提交 ${total.toLocaleString()} 条 · 逐条记录 ${trace.captured.toLocaleString()} 条`;if(trace.dropped||trace.saturated){const warning=document.querySelector('#warning');warning.hidden=false;warning.textContent=`${trace.dropped?`后续 ${trace.dropped.toLocaleString()} 条提交仅计入汇总。`:''}${trace.saturated?` ${trace.saturated.toLocaleString()} 条记录的 65535 阶段值为下界。`:''}`}function render(){const count=+size.value,pages=Math.max(1,Math.ceil(filtered.length/count));page=Math.min(page,pages-1);rows.textContent='';for(const r of filtered.slice(page*count,(page+1)*count)){const tr=document.createElement('tr'),values=[r.n,r.pc,r.inst,r.asm,r.commit,...r.d,r.d.reduce((a,b)=>a+b,0)];values.forEach((value,index)=>{const td=document.createElement('td');td.textContent=value;if(index>=5&&index<=9){const stage=index-5,end=r.s[stage]+r.d[stage]-1;td.title=`周期 ${r.s[stage]}–${end}`}tr.appendChild(td)});rows.appendChild(tr)}if(!rows.children.length){const td=document.createElement('td');td.colSpan=11;td.className='empty';td.textContent='没有匹配的已提交指令。';const tr=document.createElement('tr');tr.appendChild(td);rows.appendChild(tr)}document.querySelector('#page').textContent=`第 ${page+1}/${pages} 页，共 ${filtered.length.toLocaleString()} 条`;document.querySelector('#prev').disabled=page===0;document.querySelector('#next').disabled=page>=pages-1}function filter(){const query=search.value.trim().toLowerCase();filtered=query?trace.records.filter(r=>String(r.n).includes(query)||r.pc.toLowerCase().includes(query)||r.inst.toLowerCase().includes(query)||r.asm.toLowerCase().includes(query)):trace.records;page=0;render()}search.addEventListener('input',filter);size.addEventListener('change',()=>{page=0;render()});document.querySelector('#prev').onclick=()=>{page--;render()};document.querySelector('#next').onclick=()=>{page++;render()};render();</script></main></body></html>";
   fputs(suffix, output);
   return ferror(output) ? -1 : 0;
 }
@@ -377,6 +378,23 @@ void npc_pipeline_html_record(
   if (global_recorder == NULL) npc_pipeline_html_init();
   pipeline_html_record(global_recorder, sequence, pc, instruction,
                        disassembly, commit_cycle, stage_cycles);
+}
+
+void npc_pipeline_html_record_hardware(
+    uint64_t sequence,
+    uint64_t pc,
+    uint32_t instruction,
+    const char *disassembly,
+    uint64_t commit_cycle,
+    const uint64_t stage_cycles[PIPELINE_HTML_STAGE_COUNT],
+    uint8_t saturation) {
+  if (global_recorder == NULL) npc_pipeline_html_init();
+  if (global_recorder == NULL) return;
+  const size_t captured_before = global_recorder->count;
+  pipeline_html_record(global_recorder, sequence, pc, instruction,
+                       disassembly, commit_cycle, stage_cycles);
+  if (global_recorder->count != captured_before && saturation != 0)
+    global_recorder->saturated_records++;
 }
 
 void npc_pipeline_html_set_dropped(uint64_t dropped) {

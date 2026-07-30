@@ -10,6 +10,11 @@ class SimulationConfig extends ConstructionConfig(
   new SimulationCoreConfig
 ) with LocalNpcTerminal with NemuSimulationIpTerminal
 
+/** 显式启用教学 I$/D$ 与四项顺序取指缓冲的本地仿真终端。 */
+class CacheSimulationConfig extends ConstructionConfig(
+  new CacheSimulationCoreConfig
+) with LocalNpcTerminal with NemuSimulationIpTerminal
+
 /** 启用流水线的 NPC 本地仿真终端。 */
 class PipelineSimulationConfig extends ConstructionConfig(
   new PipelineSimulationCoreConfig

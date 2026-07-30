@@ -25,6 +25,7 @@ class Zcu102BoardConfig extends CDEConfig(
     new WithFpgaPlatformConfig(FpgaPlatformSettings(
       board = FpgaBoard.Zcu102,
       clockMHz = 300,
+      platformClockMHz = 300,
       memoryHostBase = 0x70000000L,
       controlBase = 0xa0000000L,
       mailboxBase = 0xa0010000L

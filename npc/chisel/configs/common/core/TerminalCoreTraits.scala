@@ -11,9 +11,11 @@ trait U55cFpgaTerminalCore extends FpgaConstruction with MakeTerminal {
   override protected def configuredFpga: FpgaToolchainConfig = FpgaToolchainConfig.U55cBase
 }
 
-/** U55C v12 trace 的主机报告配方；硬件 trace 仍由板级 CDE Config 选择。 */
-trait U55cRuntimeTraceFpgaTerminalCore extends U55cFpgaTerminalCore {
-  override protected def configuredNemu: NemuHostConfig = NemuHostConfig.U55cRuntimeTrace
+/** Batch-only U55C hardware performance-monitor construction. */
+trait U55cPerformanceMonitorFpgaTerminalCore extends FpgaConstruction with MakeTerminal {
+  override protected def configuredNemu: NemuHostConfig = NemuHostConfig.U55cPerformanceMonitor
+  override protected def configuredFpga: FpgaToolchainConfig = FpgaToolchainConfig.U55cBase
+  override protected def configuredCapability: String = "batch"
 }
 
 /** ZCU102 终端直接包含的 FPGA 运行集群。 */

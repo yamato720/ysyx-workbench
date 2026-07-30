@@ -22,6 +22,7 @@ class NpcCore(
   private val pipelineConfig = config.pipeline
   private val debugEnabled = config.debug.enableTopDebugIo
   private val axiConfig = config.axi
+  private val cacheConfig = config.cache
 
   require(axiConfig.addrWidth == 32,
     s"NpcCore currently uses a 32-bit physical address path, got ${axiConfig.addrWidth}")
@@ -31,6 +32,8 @@ class NpcCore(
     "PipelineConfig(enablePipeline = true) requires enableInterlock for unavailable load and serial results")
   require(!components.exposesDispatchControl(config) || config.debug.enableDispatchControl,
     s"${components.name} component requires DebugConfig(enableDispatchControl = true)")
+  require(!cacheConfig.usesUram || components.supportsUram,
+    "CacheStorage.Uram is only valid for an FPGA construction")
 
   val io = IO(new Bundle {
     val interrupt = Input(Bool())
@@ -41,6 +44,9 @@ class NpcCore(
       Some(Output(new NpcCoreDebugBundle(cfg, axiConfig.addrWidth, axiConfig.dataWidth)))
     } else None
     val dispatchControl = if (components.exposesDispatchControl(config)) Some(new NpcDispatchControlPort) else None
+    val cacheMaintenance = if (cacheConfig.dcache.enabled && components.exposesDispatchControl(config)) {
+      Some(new NpcCacheMaintenancePort)
+    } else None
   })
 
   val frontend = Module(new NpcFrontend(config))
@@ -49,18 +55,74 @@ class NpcCore(
 
   frontend.io.redirectValid := backend.io.redirectValid
   frontend.io.redirectTarget := backend.io.redirectTarget
-  io.dispatchControl match {
-    case Some(control) =>
-      backend.io.dispatch.valid := frontend.io.dispatch.valid && control.dispatchPermit
-      backend.io.dispatch.bits := frontend.io.dispatch.bits
-      frontend.io.dispatch.ready := backend.io.dispatch.ready && control.dispatchPermit
-      control.dispatchFire := backend.io.dispatch.fire
-    case None => backend.io.dispatch <> frontend.io.dispatch
-  }
+  val fenceHold = WireDefault(false.B)
+  frontend.io.fenceHold := fenceHold
+  val externalDispatchPermit = WireDefault(true.B)
+  io.dispatchControl.foreach(control => externalDispatchPermit := control.dispatchPermit)
+  val maintenanceDispatchPermit = WireDefault(true.B)
+  val fenceIPending = frontend.io.dispatch.valid && config.isa.Zifencei.B &&
+    Instructions.FENCE_I.matches(frontend.io.dispatch.bits.instruction)
+  val fencePending = frontend.io.dispatch.valid &&
+    Instructions.FENCE.matches(frontend.io.dispatch.bits.instruction)
+  val cacheFencePending = fencePending || fenceIPending
+  backend.io.dispatch.valid := frontend.io.dispatch.valid && externalDispatchPermit && maintenanceDispatchPermit
+  backend.io.dispatch.bits := frontend.io.dispatch.bits
+  frontend.io.dispatch.ready := backend.io.dispatch.ready && externalDispatchPermit && maintenanceDispatchPermit
+  io.dispatchControl.foreach(_.dispatchFire := backend.io.dispatch.fire)
   backend.io.interrupt := io.interrupt
   backend.io.interruptPc := frontend.io.interruptPc
-  frontend.io.axi <> memoryFabric.io.instruction
-  backend.io.axi <> memoryFabric.io.data
+
+  val instructionCacheStatistics = WireDefault(0.U.asTypeOf(new CacheStatistics))
+  val dataCacheStatistics = WireDefault(0.U.asTypeOf(new CacheStatistics))
+  val instructionInvalidate = WireDefault(false.B)
+  val instructionInvalidateDone = WireDefault(true.B)
+  val dataFlush = WireDefault(false.B)
+  val dataFlushDone = WireDefault(true.B)
+  val dataCacheDrained = WireDefault(true.B)
+
+  if (cacheConfig.icache.enabled) {
+    val instructionCache = Module(new InstructionCache(config))
+    frontend.io.axi <> instructionCache.io.cpu
+    instructionCache.io.memory <> memoryFabric.io.instruction
+    instructionCache.io.invalidate := instructionInvalidate
+    instructionInvalidateDone := instructionCache.io.invalidateDone
+    instructionCacheStatistics := instructionCache.io.statistics
+  } else {
+    frontend.io.axi <> memoryFabric.io.instruction
+  }
+
+  if (cacheConfig.dcache.enabled) {
+    val dataCache = Module(new DataCache(config))
+    backend.io.axi <> dataCache.io.cpu
+    dataCache.io.memory <> memoryFabric.io.data
+    dataCache.io.flush := dataFlush
+    dataFlushDone := dataCache.io.flushDone
+    dataCacheDrained := dataCache.io.drained
+    dataCacheStatistics := dataCache.io.statistics
+  } else {
+    backend.io.axi <> memoryFabric.io.data
+  }
+
+  if (cacheConfig.enabled) {
+    val maintenance = Module(new CacheMaintenanceController(
+      cacheConfig.icache.enabled, cacheConfig.dcache.enabled))
+    maintenance.io.fencePending := cacheFencePending
+    maintenance.io.fenceInvalidatesInstruction := fenceIPending
+    maintenance.io.fenceAccepted := backend.io.dispatch.fire && cacheFencePending
+    maintenance.io.backendBusy := backend.io.debug.coreBusy
+    maintenance.io.externalDrainRequest := io.cacheMaintenance.map(_.drainRequest).getOrElse(false.B)
+    maintenance.io.dcacheFlushDone := dataFlushDone
+    maintenance.io.icacheInvalidateDone := instructionInvalidateDone
+    dataFlush := maintenance.io.dcacheFlush
+    instructionInvalidate := maintenance.io.icacheInvalidate
+    maintenanceDispatchPermit := maintenance.io.dispatchPermit
+    // FENCE orders data visibility but leaves prefetched instructions intact.
+    // Only FENCE.I must discard those younger fetches before I$ invalidation.
+    fenceHold := fenceIPending && !maintenance.io.dispatchPermit
+    io.cacheMaintenance.foreach(_.drained := maintenance.io.externalDrained)
+  } else {
+    io.cacheMaintenance.foreach(_.drained := true.B)
+  }
   io.master <> memoryFabric.io.master
 
   // 后端故障优先，因为它携带了已提交到 MEM 阶段的指令访问。
@@ -123,5 +185,8 @@ class NpcCore(
     debug.master.rValid := io.master.r.valid
     debug.master.rReady := io.master.r.ready
     debug.master.rData := io.master.r.bits.data
+    debug.cache.instruction := instructionCacheStatistics
+    debug.cache.data := dataCacheStatistics
+    debug.cache.drained := dataCacheDrained
   }
 }

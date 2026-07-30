@@ -26,7 +26,7 @@ object ConfigCatalogGenerator {
     "LocalNpcTerminal" -> ("npc", "NPC"),
     "LocalSocTerminal" -> ("soc", "SOC"),
     "U55cNpcTerminal" -> ("fpga", "NPC"),
-    "U55cDebugNpcTerminal" -> ("fpga", "NPC"),
+    "U55cNpcPerformanceMonitorTerminal" -> ("fpga", "NPC"),
     "U55cSocTerminal" -> ("fpga", "SOC"),
     "Zcu102NpcTerminal" -> ("fpga", "NPC"),
     "Zcu102SocTerminal" -> ("fpga", "SOC")

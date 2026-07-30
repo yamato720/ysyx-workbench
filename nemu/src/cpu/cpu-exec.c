@@ -20,6 +20,7 @@
 #include <locale.h>
 #include <errno.h>
 #include <signal.h>
+#include <stdlib.h>
 #include <unistd.h>
 #ifdef CONFIG_NPC_PERFORMANCE_HTML
 #include <pipeline-html.h>
@@ -53,6 +54,10 @@ extern uint32_t npc_get_last_store_strobe(void);
 extern uint32_t npc_get_last_store_word_bytes(void);
 extern uint64_t npc_get_cycle_count();
 extern uint64_t npc_get_commit_count();
+extern uint64_t npc_get_cache_counter(uint32_t cache, uint32_t counter)
+  __attribute__((weak));
+extern uint32_t npc_get_cache_configuration(uint32_t cache, uint32_t field)
+  __attribute__((weak));
 extern uint32_t npc_get_backpressure_reasons();
 extern uint32_t npc_get_pipeline_features();
 extern uint64_t npc_get_pipeline_stall_count(uint32_t counter);
@@ -90,7 +95,10 @@ static int current_id = 0;
 void device_update();
 
 #ifdef NPC
-static const double npc_clock_mhz = 300.0;
+#ifndef NPC_CLOCK_MHZ
+#define NPC_CLOCK_MHZ 300
+#endif
+static const double npc_clock_mhz = (double)NPC_CLOCK_MHZ;
 
 enum {
   NPC_TIMING_NORMAL = 0,
@@ -141,6 +149,22 @@ enum {
   NPC_TIMING_MEM,
   NPC_TIMING_WB,
   NPC_TIMING_STAGE_COUNT,
+};
+
+enum {
+  NPC_CACHE_CONFIGURATION_ENABLED = 0,
+  NPC_CACHE_CONFIGURATION_CAPACITY_BYTES,
+  NPC_CACHE_CONFIGURATION_LINE_BYTES,
+  NPC_CACHE_CONFIGURATION_WAYS,
+  NPC_CACHE_CONFIGURATION_SETS,
+  NPC_CACHE_CONFIGURATION_MAPPING,
+  NPC_CACHE_CONFIGURATION_REPLACEMENT,
+  NPC_CACHE_CONFIGURATION_READ_MISS,
+  NPC_CACHE_CONFIGURATION_WRITE_POLICY,
+  NPC_CACHE_CONFIGURATION_WRITE_MISS,
+  NPC_CACHE_CONFIGURATION_STORAGE,
+  NPC_CACHE_CONFIGURATION_INSTRUCTION_BUFFER_ENABLED,
+  NPC_CACHE_CONFIGURATION_INSTRUCTION_BUFFER_ENTRIES,
 };
 
 static const char *npc_timing_class_names[NPC_TIMING_CLASS_COUNT] = {
@@ -196,11 +220,11 @@ static void npc_record_pipeline_html(
 
 #ifdef NPC_FPGA_REMOTE
 static int npc_import_fpga_trace_record(const struct npc_fpga_trace_record *record,
-                                        void *opaque) {
+                                        uint64_t sequence, void *opaque) {
   (void)opaque;
-  if (record == NULL || record->sequence <= npc_recorded_trace_sequence) return 0;
+  if (record == NULL || sequence <= npc_recorded_trace_sequence) return 0;
   if (npc_recorded_trace_sequence != 0 &&
-      record->sequence != npc_recorded_trace_sequence + 1) {
+      sequence != npc_recorded_trace_sequence + 1) {
     errno = EPROTO;
     return -1;
   }
@@ -214,14 +238,15 @@ static int npc_import_fpga_trace_record(const struct npc_fpga_trace_record *reco
   uint64_t stage[PIPELINE_HTML_STAGE_COUNT];
   for (uint32_t index = 0; index < PIPELINE_HTML_STAGE_COUNT; index++)
     stage[index] = record->stage[index];
-  npc_pipeline_html_record(record->sequence, record->pc, instruction,
-                           disassembly, record->commit_cycle, stage);
-  npc_recorded_trace_sequence = record->sequence;
+  npc_pipeline_html_record_hardware(sequence, record->pc, instruction,
+                                    disassembly, record->commit_cycle, stage,
+                                    record->saturation);
+  npc_recorded_trace_sequence = sequence;
   npc_last_instruction = (NPCInstructionTiming) {
     .cycles_before = 0,
     .cycles_after = record->commit_cycle,
-    .commits_before = record->sequence - 1,
-    .commits_after = record->sequence,
+    .commits_before = sequence - 1,
+    .commits_after = sequence,
     .pc = record->pc,
     .inst = instruction,
     .valid = true,
@@ -425,7 +450,12 @@ static void npc_print_pipeline_timing(const char *mode) {
   }
   printf("+------------+-------+---------+---------+---------+---------+---------+-----------+-----------+\n");
 
-  printf("[%s] latest committed sample for each observed load/store/M operation\n", mode);
+#ifdef NPC_FPGA_REMOTE
+  if (npc_runtime_trace_dropped() != 0)
+    printf("[%s] latest captured prefix sample for each observed load/store/M operation\n", mode);
+  else
+#endif
+    printf("[%s] latest committed sample for each observed load/store/M operation\n", mode);
   printf("+------------+-------+------------+------------+------+------+------+------+------+-------+\n");
   printf("| class      | count | pc         | instruction| IF   | ID   | EX   | MEM  | WB   | %s |\n",
          npc_pipeline_enabled() ? "latency" : "total  ");
@@ -454,6 +484,116 @@ static void npc_print_pipeline_timing(const char *mode) {
 
 #ifdef CONFIG_NPC_PERFORMANCE_HTML
 static bool npc_performance_html_finished;
+
+#ifdef CONFIG_NPC_CACHE_HTML
+#ifdef NPC_FPGA_REMOTE
+static const char *npc_cache_mapping_name(uint32_t value) {
+  static const char *names[] = {"direct", "set-associative", "fully-associative"};
+  return value < sizeof(names) / sizeof(names[0]) ? names[value] : "unknown";
+}
+
+static const char *npc_cache_replacement_name(uint32_t value) {
+  static const char *names[] = {"LRU", "Tree-PLRU", "FIFO", "Random (deterministic)"};
+  return value < sizeof(names) / sizeof(names[0]) ? names[value] : "unknown";
+}
+
+static const char *npc_cache_binary_policy_name(uint32_t value, const char *zero, const char *one) {
+  return value == 0 ? zero : value == 1 ? one : "unknown";
+}
+
+static const char *npc_cache_storage_name(uint32_t value) {
+  static const char *names[] = {"auto", "registers", "URAM"};
+  return value < sizeof(names) / sizeof(names[0]) ? names[value] : "unknown";
+}
+#endif
+
+static uint32_t npc_cache_environment_u32(const char *name) {
+  const char *text = getenv(name);
+  if (text == NULL || *text == '\0') return 0;
+  char *end = NULL;
+  errno = 0;
+  const unsigned long value = strtoul(text, &end, 0);
+  return errno == 0 && end != text && *end == '\0' && value <= UINT32_MAX
+      ? (uint32_t)value : 0;
+}
+
+static bool npc_fill_cache_configuration_from_profile(PerformanceHtmlReport *report) {
+  static const char *prefixes[] = {"NEMU_CACHE_ICACHE", "NEMU_CACHE_DCACHE"};
+  const char *enabled = getenv("NEMU_CACHE_ICACHE_ENABLED");
+  if (enabled == NULL) return false;
+  for (uint32_t cache = 0; cache < PERFORMANCE_HTML_CACHE_COUNT; cache++) {
+    PerformanceHtmlCacheConfiguration *configuration = &report->cache_configuration[cache];
+    char name[96];
+#define CACHE_PROFILE_VALUE(suffix) \
+    (snprintf(name, sizeof(name), "%s_%s", prefixes[cache], suffix), getenv(name))
+    configuration->enabled = npc_cache_environment_u32(
+        (snprintf(name, sizeof(name), "%s_ENABLED", prefixes[cache]), name)) != 0;
+    configuration->capacity_bytes = npc_cache_environment_u32(
+        (snprintf(name, sizeof(name), "%s_CAPACITY_BYTES", prefixes[cache]), name));
+    configuration->line_bytes = npc_cache_environment_u32(
+        (snprintf(name, sizeof(name), "%s_LINE_BYTES", prefixes[cache]), name));
+    configuration->ways = npc_cache_environment_u32(
+        (snprintf(name, sizeof(name), "%s_WAYS", prefixes[cache]), name));
+    configuration->sets = npc_cache_environment_u32(
+        (snprintf(name, sizeof(name), "%s_SETS", prefixes[cache]), name));
+    configuration->mapping = CACHE_PROFILE_VALUE("MAPPING");
+    configuration->replacement = CACHE_PROFILE_VALUE("REPLACEMENT");
+    configuration->read_miss = CACHE_PROFILE_VALUE("READ_MISS");
+    configuration->write_policy = CACHE_PROFILE_VALUE("WRITE_POLICY");
+    configuration->write_miss = CACHE_PROFILE_VALUE("WRITE_MISS");
+    configuration->storage = CACHE_PROFILE_VALUE("STORAGE");
+#undef CACHE_PROFILE_VALUE
+  }
+  report->instruction_buffer_enabled =
+      npc_cache_environment_u32("NEMU_CACHE_INSTRUCTION_BUFFER_ENABLED") != 0;
+  report->instruction_buffer_entries =
+      npc_cache_environment_u32("NEMU_CACHE_INSTRUCTION_BUFFER_ENTRIES");
+  return true;
+}
+
+#ifdef NPC_FPGA_REMOTE
+static bool npc_fill_cache_configuration_from_hardware(PerformanceHtmlReport *report) {
+  if (npc_get_cache_configuration == NULL) return false;
+  bool available = false;
+  for (uint32_t cache = 0; cache < PERFORMANCE_HTML_CACHE_COUNT; cache++) {
+    PerformanceHtmlCacheConfiguration *configuration = &report->cache_configuration[cache];
+    configuration->enabled = npc_get_cache_configuration(cache, NPC_CACHE_CONFIGURATION_ENABLED) != 0;
+    configuration->capacity_bytes = npc_get_cache_configuration(cache, NPC_CACHE_CONFIGURATION_CAPACITY_BYTES);
+    configuration->line_bytes = npc_get_cache_configuration(cache, NPC_CACHE_CONFIGURATION_LINE_BYTES);
+    configuration->ways = npc_get_cache_configuration(cache, NPC_CACHE_CONFIGURATION_WAYS);
+    configuration->sets = npc_get_cache_configuration(cache, NPC_CACHE_CONFIGURATION_SETS);
+    configuration->mapping = npc_cache_mapping_name(
+        npc_get_cache_configuration(cache, NPC_CACHE_CONFIGURATION_MAPPING));
+    configuration->replacement = npc_cache_replacement_name(
+        npc_get_cache_configuration(cache, NPC_CACHE_CONFIGURATION_REPLACEMENT));
+    configuration->read_miss = npc_cache_binary_policy_name(
+        npc_get_cache_configuration(cache, NPC_CACHE_CONFIGURATION_READ_MISS), "read-allocate", "read-bypass");
+    configuration->write_policy = npc_cache_binary_policy_name(
+        npc_get_cache_configuration(cache, NPC_CACHE_CONFIGURATION_WRITE_POLICY), "write-back", "write-through");
+    configuration->write_miss = npc_cache_binary_policy_name(
+        npc_get_cache_configuration(cache, NPC_CACHE_CONFIGURATION_WRITE_MISS), "write-allocate", "no-write-allocate");
+    configuration->storage = npc_cache_storage_name(
+        npc_get_cache_configuration(cache, NPC_CACHE_CONFIGURATION_STORAGE));
+    available |= configuration->enabled;
+  }
+  report->instruction_buffer_enabled = npc_get_cache_configuration(
+      0, NPC_CACHE_CONFIGURATION_INSTRUCTION_BUFFER_ENABLED) != 0;
+  report->instruction_buffer_entries = npc_get_cache_configuration(
+      0, NPC_CACHE_CONFIGURATION_INSTRUCTION_BUFFER_ENTRIES);
+  return available;
+}
+#endif
+
+static void npc_fill_cache_configuration(PerformanceHtmlReport *report) {
+#ifdef NPC_FPGA_REMOTE
+  if (npc_fill_cache_configuration_from_hardware(report)) {
+    report->cache_configuration_available = true;
+    return;
+  }
+#endif
+  report->cache_configuration_available = npc_fill_cache_configuration_from_profile(report);
+}
+#endif
 
 static void npc_finish_performance_html(void) {
   if (npc_performance_html_finished) return;
@@ -515,6 +655,8 @@ static void npc_finish_performance_html(void) {
     .monitoring_available = npc_monitoring_available(),
 #ifdef NPC_FPGA_REMOTE
     .trace_dropped = npc_runtime_trace_dropped(),
+    .trace_saturated_records = npc_runtime_trace_saturated_records(),
+    .latest_samples_are_trace_prefix = npc_runtime_trace_dropped() != 0,
 #endif
     .pipeline_features = npc_get_pipeline_features(),
     .last_commit_valid = npc_last_instruction.valid,
@@ -532,6 +674,20 @@ static void npc_finish_performance_html(void) {
   for (uint32_t index = 0; index < NPC_PIPELINE_STALL_COUNT; index++) {
     report.stalls[index] = npc_get_pipeline_stall_count(index);
   }
+#ifdef CONFIG_NPC_CACHE_HTML
+  npc_fill_cache_configuration(&report);
+  if (npc_get_cache_counter != NULL) {
+    for (uint32_t cache = 0; cache < PERFORMANCE_HTML_CACHE_COUNT; cache++) {
+      for (uint32_t counter = 0; counter < PERFORMANCE_HTML_CACHE_COUNTER_COUNT; counter++) {
+        report.cache[cache][counter] = npc_get_cache_counter(cache, counter);
+        report.cache_statistics_available |= report.cache[cache][counter] != 0;
+      }
+    }
+  }
+  for (uint32_t cache = 0; cache < PERFORMANCE_HTML_CACHE_COUNT; cache++) {
+    report.cache_statistics_available |= report.cache_configuration[cache].enabled;
+  }
+#endif
   for (uint32_t stage = 0; stage < NPC_TIMING_STAGE_COUNT; stage++) {
     report.last_stage[stage] = npc_get_last_timing_stage_cycles(stage);
   }
@@ -542,11 +698,26 @@ static void npc_finish_performance_html(void) {
   char *path = malloc(path_size);
   char *instructions_path = malloc(strlen(base) + sizeof("/instructions.html"));
   char *pipeline_path = malloc(strlen(base) + sizeof("/pipeline.html"));
-  if (path == NULL || instructions_path == NULL || pipeline_path == NULL) {
+  char *cache_path = NULL;
+#ifdef CONFIG_NPC_CACHE_HTML
+  bool cache_enabled = false;
+  for (uint32_t cache = 0; cache < PERFORMANCE_HTML_CACHE_COUNT; cache++) {
+    cache_enabled |= report.cache_configuration[cache].enabled;
+  }
+  if (cache_enabled) cache_path = malloc(strlen(base) + sizeof("/cache.html"));
+#endif
+  if (path == NULL || instructions_path == NULL || pipeline_path == NULL ||
+#ifdef CONFIG_NPC_CACHE_HTML
+      (cache_enabled && cache_path == NULL)
+#else
+      false
+#endif
+  ) {
     fprintf(stderr, "无法分配 NEMU 性能 HTML 路径\n");
     free(path);
     free(instructions_path);
     free(pipeline_path);
+    free(cache_path);
     return;
   }
   snprintf(path, path_size, "%s/performance.html", base);
@@ -556,6 +727,19 @@ static void npc_finish_performance_html(void) {
   report.pipeline_html_available = access(pipeline_path, R_OK) == 0;
   free(instructions_path);
   free(pipeline_path);
+
+#ifdef CONFIG_NPC_CACHE_HTML
+  if (cache_path != NULL) {
+    snprintf(cache_path, strlen(base) + sizeof("/cache.html"), "%s/cache.html", base);
+    if (performance_html_write_cache(cache_path, &report) == 0) {
+      report.cache_html_available = true;
+      printf("NEMU 缓存 HTML：%s\n", cache_path);
+    } else {
+      fprintf(stderr, "写入 NEMU 缓存 HTML 失败：%s（%s）\n", cache_path, strerror(errno));
+    }
+  }
+#endif
+  free(cache_path);
 
   if (performance_html_write(path, &report) == 0) {
     printf("NEMU 性能 HTML：%s\n", path);
@@ -577,8 +761,8 @@ void npc_print_performance(void) {
 #endif
 
   if (!npc_monitoring_available()) {
-    printf("[%s] hardware monitoring is unavailable: this xclbin has no U55C v12 trace capability. "
-           "Rebuild U55cRv64Npc300MHzDebugFpgaConfig for pipeline and timing statistics.\n", mode);
+    printf("[%s] hardware performance monitoring is unavailable: this xclbin does not expose the U55C v13 performance-monitor ABI.\n",
+           mode);
     printf("[%s] mailbox counters: cycles=%" PRIu64 ", commits=%" PRIu64 "\n",
            mode, cycles, commits);
     return;
@@ -799,7 +983,7 @@ static void exec_once(Decode *s, vaddr_t pc) {
       const uint64_t value_mask = access_bytes == 8 ? UINT64_MAX :
         ((UINT64_C(1) << (access_bytes * 8)) - 1);
       const uint64_t source = reference_opcode == 0x27 ? cpu.fpr[rs2] : cpu.gpr[rs2];
-      expected_store_address = store_address & ~(uint64_t)(expected_store_word_bytes - 1);
+      expected_store_address = store_address;
       expected_store_strobe = ((1u << access_bytes) - 1) << byte_offset;
       expected_store_data = (source & value_mask) << (byte_offset * 8);
       compare_store = in_pmem(store_address);

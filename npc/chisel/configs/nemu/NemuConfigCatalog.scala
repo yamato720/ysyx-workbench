@@ -15,6 +15,7 @@ object DescribeNemuConfigCatalog extends App {
       s"watchpoint=${bit(settings.watchpoint)}",
       s"vcd=${bit(settings.vcd)}",
       s"performance-html=${bit(settings.performanceHtml)}",
+      s"cache-html=${bit(settings.cacheHtml)}",
       s"pipeline-html=${bit(settings.pipelineHtml)}",
       s"software-difftest=${bit(settings.softwareDifftest)}",
       s"devices=${bit(settings.devices)}",

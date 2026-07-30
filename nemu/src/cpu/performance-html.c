@@ -140,12 +140,16 @@ static int write_document(FILE *output, const PerformanceHtmlReport *report) {
   } else {
     write_metric(output, "仿真速度", "N/A", "小于 1 us");
   }
+  fputs("</div></section>", output);
+  if (report->cache_html_available) {
+    fputs("<section class=\"actions\"><a href=\"cache.html\" target=\"_blank\" rel=\"noopener\">查看缓存报告</a></section>", output);
+  }
   if (!report->monitoring_available) {
-    fputs("</div></section><section><h2>硬件监测</h2><p class=\"muted\">当前 FPGA xclbin 未启用 U55C v12 runtime trace；流水停顿、分类时序和逐指令报告不可用。请使用 U55cRv64Npc300MHzDebugFpgaConfig 重新构建硬件。</p></section></main><footer>当前页面仅显示 mailbox 可读取的执行计数；未生成零值流水统计。</footer></body></html>", output);
+    fputs("<section><h2>硬件监测</h2><p class=\"muted\">当前 FPGA xclbin 未启用 U55C v13 performance-monitor；流水停顿、分类时序和逐指令报告不可用。请使用 U55cRv64Npc300MHzPerformanceMonitorFpgaConfig 重建硬件。</p></section></main><footer>当前页面仅显示 mailbox 可读取的执行计数；未生成零值流水统计。</footer></body></html>", output);
     return ferror(output) ? -1 : 0;
   }
 
-  fputs("</div></section></main><div class=\"band\"><div class=\"band-inner\"><section><h2>流水与停顿</h2><div class=\"pipeline-meta\">", output);
+  fputs("</main><div class=\"band\"><div class=\"band-inner\"><section><h2>流水与停顿</h2><div class=\"pipeline-meta\">", output);
 
   const bool pipeline = (report->pipeline_features & 0x1u) != 0;
   fprintf(output, "<span class=\"badge\">流水线 %s</span>", pipeline ? "启用" : "关闭");
@@ -202,7 +206,9 @@ static int write_document(FILE *output, const PerformanceHtmlReport *report) {
     }
     fprintf(output, "<td>%.2f</td><td>%'" PRIu64 "</td></tr>", total_average, row->max_total);
   }
-  fputs("</tbody></table></div></section><section><h2>最近一次分类样本</h2><div class=\"table-wrap\"><table><thead><tr><th>类别</th><th>次数</th><th>PC</th><th>机器码</th><th>IF</th><th>ID</th><th>EX</th><th>MEM</th><th>WB</th><th>延迟</th></tr></thead><tbody>", output);
+  fputs("</tbody></table></div></section><section><h2>", output);
+  fputs(report->latest_samples_are_trace_prefix ? "分类 trace 前缀中的最近样本" : "最近一次分类样本", output);
+  fputs("</h2><div class=\"table-wrap\"><table><thead><tr><th>类别</th><th>次数</th><th>PC</th><th>机器码</th><th>IF</th><th>ID</th><th>EX</th><th>MEM</th><th>WB</th><th>延迟</th></tr></thead><tbody>", output);
   for (size_t row_index = 0; row_index < report->timing_row_count; row_index++) {
     const PerformanceHtmlTimingRow *row = &report->timing_rows[row_index];
     if (!row->detailed || row->count == 0) continue;
@@ -241,15 +247,112 @@ static int write_document(FILE *output, const PerformanceHtmlReport *report) {
   }
   if (report->trace_dropped != 0) {
     fprintf(output, "<p class=\"muted\">逐指令 trace 前缀已截断，后续 %'" PRIu64
-            " 条提交未写入 HBM；分类统计仍覆盖完整运行。</p>",
+            " 条提交未写入 HBM；分类统计仍覆盖完整运行，但分类样本表仅代表已保存前缀。</p>",
             report->trace_dropped);
+  }
+  if (report->trace_saturated_records != 0) {
+    fprintf(output, "<p class=\"muted\">%'" PRIu64
+            " 条 trace 记录的阶段驻留达到 65535 周期；这些字段在逐指令页面中是下界，不是精确值。</p>",
+            report->trace_saturated_records);
   }
   fputs("</section></main><footer>阶段表统计的是每条已提交指令的阶段驻留与端到端延迟；全局 CPI/IPC 由硬件总周期与提交总数计算。</footer>"
         "<script>const buttons=[...document.querySelectorAll('[data-filter]')],rows=[...document.querySelectorAll('#timingRows tr')];buttons.forEach(button=>button.onclick=()=>{buttons.forEach(item=>item.classList.toggle('active',item===button));const filter=button.dataset.filter;rows.forEach(row=>row.hidden=filter!=='all'&&row.dataset.group!==filter)})</script></body></html>", output);
   return ferror(output) ? -1 : 0;
 }
 
-int performance_html_write(const char *output_path, const PerformanceHtmlReport *report) {
+static int write_cache_document(FILE *output, const PerformanceHtmlReport *report) {
+  static const char *prefix =
+      "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">"
+      "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+      "<title>NEMU 缓存报告</title><style>"
+      ":root{color-scheme:light;--bg:#f4f6f8;--ink:#18222d;--muted:#63707d;--line:#d8dee5;--panel:#fff;--accent:#176b87}"
+      "*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 system-ui,sans-serif}"
+      "header{padding:22px max(20px,calc((100vw - 1240px)/2));background:#fff;border-bottom:1px solid var(--line)}"
+      "h1{margin:0;font-size:24px;letter-spacing:0}.subtitle{margin-top:5px;color:var(--muted)}"
+      "main{max-width:1240px;margin:0 auto;padding:18px 20px 34px}section{margin:0 0 24px}h2{font-size:17px;margin:0 0 10px}"
+      ".metrics{display:grid;grid-template-columns:repeat(4,minmax(145px,1fr));gap:8px}.metric{min-width:0;padding:12px 13px;background:var(--panel);border:1px solid var(--line);border-radius:6px}"
+      ".metric span,.metric small{display:block;color:var(--muted)}.metric strong{display:block;margin:5px 0 1px;font-size:22px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.metric small{font-size:12px}"
+      ".table-wrap{overflow:auto;border:1px solid var(--line);background:#fff}table{width:100%;border-collapse:collapse;white-space:nowrap}th,td{padding:8px 10px;border-bottom:1px solid #e7ebef;text-align:right}th{background:#edf1f4;color:#46525e;font-size:12px}th:first-child,td:first-child{text-align:left}tbody tr:hover{background:#f7fafc}.muted{color:var(--muted)}"
+      ".actions a{display:inline-flex;padding:7px 10px;border:1px solid #82919f;border-radius:4px;color:#155f78;background:#fff;text-decoration:none}footer{max-width:1240px;margin:auto;padding:0 20px 24px;color:var(--muted);font-size:12px}"
+      "@media(max-width:900px){.metrics{grid-template-columns:repeat(2,1fr)}}@media(max-width:520px){header,main,footer{padding-left:12px;padding-right:12px}.metrics{grid-template-columns:1fr}.metric strong{font-size:18px}}"
+      "</style></head><body><header><h1>NEMU 缓存报告</h1><div class=\"subtitle\"><span>";
+  static const char *cache_names[] = {"I$", "D$"};
+  static const char *counter_names[] = {"命中", "未命中", "填充", "写回", "替换"};
+
+  fputs(prefix, output);
+  write_html_string(output, report->label);
+  fputs("</span><span> · </span><span>", output);
+  write_html_string(output, report->mode);
+  fputs("</span></div></header><main>", output);
+
+  fputs("<section><h2>缓存配置</h2><div class=\"table-wrap\"><table><thead><tr>"
+        "<th>缓存</th><th>状态</th><th>容量</th><th>line</th><th>组 x 路</th>"
+        "<th>映射</th><th>替换</th><th>读未命中</th><th>写策略</th>"
+        "<th>写未命中</th><th>存储</th></tr></thead><tbody>", output);
+  for (size_t cache = 0; cache < PERFORMANCE_HTML_CACHE_COUNT; cache++) {
+    const PerformanceHtmlCacheConfiguration *configuration = &report->cache_configuration[cache];
+    char value[96];
+    fputs("<tr><td>", output); write_html_string(output, cache_names[cache]);
+    fputs("</td><td>", output); write_html_string(output,
+        configuration->enabled ? "启用" : "关闭");
+    if (configuration->enabled) {
+      snprintf(value, sizeof(value), "%'" PRIu32 " B", configuration->capacity_bytes);
+      fputs("</td><td>", output); write_html_string(output, value);
+      snprintf(value, sizeof(value), "%'" PRIu32 " B", configuration->line_bytes);
+      fputs("</td><td>", output); write_html_string(output, value);
+      snprintf(value, sizeof(value), "%'" PRIu32 " x %'" PRIu32,
+               configuration->sets, configuration->ways);
+      fputs("</td><td>", output); write_html_string(output, value);
+      fputs("</td><td>", output); write_html_string(output, configuration->mapping);
+      fputs("</td><td>", output); write_html_string(output, configuration->replacement);
+      fputs("</td><td>", output); write_html_string(output, configuration->read_miss);
+      fputs("</td><td>", output); write_html_string(output, configuration->write_policy);
+      fputs("</td><td>", output); write_html_string(output, configuration->write_miss);
+      fputs("</td><td>", output); write_html_string(output, configuration->storage);
+    } else {
+      for (size_t column = 0; column < 9; column++) fputs("</td><td class=\"muted\">-", output);
+    }
+    fputs("</td></tr>", output);
+  }
+  fputs("</tbody></table></div><p class=\"muted\">顺序取指缓冲：", output);
+  if (report->instruction_buffer_enabled) {
+    char value[96];
+    snprintf(value, sizeof(value), "%'" PRIu32 " entries", report->instruction_buffer_entries);
+    fputs("启用，", output); write_html_string(output, value);
+  } else {
+    fputs("关闭", output);
+  }
+  fputs("。</p></section>", output);
+
+  fputs("<section><h2>缓存统计</h2><div class=\"metrics\">", output);
+  for (size_t cache = 0; cache < PERFORMANCE_HTML_CACHE_COUNT; cache++) {
+    const uint64_t accesses = report->cache[cache][0] + report->cache[cache][1];
+    char label[32];
+    char value[96];
+    char detail[96];
+    snprintf(label, sizeof(label), "%s 命中率", cache_names[cache]);
+    if (accesses != 0) {
+      snprintf(value, sizeof(value), "%.2f%%", 100.0 * ratio(report->cache[cache][0], accesses));
+      snprintf(detail, sizeof(detail), "%'" PRIu64 " / %'" PRIu64,
+               report->cache[cache][0], accesses);
+      write_metric(output, label, value, detail);
+    } else {
+      write_metric(output, label, "N/A", "尚无访问");
+    }
+    for (size_t counter = 0; counter < PERFORMANCE_HTML_CACHE_COUNTER_COUNT; counter++) {
+      snprintf(value, sizeof(value), "%'" PRIu64, report->cache[cache][counter]);
+      snprintf(detail, sizeof(detail), "%s %s", cache_names[cache], counter_names[counter]);
+      write_metric(output, detail, value, "events");
+    }
+  }
+  fputs("</div></section><section class=\"actions\"><a href=\"performance.html\">返回性能主页</a></section></main>"
+        "<footer>命中率按命中 / (命中 + 未命中) 计算；填充、写回和替换为本次运行完成态的硬件计数。</footer></body></html>", output);
+  return ferror(output) ? -1 : 0;
+}
+
+static int write_atomic_document(
+    const char *output_path, const PerformanceHtmlReport *report,
+    int (*write_document)(FILE *, const PerformanceHtmlReport *)) {
   if (output_path == NULL || output_path[0] == '\0' || report == NULL) {
     errno = EINVAL;
     return -1;
@@ -269,4 +372,12 @@ int performance_html_write(const char *output_path, const PerformanceHtmlReport 
   if (status != 0) unlink(temporary);
   free(temporary);
   return status;
+}
+
+int performance_html_write(const char *output_path, const PerformanceHtmlReport *report) {
+  return write_atomic_document(output_path, report, write_document);
+}
+
+int performance_html_write_cache(const char *output_path, const PerformanceHtmlReport *report) {
+  return write_atomic_document(output_path, report, write_cache_document);
 }

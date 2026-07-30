@@ -28,7 +28,7 @@ Scala 检查分层并只扫描各终端领域根部的 `Configs.scala`；组合�
   不引用 `core/`，也不直接表达某个可运行目标。
 - `core/` 调用 `base/`，把 ISA、流水线、接口、内存、SoC 或板卡策略组合成名称直观、含义完整的
   成品。终端必须直接引用这些成品，不能在终端文件里重新展开底层片段。
-- 终端级文件与 `base/`、`core/` 文件夹分离，直接位于领域根部。当前七种共享 Make 终端预设 trait
+- 终端级文件与 `base/`、`core/` 文件夹分离，直接位于领域根部。当前六种共享 Make 终端预设 trait
   统一位于 `common/TerminalTraits.scala`；`common/IpTerminalTraits.scala` 只定义非 Make 的
   `FpgaIpTerminal` 与 `NemuSimulationIpTerminal`。通用计算单元合同位于
   `common/base/IpComputeSelectionTraits.scala`，让两种终端消费同一组时序属性。每个运行 terminal Config
@@ -61,6 +61,7 @@ classpath、Make 和 construction manager 在启动前解析公开终端。该�
 | --- | --- | --- |
 | `StandaloneConfig` | NPC | 最小 RV64I_Zicsr 本地仿真 |
 | `SimulationConfig` | NPC | 默认 RV64IM_Zicsr 本地仿真 |
+| `CacheSimulationConfig` | NPC | 显式启用教学 I$/D$、Zifencei 和 4 项 instruction buffer 的 RV64IM 本地仿真 |
 | `PipelineSimulationConfig` | NPC | 启用 ID/EX 前递的流水 NPC 本地仿真 |
 | `FullIsa64NoPipelineSimulationConfig` | NPC | RV64IMF_Zicsr 无流水线性能基线 |
 | `FullIsa64PipelineNoForwardingSimulationConfig` | NPC | RV64IMF_Zicsr 流水线无 ID/EX 前递 |
@@ -69,11 +70,17 @@ classpath、Make 和 construction manager 在启动前解析公开终端。该�
 | `U55cRv32OperatorSimulationConfig` | NPC | U55C RV32 M/F IP 时序的本地周期模型 |
 | `U55cRv64OperatorSimulationConfig` | NPC | U55C RV64 M/F IP 时序的本地周期模型，覆盖 W 指令 |
 | `YsyxSimulationConfig` | SoC | 默认 ysyxSoC 本地仿真 |
+| `CacheYsyxSimulationConfig` | SoC | 显式启用教学缓存层级的 ysyxSoC 本地仿真 |
 | `U55cNpcFpgaConfig` | FPGA（`TARGET=NPC`） | U55C 裸 NPC 上板运行 |
+| `U55cCacheNpcFpgaConfig` | FPGA（`TARGET=NPC`） | U55C RV32 教学缓存裸 NPC；需要独立构造 |
 | `U55cRv64NpcFpgaConfig` | FPGA（`TARGET=NPC`） | U55C RV64IM_Zicsr 裸 NPC 上板运行 |
 | `U55cRv64Npc300MHzFpgaConfig` | FPGA（`TARGET=NPC`） | U55C RV64IM_Zicsr 300 MHz 单实现时序实验 |
-| `U55cRv64Npc300MHzDebugFpgaConfig` | FPGA（`TARGET=NPC`） | U55C RV64IM_Zicsr 300 MHz v12 Debug；HBM trace 与性能报告 |
+| `U55cRv64CacheNpc300MHzFpgaConfig` | FPGA（`TARGET=NPC`） | 上述 RV64 300 MHz 核心的教学缓存版本 |
+| `U55cRv64Npc{100,125,150,200,250,300}MHzPerformanceMonitorFpgaConfig` | FPGA（`TARGET=NPC`） | U55C RV64IM 批处理性能监测；核心按后缀运行 |
+| `U55cRv64CacheNpc150MHzPerformanceMonitorFpgaConfig` | FPGA（`TARGET=NPC`） | U55C RV64 150 MHz 教学缓存批处理性能监测；核心通过 MMCM/FIFO 接入固定 300 MHz 平台，报告读取硬件 cache mailbox 状态 |
+| `U55cRv64CacheNpc300MHzPerformanceMonitorFpgaConfig` | FPGA（`TARGET=NPC`） | U55C RV64 300 MHz 教学缓存批处理性能监测；报告读取硬件 cache mailbox 状态 |
 | `U55cYsyxSocFpgaConfig` | FPGA（`TARGET=SOC`） | U55C ysyxSoC 上板运行 |
+| `U55cCacheYsyxSocFpgaConfig` | FPGA（`TARGET=SOC`） | U55C ysyxSoC 教学缓存版本 |
 | `Zcu102NpcFpgaConfig` | FPGA（`TARGET=NPC`） | ZCU102 裸 NPC 上板运行 |
 | `Zcu102YsyxSocFpgaConfig` | FPGA（`TARGET=SOC`） | ZCU102 ysyxSoC 上板运行 |
 
@@ -85,8 +92,11 @@ classpath、Make 和 construction manager 在启动前解析公开终端。该�
 | 名称 | 层级 | 用途 |
 | --- | --- | --- |
 | `FpgaConfig` | L1 | 默认 FPGA 裸 NPC 核心成品 |
+| `CacheFpgaConfig` | L1 | 显式教学缓存的 RV32 FPGA 裸 NPC 核心成品 |
+| `CacheRv64PipelineDualForwardingTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecuteFpgaConfig` | L1 | U55C RV64 300 MHz 时序核心的缓存成品 |
 | `Rv64PipelineDualForwardingFpgaConfig` | L1 | RV64IM_Zicsr FPGA 核心成品；F/D 仅由本地仿真 Config 提供 |
 | `ExternalAxiConfig` | L1 | 供 SoC/外部系统集成的 AXI NPC 成品 |
+| `CacheExternalAxiConfig` | L1 | 供 SoC/外部系统集成的教学缓存 AXI NPC 成品 |
 | `YsyxSocConfig` | L2 | ysyxSoC 的默认组合图 |
 | `YsyxElaborateConfig` | L2 | 供板卡或直接 Scala elaboration 叠加的 ysyxSoC 图 |
 | `PipelineCheckConfig`、`FloatingCheckConfig`、`MulDivCheckConfig` | L1 | 仅供 Scala/RTL 检查的 `check-only` 构造 |
@@ -115,16 +125,16 @@ class U55cYsyxSocFpgaConfig extends CDEConfig(
 `NemuHostConfig.LocalPipelineTrace`，启用已提交指令的
 性能主页、逐指令明细和 IF/ID/EX/MEM/WB HTML。流水线构造会显示阶段重叠和停顿；标量构造使用同一组提交级驻留计数，显示
 顺序执行时间线；同一 host preset 还会逐提交比较 NPC 与 NEMU 的 GPR、FPR、FCSR、下一 PC 和主存
-store 总线副作用。
+store 总线副作用。该 preset 的 `cacheHtml` 也是显式开关：缓存 Config 的运行会额外生成 `cache.html`，性能主页
+链接到该页；无缓存 Config 不生成空报告。自定义终端可用
+`NemuHostConfig.LocalPipelineTrace.copy(cacheHtml = false)` 关闭它。
 FPGA 上板和 check-only Config 保持关闭。
 
 `HostConstruction`、`NemuSimulationConstruction`、`FpgaConstruction` 和 `MakeTerminal` 是
 `common/base/ConstructionTraits.scala` 中的底层接口，只供 terminal 层组合，终端不能直接混入。
-`LocalNpcTerminal`、`LocalSocTerminal`、`U55cNpcTerminal`、`U55cDebugNpcTerminal`、
-`U55cSocTerminal`、`Zcu102NpcTerminal`、`Zcu102SocTerminal` 是
-`common/TerminalTraits.scala` 中仅有的七种 Make 终端预设；每个终端只挂载其中一个。
-`U55cDebugNpcTerminal` 只选择 `NemuHostConfig.U55cRuntimeTrace` 的报告行为；v12 trace 硬件仍由
-`U55c300MHzDebugBoardConfig` 的 CDE 键唯一决定。工具链按 `device`、`flow`、`reports`、`runtime` 分组。显式自定义终端
+`LocalNpcTerminal`、`LocalSocTerminal`、`U55cNpcTerminal`、`U55cSocTerminal`、`Zcu102NpcTerminal`、
+`Zcu102SocTerminal` 是 `common/TerminalTraits.scala` 中仅有的六种 Make 终端预设；每个终端只挂载其中一个。
+工具链按 `device`、`flow`、`reports`、`runtime` 分组。显式自定义终端
 可通过嵌套 `copy(...)` 局部重载 NEMU/FPGA 配方；重复使用或需要进入普通示例的配方应提升为 `core/`
 中的具名完整 preset，必要时再增加根部 terminal trait。`CheckOnlyConstruction` 是检查构造直接挂载的
 core trait，不进入 Make 目录。公共构造 trait 名称不使用 `Trait` 后缀，承载这些 trait 的文件统一使用
@@ -150,13 +160,19 @@ make -C npc rebuild config=U55cRv64Npc300MHzFpgaConfig
 ```
 
 自动 TSV 只在 Make 启动 JVM 前提供短名、FQCN、作用域、板卡和目标。选中后由 Scala 反射实例化，
-生成包含 XLEN、ISA、流水线、算术时序、内存、板卡、工具策略、运行宿主 ABI 和协议 ABI 的
+生成包含 XLEN、ISA、流水线、缓存几何/策略/存储风格、算术时序、内存、板卡、工具策略、运行宿主 ABI 和协议 ABI 的
 `profile.env`。NEMU 配方以稳定的 `NEMU_PRESET` 和完整 `NEMU_*` 字段记录；FPGA 工具链继续渲染为
 现有 `FPGA_*` 字段。其中 `NEMU_PERFORMANCE_HTML` 与 `NEMU_PIPELINE_HTML` 是 NEMU 层行为；后者只能在前者之上
-启用。U55C Debug 终端额外冻结 `FPGA_RUNTIME_TRACE`、HBM bank、BO 大小、记录上限和
-`FPGA_TRACE_CACHE_RECORDS`；最后一项是生成 URAM FIFO 的深度，属于硬件 ABI，修改后必须 `rebuild`。
-普通 U55C 终端保持全部 trace 字段关闭，两种 host 开关都不能为外部 v11 xclbin 凭空提供记录。
+启用。普通 U55C v11 终端固定全部 trace 字段和两项 HTML 开关为关闭；
+`U55cRv64Npc{100,125,150,200,250,300}MHzPerformanceMonitorFpgaConfig` 是例外，它们以 `batch` capability 固定
+HBM[1]、8 MiB、200000 条 32-byte 记录、2048-record URAM FIFO、256-bit trace AXI 和 16-record burst，
+并启用两项 HTML。U55C 标准平台的 HBM data-kernel 时钟为 300 MHz；链接后会从 xclbin 的 `DATA_CLK`
+校验这一接口频率。profile 另以 `FPGA_CLOCK_MHZ` 冻结核心目标频率，低于 300 MHz 时 wrapper 使用 MMCM 和
+逐通道异步 FIFO，确保核心不超过该值。每个频点必须完整 `rebuild`，host-only 构造不能为外部 v11 xclbin 提供硬件记录。
 Make/Tcl 只做映射与一致性检查，不能覆盖这些值。
+缓存 FPGA 终端还会把相同的 `ICACHE_*`、`DCACHE_*`、`INSTRUCTION_BUFFER_*` 和 `NPC_ZIFENCEI`
+写入 elaboration manifest。任何几何、策略或存储风格变化都必须完整 `rebuild`；普通无缓存终端的字段
+保持 disabled，外部 AXI/HBM 端口不变。
 `host-build` 在没有正式构造时只创建 `constructions/.hosts/<FQCN>/` 下的 NEMU host 缓存，适合与外部
 xclbin 配合；缓存不携带 RTL、FPGA 资产或版本标签，不能作为 `run`/`run-bat` 的构造选择器。`rebuild` 才会
 生成并替换完整硬件 ABI 和 FPGA 资产。

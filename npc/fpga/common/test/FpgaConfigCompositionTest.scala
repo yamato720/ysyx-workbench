@@ -4,8 +4,8 @@ import npc.CdeConfigResolver
 import org.chipsalliance.cde.config.Parameters
 import org.scalatest.flatspec.AnyFlatSpec
 import npc.ExternalAxiConfig
-import npc.{ArithmeticRouteOperation, ComputeBackend, ConfigCatalog, ConstructionConfig, ConstructionProfile, FloatingCheckConfig, FpgaIpTerminal, FpgaToolchainConfig, NemuHostConfig, NemuSimulationIpTerminal, NpcConfig, NpcCoreComponents, NpcCoreConfigKey, OperatorIpTimingConfig, OperatorRouteTarget, Rv64IMFZicsrConfig, U55cDebugNpcTerminal, WithNpcCoreConfig}
-import npc.fpga.u55c.{U55cNpcFpgaConfig, U55cRv64Npc300MHzDebugFpgaConfig, U55cRv64Npc300MHzFpgaConfig, U55cRv64NpcFpgaConfig, U55cXilinxIpAttachment, U55cYsyxSocFpgaConfig}
+import npc.{ArithmeticRouteOperation, ComputeBackend, ConfigCatalog, ConstructionConfig, ConstructionProfile, FloatingCheckConfig, FpgaIpTerminal, FpgaToolchainConfig, NemuHostConfig, NemuSimulationIpTerminal, NpcConfig, NpcCoreComponents, NpcCoreConfigKey, OperatorIpTimingConfig, OperatorRouteTarget, Rv64IMFZicsrConfig, WithNpcCoreConfig}
+import npc.fpga.u55c.{U55cCacheNpcFpgaConfig, U55cCacheYsyxSocFpgaConfig, U55cNpcFpgaConfig, U55cRv64CacheNpc150MHzPerformanceMonitorFpgaConfig, U55cRv64CacheNpc300MHzFpgaConfig, U55cRv64CacheNpc300MHzPerformanceMonitorFpgaConfig, U55cRv64Npc300MHzPerformanceMonitorFpgaConfig, U55cRv64Npc300MHzFpgaConfig, U55cRv64NpcFpgaConfig, U55cXilinxIpAttachment, U55cYsyxSocFpgaConfig}
 import npc.fpga.zcu102.{Zcu102NpcFpgaConfig, Zcu102YsyxSocFpgaConfig}
 import ysyx.{YsyxPlatformParameters, YsyxSimulationConfig, YsyxSocConfig}
 
@@ -59,7 +59,9 @@ class FpgaConfigCompositionTest extends AnyFlatSpec {
     assert(npcConfig.axi.useExternalMaster)
     assert(npcConfig.debug.enableDispatchControl)
     assert(FpgaConfigParameters.board.contains(FpgaBoard.U55c))
-    assert(FpgaConfigParameters.platform.clockMHz == 125)
+    assert(FpgaConfigParameters.platform.clockMHz == 300)
+    assert(FpgaConfigParameters.performanceMonitor == FpgaPerformanceMonitorConfig.Disabled)
+    assert(FpgaConfigParameters.runtimeSdb.enabled)
     val toolchain = new U55cNpcFpgaConfig().fpgaToolchainConfig
     assert(toolchain.runtime.notificationMode == "xrt-poll")
     assert(toolchain.flow.vitisXrtMode == "unset")
@@ -76,6 +78,27 @@ class FpgaConfigCompositionTest extends AnyFlatSpec {
     assert(config.operators.mulDiv.multiplyTiming.latency == 3)
     assert(config.operators.mulDiv.multiplyTiming.initiationInterval == 1)
     assertXilinxRoutes(config, 64)
+  }
+
+  "U55c cache terminals" should "reuse the board ABI while explicitly enabling the teaching hierarchy" in {
+    val terminals = Seq(
+      new U55cCacheNpcFpgaConfig,
+      new U55cRv64CacheNpc300MHzFpgaConfig,
+      new U55cRv64CacheNpc300MHzPerformanceMonitorFpgaConfig,
+      new U55cRv64CacheNpc150MHzPerformanceMonitorFpgaConfig,
+      new U55cCacheYsyxSocFpgaConfig
+    )
+    terminals.foreach { terminal =>
+      implicit val parameters: Parameters = terminal
+      val cache = FpgaConfigParameters.npcCoreConfig.cache
+      assert(cache.icache.enabled)
+      assert(cache.dcache.enabled)
+      assert(cache.icache.geometry.capacityBytes == 4096)
+      assert(cache.dcache.geometry.lineBytes == 16)
+      assert(cache.instructionBuffer.entries == 4)
+      assert(FpgaConfigParameters.npcCoreConfig.isa.Zifencei)
+      assert(FpgaConfigParameters.platform.board == FpgaBoard.U55c)
+    }
   }
 
   "U55cRv64Npc300MHzFpgaConfig" should "use frequency-specific RV64 and divider timing cuts at 300 MHz" in {
@@ -105,29 +128,85 @@ class FpgaConfigCompositionTest extends AnyFlatSpec {
     assert(profile("REGISTER_INITIAL_FETCH_REQUEST") == "1")
     assert(profile("SEPARATE_SERIAL_INTEGER_ALU") == "1")
     assert(profile("SERIAL_EXECUTE_RESULT_FORWARDING") == "0")
+    assert(profile("NEMU_PERFORMANCE_HTML") == "0")
+    assert(profile("NEMU_CACHE_HTML") == "0")
+    assert(profile("NEMU_PIPELINE_HTML") == "0")
+    assert(profile("PROTOCOL_ABI") == "npc-fpga-runtime-v11")
+    assert(profile("FPGA_RUNTIME_SDB") == "1")
+    assert(profile("FPGA_RUNTIME_TRACE") == "0")
     assert(FpgaConfigParameters.ipAttachment.manifestValues.toMap.apply("FPGA_DIVIDER_NON_BLOCKING") == "1")
     assertXilinxRoutes(config, 64)
   }
 
-  "U55cRv64Npc300MHzDebugFpgaConfig" should "compose board trace hardware with the complete report terminal" in {
-    val terminal = new U55cRv64Npc300MHzDebugFpgaConfig
-    assert(terminal.isInstanceOf[U55cDebugNpcTerminal])
-    assert(terminal.nemuConfig == NemuHostConfig.U55cRuntimeTrace)
-    assert(terminal.fpgaToolchainConfig == FpgaToolchainConfig.U55cBase)
-
-    implicit val parameters: Parameters = terminal
-    val runtimeTrace = FpgaConfigParameters.runtimeTrace
-    assert(runtimeTrace == FpgaRuntimeTraceConfig.U55cDebug)
+  "U55cRv64Npc300MHzPerformanceMonitorFpgaConfig" should
+    "make the v13 batch monitor a 300 MHz SDB-free hardware ABI" in {
+    implicit val parameters: Parameters = new U55cRv64Npc300MHzPerformanceMonitorFpgaConfig
+    val monitor = FpgaConfigParameters.performanceMonitor
+    val runtimeSdb = FpgaConfigParameters.runtimeSdb
+    val terminal = new U55cRv64Npc300MHzPerformanceMonitorFpgaConfig
     val profile = ConstructionProfile.values(
-      ConfigCatalog.resolve("U55cRv64Npc300MHzDebugFpgaConfig", Set("fpga")),
+      ConfigCatalog.resolve("U55cRv64Npc300MHzPerformanceMonitorFpgaConfig", Set("fpga")),
       terminal,
       FpgaConfigParameters.npcCoreConfig,
-      runtimeTrace = runtimeTrace.profile
+      performanceMonitor = monitor.profile,
+      runtimeSdbEnabled = runtimeSdb.enabled
     ).toMap
-    assert(profile("NEMU_PRESET") == "U55cRuntimeTrace")
-    assert(profile("PROTOCOL_ABI") == "npc-fpga-runtime-v12")
+
+    assert(terminal.capability == "batch")
+    assert(terminal.nemuConfig == NemuHostConfig.U55cPerformanceMonitor)
+    assert(terminal.fpgaToolchainConfig == FpgaToolchainConfig.U55cBase)
+    assert(FpgaConfigParameters.platform.clockMHz == 300)
+    assert(monitor.enabled)
+    assert(!runtimeSdb.enabled)
+    assert(monitor.hbmBank == 1)
+    assert(monitor.bufferBytes == 8 * 1024 * 1024)
+    assert(monitor.maxRecords == 200000)
+    assert(monitor.cacheRecords == 2048)
+    assert(monitor.traceDataWidth == 256)
+    assert(monitor.burstRecords == 16)
+    assert(profile("PROTOCOL_ABI") == "npc-fpga-runtime-v13-performance-monitor")
+    assert(profile("FPGA_RUNTIME_SDB") == "0")
     assert(profile("FPGA_RUNTIME_TRACE") == "1")
-    assert(profile("FPGA_TRACE_CACHE_RECORDS") == "4096")
+    assert(profile("FPGA_TRACE_FORMAT") == "2")
+    assert(profile("FPGA_TRACE_RECORD_BYTES") == "32")
+    assert(profile("FPGA_TRACE_DATA_WIDTH") == "256")
+    assert(profile("FPGA_TRACE_BURST_RECORDS") == "16")
+    assert(profile("NEMU_PERFORMANCE_HTML") == "1")
+    assert(profile("NEMU_CACHE_HTML") == "1")
+    assert(profile("NEMU_PIPELINE_HTML") == "1")
+  }
+
+  "U55cRv64CacheNpc300MHzPerformanceMonitorFpgaConfig" should
+    "combine the teaching hierarchy with the v13 batch monitor" in {
+    implicit val parameters: Parameters = new U55cRv64CacheNpc300MHzPerformanceMonitorFpgaConfig
+    val config = FpgaConfigParameters.npcCoreConfig
+    assert(config.cache.icache.enabled)
+    assert(config.cache.dcache.enabled)
+    assert(config.cache.instructionBuffer.entries == 4)
+    assert(FpgaConfigParameters.performanceMonitor.enabled)
+    assert(!FpgaConfigParameters.runtimeSdb.enabled)
+    assert(new U55cRv64CacheNpc300MHzPerformanceMonitorFpgaConfig().capability == "batch")
+  }
+
+  "U55cRv64CacheNpc150MHzPerformanceMonitorFpgaConfig" should
+    "freeze a 150 MHz cache core behind the 300 MHz U55C platform shell" in {
+    implicit val parameters: Parameters = new U55cRv64CacheNpc150MHzPerformanceMonitorFpgaConfig
+    val terminal = new U55cRv64CacheNpc150MHzPerformanceMonitorFpgaConfig
+    val profile = ConstructionProfile.values(
+      ConfigCatalog.resolve("U55cRv64CacheNpc150MHzPerformanceMonitorFpgaConfig", Set("fpga")),
+      terminal,
+      FpgaConfigParameters.npcCoreConfig,
+      performanceMonitor = FpgaConfigParameters.performanceMonitor.profile,
+      runtimeSdbEnabled = FpgaConfigParameters.runtimeSdb.enabled
+    ).toMap
+    assert(FpgaConfigParameters.platform.clockMHz == 150)
+    assert(FpgaConfigParameters.platform.platformClockMHz == 300)
+    assert(FpgaConfigParameters.npcCoreConfig.cache.icache.enabled)
+    assert(FpgaConfigParameters.performanceMonitor.enabled)
+    assert(!FpgaConfigParameters.runtimeSdb.enabled)
+    assert(terminal.capability == "batch")
+    assert(profile("FPGA_CLOCK_MHZ") == "150")
+    assert(profile("FPGA_PLATFORM_CLOCK_MHZ") == "300")
   }
 
   "Zcu102NpcFpgaConfig" should "use the PS UIO notification path with the same strict routes" in {
@@ -146,7 +225,7 @@ class FpgaConfigCompositionTest extends AnyFlatSpec {
 
     assert(FpgaConfigParameters.npcCoreConfig == new ExternalAxiModelConstruction().config)
     assert(!FpgaConfigParameters.npcCoreConfig.debug.enableDispatchControl)
-    assert(FpgaConfigParameters.platform.clockMHz == 125)
+    assert(FpgaConfigParameters.platform.clockMHz == 300)
   }
 
   "U55cYsyxSocFpgaConfig" should "replace YsyxElaborateConfig's default NPC and infer FPGA from its board" in {
@@ -204,7 +283,7 @@ class FpgaConfigCompositionTest extends AnyFlatSpec {
       assert(entry.board.contains("u55c"))
       assert(FpgaConfigParameters.board.contains(FpgaBoard.U55c))
       assert(FpgaConfigParameters.platform.board == FpgaBoard.U55c)
-      assert(FpgaConfigParameters.platform.clockMHz == 125)
+      assert(FpgaConfigParameters.platform.clockMHz == 300)
     }
   }
 
@@ -250,10 +329,6 @@ class FpgaConfigCompositionTest extends AnyFlatSpec {
       assert(terminal.nemuConfig == NemuHostConfig.U55cBase)
       assert(terminal.fpgaToolchainConfig == FpgaToolchainConfig.U55cBase)
     }
-
-    val debug = new U55cRv64Npc300MHzDebugFpgaConfig
-    assert(debug.nemuConfig == NemuHostConfig.U55cRuntimeTrace)
-    assert(debug.fpgaToolchainConfig == FpgaToolchainConfig.U55cBase)
 
     val zcu102 = Seq(new Zcu102NpcFpgaConfig, new Zcu102YsyxSocFpgaConfig)
     zcu102.foreach { terminal =>

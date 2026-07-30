@@ -40,6 +40,21 @@ static bool runtime_trace_loaded;
 static struct npc_fpga_trace_record *runtime_trace_records;
 static size_t runtime_trace_record_count;
 static uint64_t runtime_trace_dropped;
+static uint64_t runtime_trace_saturated_records;
+
+enum {
+  NEMU_FPGA_TRACE_CLASS_COUNT = 29,
+  NEMU_FPGA_TRACE_ALL_CLASS = NEMU_FPGA_TRACE_CLASS_COUNT - 1,
+};
+
+struct runtime_trace_last_sample {
+  bool valid;
+  uint64_t pc;
+  uint32_t instruction;
+  uint64_t stage[NPC_FPGA_TRACE_STAGE_COUNT];
+};
+
+static struct runtime_trace_last_sample runtime_trace_last[NEMU_FPGA_TRACE_CLASS_COUNT];
 #ifdef CONFIG_FPGA_BACKEND_ZCU102
 static struct nemu_fpga_zcu102_uio zcu102;
 #endif
@@ -58,7 +73,60 @@ static void release_runtime_trace(void) {
   runtime_trace_records = NULL;
   runtime_trace_record_count = 0;
   runtime_trace_dropped = 0;
+  runtime_trace_saturated_records = 0;
+  memset(runtime_trace_last, 0, sizeof(runtime_trace_last));
   runtime_trace_loaded = false;
+}
+
+static void classify_trace_instruction(uint32_t instruction,
+                                       uint32_t *major_class,
+                                       bool *has_detail,
+                                       uint32_t *detail_class) {
+  const uint32_t opcode = instruction & 0x7f;
+  const uint32_t funct3 = (instruction >> 12) & 0x7;
+  const uint32_t funct7 = (instruction >> 25) & 0x7f;
+
+  *major_class = 0;
+  *has_detail = false;
+  *detail_class = 0;
+  if (opcode == 0x03) {
+    static const uint32_t load_classes[8] = {4, 5, 6, 7, 8, 9, 10, 4};
+    *major_class = 1;
+    *has_detail = true;
+    *detail_class = load_classes[funct3];
+  } else if (opcode == 0x23) {
+    static const uint32_t store_classes[8] = {11, 12, 13, 14, 11, 11, 11, 11};
+    *major_class = 2;
+    *has_detail = true;
+    *detail_class = store_classes[funct3];
+  } else if ((opcode == 0x33 || opcode == 0x3b) && funct7 == 0x01) {
+    static const uint32_t m_classes[8] = {15, 16, 17, 18, 19, 20, 21, 22};
+    static const uint32_t m_word_classes[8] = {23, 23, 23, 23, 24, 25, 26, 27};
+    *major_class = 3;
+    *has_detail = true;
+    *detail_class = opcode == 0x3b ? m_word_classes[funct3] : m_classes[funct3];
+  }
+}
+
+static void cache_trace_last_sample(uint32_t timing_class,
+                                    const struct npc_fpga_trace_record *record) {
+  struct runtime_trace_last_sample *sample = &runtime_trace_last[timing_class];
+  sample->valid = true;
+  sample->pc = record->pc;
+  sample->instruction = record->instruction;
+  for (size_t stage = 0; stage < NPC_FPGA_TRACE_STAGE_COUNT; stage++)
+    sample->stage[stage] = record->stage[stage];
+}
+
+static void cache_trace_record(const struct npc_fpga_trace_record *record) {
+  uint32_t major_class;
+  uint32_t detail_class;
+  bool has_detail;
+  classify_trace_instruction(record->instruction, &major_class, &has_detail, &detail_class);
+  cache_trace_last_sample(major_class, record);
+  if (has_detail) cache_trace_last_sample(detail_class, record);
+  cache_trace_last_sample(NEMU_FPGA_TRACE_ALL_CLASS, record);
+  if (record->saturation != 0) runtime_trace_saturated_records++;
 }
 
 static uint64_t parse_environment_u64(const char *name, uint64_t default_value) {
@@ -98,6 +166,7 @@ static bool debug_is_halted(void) {
 
 static int wait_for_debug_status(uint32_t sequence, bool wait_for_sequence) {
   const uint64_t started = monotonic_milliseconds();
+  uint32_t last_status = 0;
   for (;;) {
     npc_step_cycle();
     if (runtime_failed) {
@@ -105,6 +174,7 @@ static int wait_for_debug_status(uint32_t sequence, bool wait_for_sequence) {
       return -1;
     }
     const uint32_t status = read32(NEMU_FPGA_DEBUG_STATUS);
+    last_status = status;
     if (status & NEMU_FPGA_DEBUG_ERROR) {
       errno = EPROTO;
       return -1;
@@ -115,6 +185,14 @@ static int wait_for_debug_status(uint32_t sequence, bool wait_for_sequence) {
       return 0;
     }
     if (monotonic_milliseconds() - started >= debug_timeout_ms) {
+      fprintf(stderr,
+              "FPGA debug state at timeout: debug-status=0x%08" PRIx32
+              " runtime-status=0x%08" PRIx32 " control=0x%08" PRIx32
+              " pc=0x%016" PRIx64 " commits=%" PRIu64 "\n",
+              last_status, read32(NEMU_FPGA_RT_STATUS),
+              read32(NEMU_FPGA_RT_CONTROL),
+              read64(NEMU_FPGA_RT_CURRENT_PC_LOW, NEMU_FPGA_RT_CURRENT_PC_HIGH),
+              read64(NEMU_FPGA_RT_COMMIT_COUNT_LOW, NEMU_FPGA_RT_COMMIT_COUNT_HIGH));
       errno = ETIMEDOUT;
       return -1;
     }
@@ -163,14 +241,14 @@ static int configure_u55c_runtime_trace(void) {
   const uint32_t capability = read32(NEMU_FPGA_TRACE_CAPABILITY);
   if (capability == 0) return 0;
   if (capability != NEMU_FPGA_TRACE_ENABLED ||
-      read32(NEMU_FPGA_TRACE_FORMAT) != NEMU_FPGA_TRACE_FORMAT_V1 ||
-      read32(NEMU_FPGA_TRACE_RECORD_BYTES) != NEMU_FPGA_TRACE_RECORD_BYTES_V1 ||
-      read32(NEMU_FPGA_TRACE_MAX_RECORDS) != NEMU_FPGA_TRACE_MAX_RECORDS_V1) {
+      read32(NEMU_FPGA_TRACE_FORMAT) != NEMU_FPGA_TRACE_FORMAT_V2 ||
+      read32(NEMU_FPGA_TRACE_RECORD_BYTES) != NEMU_FPGA_TRACE_RECORD_BYTES_V2 ||
+      read32(NEMU_FPGA_TRACE_MAX_RECORDS) != NEMU_FPGA_TRACE_MAX_RECORDS_V2) {
     errno = EPROTO;
     return -1;
   }
   if (nemu_fpga_u55c_xrt_allocate_trace(&u55c, 1,
-                                        NEMU_FPGA_TRACE_BUFFER_BYTES_V1) != 0) {
+                                        NEMU_FPGA_TRACE_BUFFER_BYTES_V2) != 0) {
     return -1;
   }
   const uint64_t trace_address = nemu_fpga_u55c_xrt_trace_address(&u55c);
@@ -213,7 +291,7 @@ static int capture_runtime_trace(void) {
                                   NEMU_FPGA_TRACE_RECORDS_HIGH);
   const uint64_t dropped = read64(NEMU_FPGA_TRACE_DROPPED_LOW,
                                   NEMU_FPGA_TRACE_DROPPED_HIGH);
-  if (records > NEMU_FPGA_TRACE_MAX_RECORDS_V1 ||
+  if (records > NEMU_FPGA_TRACE_MAX_RECORDS_V2 ||
       records > SIZE_MAX / sizeof(*runtime_trace_records)) {
     errno = EPROTO;
     return -1;
@@ -241,6 +319,7 @@ static int capture_runtime_trace(void) {
       return -1;
     }
   }
+  for (size_t index = 0; index < record_count; index++) cache_trace_record(&records_buffer[index]);
   runtime_trace_records = records_buffer;
   runtime_trace_record_count = record_count;
   runtime_trace_dropped = dropped;
@@ -261,13 +340,17 @@ int npc_runtime_visit_trace(npc_fpga_trace_visitor visitor, void *opaque) {
     return -1;
   }
   for (size_t index = 0; index < runtime_trace_record_count; index++) {
-    if (visitor(&runtime_trace_records[index], opaque) != 0) return -1;
+    if (visitor(&runtime_trace_records[index], index + 1, opaque) != 0) return -1;
   }
   return 0;
 }
 
 uint64_t npc_runtime_trace_dropped(void) {
   return runtime_trace_available && runtime_trace_loaded ? runtime_trace_dropped : 0;
+}
+
+uint64_t npc_runtime_trace_saturated_records(void) {
+  return runtime_trace_available && runtime_trace_loaded ? runtime_trace_saturated_records : 0;
 }
 
 void npc_init(void) {
@@ -334,7 +417,7 @@ void npc_init(void) {
     exit(EXIT_FAILURE);
   }
   if (configure_u55c_runtime_trace() != 0) {
-    fprintf(stderr, "cannot configure U55C v12 runtime trace: %s\n",
+    fprintf(stderr, "cannot configure U55C v13 performance monitor: %s\n",
             nemu_fpga_u55c_xrt_error(&u55c));
     exit(EXIT_FAILURE);
   }
@@ -550,8 +633,57 @@ uint32_t npc_get_backpressure_reasons(void) {
   return read32(NEMU_FPGA_RT_BACKPRESSURE) & 0x1ff;
 }
 
+uint64_t npc_get_cache_counter(uint32_t cache, uint32_t counter) {
+  static const uint32_t low_offsets[2][5] = {
+    {NEMU_FPGA_CACHE_ICACHE_HITS_LOW, NEMU_FPGA_CACHE_ICACHE_MISSES_LOW,
+     NEMU_FPGA_CACHE_ICACHE_REFILLS_LOW, NEMU_FPGA_CACHE_ICACHE_WRITEBACKS_LOW,
+     NEMU_FPGA_CACHE_ICACHE_EVICTIONS_LOW},
+    {NEMU_FPGA_CACHE_DCACHE_HITS_LOW, NEMU_FPGA_CACHE_DCACHE_MISSES_LOW,
+     NEMU_FPGA_CACHE_DCACHE_REFILLS_LOW, NEMU_FPGA_CACHE_DCACHE_WRITEBACKS_LOW,
+     NEMU_FPGA_CACHE_DCACHE_EVICTIONS_LOW},
+  };
+  static const uint32_t high_offsets[2][5] = {
+    {NEMU_FPGA_CACHE_ICACHE_HITS_HIGH, NEMU_FPGA_CACHE_ICACHE_MISSES_HIGH,
+     NEMU_FPGA_CACHE_ICACHE_REFILLS_HIGH, NEMU_FPGA_CACHE_ICACHE_WRITEBACKS_HIGH,
+     NEMU_FPGA_CACHE_ICACHE_EVICTIONS_HIGH},
+    {NEMU_FPGA_CACHE_DCACHE_HITS_HIGH, NEMU_FPGA_CACHE_DCACHE_MISSES_HIGH,
+     NEMU_FPGA_CACHE_DCACHE_REFILLS_HIGH, NEMU_FPGA_CACHE_DCACHE_WRITEBACKS_HIGH,
+     NEMU_FPGA_CACHE_DCACHE_EVICTIONS_HIGH},
+  };
+  if (!runtime_trace_available || cache >= 2 || counter >= 5) return 0;
+  return read64(low_offsets[cache][counter], high_offsets[cache][counter]);
+}
+
+uint32_t npc_get_cache_configuration(uint32_t cache, uint32_t field) {
+  if (!runtime_trace_available || cache >= 2) return 0;
+  const uint32_t capability = read32(NEMU_FPGA_CACHE_CAPABILITY);
+  const bool instruction = cache == 0;
+  const uint32_t policy = read32(instruction ? NEMU_FPGA_CACHE_ICACHE_POLICY
+                                             : NEMU_FPGA_CACHE_DCACHE_POLICY);
+  switch (field) {
+    case 0: return (capability >> cache) & 1u;
+    case 1: return read32(instruction ? NEMU_FPGA_CACHE_ICACHE_CAPACITY_BYTES
+                                      : NEMU_FPGA_CACHE_DCACHE_CAPACITY_BYTES);
+    case 2: return read32(instruction ? NEMU_FPGA_CACHE_ICACHE_LINE_BYTES
+                                      : NEMU_FPGA_CACHE_DCACHE_LINE_BYTES);
+    case 3: return read32(instruction ? NEMU_FPGA_CACHE_ICACHE_WAYS
+                                      : NEMU_FPGA_CACHE_DCACHE_WAYS);
+    case 4: return read32(instruction ? NEMU_FPGA_CACHE_ICACHE_SETS
+                                      : NEMU_FPGA_CACHE_DCACHE_SETS);
+    case 5: return (policy >> NEMU_FPGA_CACHE_POLICY_MAPPING_SHIFT) & 0x3u;
+    case 6: return (policy >> NEMU_FPGA_CACHE_POLICY_REPLACEMENT_SHIFT) & 0x3u;
+    case 7: return (policy >> NEMU_FPGA_CACHE_POLICY_READ_MISS_SHIFT) & 0x1u;
+    case 8: return (policy >> NEMU_FPGA_CACHE_POLICY_WRITE_POLICY_SHIFT) & 0x1u;
+    case 9: return (policy >> NEMU_FPGA_CACHE_POLICY_WRITE_MISS_SHIFT) & 0x1u;
+    case 10: return (policy >> NEMU_FPGA_CACHE_POLICY_STORAGE_SHIFT) & 0x3u;
+    case 11: return (capability & NEMU_FPGA_CACHE_INSTRUCTION_BUFFER_ENABLED) != 0;
+    case 12: return read32(NEMU_FPGA_CACHE_INSTRUCTION_BUFFER_ENTRIES);
+    default: return 0;
+  }
+}
+
 static bool select_trace_class(uint32_t timing_class) {
-  if (!runtime_trace_available || timing_class >= 30) return false;
+  if (!runtime_trace_available || timing_class >= NEMU_FPGA_TRACE_CLASS_COUNT) return false;
   runtime_io->write32(runtime_io->opaque, NEMU_FPGA_TRACE_CLASS_SELECTOR, timing_class);
   return true;
 }
@@ -588,18 +720,24 @@ uint64_t npc_get_timing_max_total_cycles(uint32_t timing_class) {
 }
 
 uint64_t npc_get_timing_last_pc(uint32_t timing_class) {
-  return select_trace_class(timing_class)
-      ? read64(NEMU_FPGA_TRACE_CLASS_LAST_PC_LOW, NEMU_FPGA_TRACE_CLASS_LAST_PC_HIGH) : 0;
+  if (!select_trace_class(timing_class)) return 0;
+  if (runtime_trace_loaded) return runtime_trace_last[timing_class].valid
+      ? runtime_trace_last[timing_class].pc : 0;
+  return read64(NEMU_FPGA_TRACE_CLASS_LAST_PC_LOW, NEMU_FPGA_TRACE_CLASS_LAST_PC_HIGH);
 }
 
 uint32_t npc_get_timing_last_instruction(uint32_t timing_class) {
-  return select_trace_class(timing_class)
-      ? read32(NEMU_FPGA_TRACE_CLASS_LAST_INSTRUCTION) : 0;
+  if (!select_trace_class(timing_class)) return 0;
+  if (runtime_trace_loaded) return runtime_trace_last[timing_class].valid
+      ? runtime_trace_last[timing_class].instruction : 0;
+  return read32(NEMU_FPGA_TRACE_CLASS_LAST_INSTRUCTION);
 }
 
 uint64_t npc_get_timing_last_stage_cycles(uint32_t timing_class, uint32_t stage) {
-  return select_trace_class(timing_class) && select_trace_stage(stage)
-      ? read64(NEMU_FPGA_TRACE_CLASS_LAST_STAGE_LOW, NEMU_FPGA_TRACE_CLASS_LAST_STAGE_HIGH) : 0;
+  if (!select_trace_class(timing_class) || !select_trace_stage(stage)) return 0;
+  if (runtime_trace_loaded) return runtime_trace_last[timing_class].valid
+      ? runtime_trace_last[timing_class].stage[stage] : 0;
+  return read64(NEMU_FPGA_TRACE_CLASS_LAST_STAGE_LOW, NEMU_FPGA_TRACE_CLASS_LAST_STAGE_HIGH);
 }
 
 uint32_t npc_get_last_timing_class(void) {

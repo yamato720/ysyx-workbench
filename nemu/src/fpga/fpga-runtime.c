@@ -54,7 +54,8 @@ int nemu_fpga_runtime_validate_trace_records(
     return -1;
   }
   for (size_t index = 0; index < count; index++) {
-    if (records[index].sequence != index + 1) {
+    if ((records[index].flags & ~UINT8_C(0x07)) != 0 ||
+        (records[index].saturation & ~UINT8_C(0x1f)) != 0) {
       errno = EPROTO;
       return -1;
     }

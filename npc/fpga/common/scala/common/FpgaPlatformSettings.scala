@@ -24,13 +24,17 @@ final case class FpgaPlatformSettings(
   clockMHz: Int,
   memoryHostBase: Long,
   controlBase: Long,
-  mailboxBase: Long
+  mailboxBase: Long,
+  platformClockMHz: Int
 ) {
-  require(clockMHz >= 0, s"FPGA clock MHz must be nonnegative, got $clockMHz")
+  require(clockMHz > 0, s"FPGA core clock MHz must be positive, got $clockMHz")
+  require(platformClockMHz > 0,
+    s"FPGA platform clock MHz must be positive, got $platformClockMHz")
 
   def manifestValues(npcConfig: NpcConfig): Seq[(String, String)] = Seq(
     "FPGA_BOARD" -> board.name,
     "FPGA_CLOCK_MHZ" -> clockMHz.toString,
+    "FPGA_PLATFORM_CLOCK_MHZ" -> platformClockMHz.toString,
     "FPGA_MEMORY_BASE" -> FpgaPlatformSettings.hex(npcConfig.memory.mainMemoryBase),
     "FPGA_MEMORY_SIZE" -> FpgaPlatformSettings.hex(npcConfig.memory.mainMemorySize),
     "FPGA_MEMORY_HOST_BASE" -> FpgaPlatformSettings.hex(memoryHostBase),
@@ -45,6 +49,19 @@ object FpgaPlatformSettings {
 
 object FpgaElaborationManifest {
   private def bit(value: Boolean): String = if (value) "1" else "0"
+  private def cacheValues(prefix: String, cache: CacheConfig): Seq[(String, String)] = Seq(
+    s"${prefix}_ENABLED" -> bit(cache.enabled),
+    s"${prefix}_CAPACITY_BYTES" -> cache.geometry.capacityBytes.toString,
+    s"${prefix}_LINE_BYTES" -> cache.geometry.lineBytes.toString,
+    s"${prefix}_MAPPING" -> cache.geometry.mapping.name,
+    s"${prefix}_WAYS" -> cache.geometry.ways.toString,
+    s"${prefix}_SETS" -> cache.geometry.sets.toString,
+    s"${prefix}_REPLACEMENT" -> cache.replacement.name,
+    s"${prefix}_READ_MISS" -> cache.policy.readMiss.name,
+    s"${prefix}_WRITE_POLICY" -> cache.policy.write.name,
+    s"${prefix}_WRITE_MISS" -> cache.policy.writeMiss.name,
+    s"${prefix}_STORAGE" -> cache.storage.name
+  )
 
   private def outputDirectory(args: Array[String]): Path = {
     args.sliding(2).collectFirst {
@@ -58,7 +75,8 @@ object FpgaElaborationManifest {
     args: Array[String],
     npcConfig: NpcConfig,
     platform: FpgaPlatformSettings,
-    runtimeTrace: FpgaRuntimeTraceConfig,
+    performanceMonitor: FpgaPerformanceMonitorConfig,
+    runtimeSdb: FpgaRuntimeSdbConfig,
     ipAttachment: FpgaIpAttachment,
     toolchain: FpgaToolchainConfig,
     scalaConfig: String,
@@ -76,11 +94,17 @@ object FpgaElaborationManifest {
       "NPC_F" -> bit(npcConfig.isa.F),
       "NPC_D" -> bit(npcConfig.isa.D),
       "NPC_ZICSR" -> bit(npcConfig.isa.Zicsr),
-      "FPGA_RUNTIME_TRACE" -> bit(runtimeTrace.enabled),
-      "FPGA_TRACE_HBM_BANK" -> runtimeTrace.hbmBank.toString,
-      "FPGA_TRACE_BUFFER_BYTES" -> runtimeTrace.bufferBytes.toString,
-      "FPGA_TRACE_MAX_RECORDS" -> runtimeTrace.maxRecords.toString,
-      "FPGA_TRACE_CACHE_RECORDS" -> runtimeTrace.cacheRecords.toString,
+      "NPC_ZIFENCEI" -> bit(npcConfig.isa.Zifencei),
+      "FPGA_RUNTIME_SDB" -> bit(runtimeSdb.enabled),
+      "FPGA_RUNTIME_TRACE" -> bit(performanceMonitor.enabled),
+      "FPGA_TRACE_HBM_BANK" -> performanceMonitor.hbmBank.toString,
+      "FPGA_TRACE_BUFFER_BYTES" -> performanceMonitor.bufferBytes.toString,
+      "FPGA_TRACE_MAX_RECORDS" -> performanceMonitor.maxRecords.toString,
+      "FPGA_TRACE_CACHE_RECORDS" -> performanceMonitor.cacheRecords.toString,
+      "FPGA_TRACE_FORMAT" -> performanceMonitor.profile.formatVersion.toString,
+      "FPGA_TRACE_RECORD_BYTES" -> performanceMonitor.profile.recordBytes.toString,
+      "FPGA_TRACE_DATA_WIDTH" -> performanceMonitor.traceDataWidth.toString,
+      "FPGA_TRACE_BURST_RECORDS" -> performanceMonitor.burstRecords.toString,
       "FPGA_NOTIFICATION_MODE" -> toolchain.runtime.notificationMode,
       "NPC_ARITH_BACKEND" -> npcConfig.operators.mulDiv.implementation.backend.name,
       "NPC_ARITH_OUTPUT_FIFO" -> npcConfig.operators.mulDiv.implementation.ip.outputFifoDepth.toString,
@@ -101,8 +125,12 @@ object FpgaElaborationManifest {
       "NPC_FCVT_CYCLES" -> npcConfig.operators.floating.convertTiming.latency.toString,
       "NPC_FCVT_II" -> npcConfig.operators.floating.convertTiming.initiationInterval.toString,
       "NPC_FCMP_CYCLES" -> npcConfig.operators.floating.compareTiming.latency.toString,
-      "NPC_FCMP_II" -> npcConfig.operators.floating.compareTiming.initiationInterval.toString
-    ) ++ npcConfig.operators.routes.profileValues(npcConfig.isa) ++
+      "NPC_FCMP_II" -> npcConfig.operators.floating.compareTiming.initiationInterval.toString,
+      "INSTRUCTION_BUFFER_ENABLED" -> bit(npcConfig.cache.instructionBuffer.enabled),
+      "INSTRUCTION_BUFFER_ENTRIES" -> npcConfig.cache.instructionBuffer.entries.toString
+    ) ++ cacheValues("ICACHE", npcConfig.cache.icache) ++
+      cacheValues("DCACHE", npcConfig.cache.dcache) ++
+      npcConfig.operators.routes.profileValues(npcConfig.isa) ++
       ipAttachment.manifestValues ++
       platform.manifestValues(npcConfig)
 

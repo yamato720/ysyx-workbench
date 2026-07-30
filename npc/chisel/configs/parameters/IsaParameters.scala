@@ -6,7 +6,8 @@ case class ISAConfig(
   M: Boolean = false,
   F: Boolean = false,
   D: Boolean = false,
-  Zicsr: Boolean = true
+  Zicsr: Boolean = true,
+  Zifencei: Boolean = false
 ) {
   require(!F || Zicsr, "RISC-V F requires Zicsr for FCSR and FS state")
   require(!D || F, "RISC-V D requires F")

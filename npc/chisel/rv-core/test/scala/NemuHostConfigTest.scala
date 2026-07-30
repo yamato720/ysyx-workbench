@@ -25,6 +25,7 @@ class NemuHostConfigTest extends AnyFlatSpec {
     assert(!NemuHostConfig.LocalBase.trace)
     assert(!NemuHostConfig.LocalBase.vcd)
     assert(!NemuHostConfig.LocalBase.performanceHtml)
+    assert(!NemuHostConfig.LocalBase.cacheHtml)
     assert(!NemuHostConfig.LocalBase.pipelineHtml)
     assert(!NemuHostConfig.LocalBase.softwareDifftest)
     assert(!NemuHostConfig.LocalBase.debug)
@@ -32,11 +33,19 @@ class NemuHostConfigTest extends AnyFlatSpec {
     assert(!NemuHostConfig.LocalBase.asan)
 
     assert(NemuHostConfig.LocalPerformance.performanceHtml)
+    assert(!NemuHostConfig.LocalPerformance.cacheHtml)
     assert(!NemuHostConfig.LocalPerformance.pipelineHtml)
     assert(NemuHostConfig.LocalPipelineTrace.performanceHtml)
+    assert(NemuHostConfig.LocalPipelineTrace.cacheHtml)
     assert(NemuHostConfig.LocalPipelineTrace.pipelineHtml)
     assert(NemuHostConfig.LocalPipelineTrace.softwareDifftest)
     assert(NemuHostConfig.U55cBase.backend == NemuBackend.U55c)
+    assert(!NemuHostConfig.U55cBase.performanceHtml)
+    assert(!NemuHostConfig.U55cBase.cacheHtml)
+    assert(!NemuHostConfig.U55cBase.pipelineHtml)
+    assert(NemuHostConfig.U55cPerformanceMonitor.performanceHtml)
+    assert(NemuHostConfig.U55cPerformanceMonitor.cacheHtml)
+    assert(NemuHostConfig.U55cPerformanceMonitor.pipelineHtml)
     assert(NemuHostConfig.Zcu102Base.backend == NemuBackend.Zcu102)
   }
 
@@ -53,7 +62,7 @@ class NemuHostConfigTest extends AnyFlatSpec {
     assertThrows[IllegalArgumentException](NemuHostConfig.LocalBase.copy(vcd = true))
     assertThrows[IllegalArgumentException](NemuHostConfig.U55cBase.copy(vcd = true, trace = true))
     assertThrows[IllegalArgumentException](NemuHostConfig.LocalBase.copy(pipelineHtml = true))
-    assert(NemuHostConfig.U55cBase.copy(pipelineHtml = true).pipelineHtml)
+    assertThrows[IllegalArgumentException](NemuHostConfig.LocalBase.copy(cacheHtml = true))
     assertThrows[IllegalArgumentException](NemuHostConfig.U55cBase.copy(softwareDifftest = true))
     assertThrows[IllegalArgumentException](NemuHostConfig.LocalBase.copy(optimization = "Os"))
   }
@@ -71,7 +80,6 @@ class NemuHostConfigTest extends AnyFlatSpec {
       new LocalNpcTerminal {} -> ("npc", "NPC", "local"),
       new LocalSocTerminal {} -> ("soc", "SOC", "local"),
       new U55cNpcTerminal {} -> ("fpga", "NPC", "u55c"),
-      new U55cDebugNpcTerminal {} -> ("fpga", "NPC", "u55c"),
       new U55cSocTerminal {} -> ("fpga", "SOC", "u55c"),
       new Zcu102NpcTerminal {} -> ("fpga", "NPC", "zcu102"),
       new Zcu102SocTerminal {} -> ("fpga", "SOC", "zcu102")
@@ -84,7 +92,6 @@ class NemuHostConfigTest extends AnyFlatSpec {
     }
 
     assert((new U55cNpcTerminal {}).fpgaToolchainConfig == FpgaToolchainConfig.U55cBase)
-    assert((new U55cDebugNpcTerminal {}).nemuConfig == NemuHostConfig.U55cRuntimeTrace)
     assert((new Zcu102SocTerminal {}).fpgaToolchainConfig == FpgaToolchainConfig.Zcu102Base)
 
     val customLocal = new CustomLocalTerminal
@@ -101,7 +108,7 @@ class NemuHostConfigTest extends AnyFlatSpec {
       "LocalPerformance",
       "LocalPipelineTrace",
       "U55cBase",
-      "U55cRuntimeTrace",
+      "U55cPerformanceMonitor",
       "Zcu102Base"
     ))
     assert(NemuHostConfig.registeredPresets.map(_.config).distinct.size == 6)

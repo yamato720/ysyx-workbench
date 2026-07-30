@@ -11,6 +11,7 @@ final case class NemuHostConfig(
   watchpoint: Boolean,
   vcd: Boolean,
   performanceHtml: Boolean,
+  cacheHtml: Boolean,
   pipelineHtml: Boolean,
   softwareDifftest: Boolean,
   devices: Boolean,
@@ -26,6 +27,8 @@ final case class NemuHostConfig(
     "NEMU VCD only supports the local Verilator host")
   require(!pipelineHtml || performanceHtml,
     "NEMU pipeline HTML requires performance HTML")
+  require(!cacheHtml || performanceHtml,
+    "NEMU cache HTML requires performance HTML")
   require(!softwareDifftest || backend == NemuBackend.LocalVerilator,
     "NEMU software difftest only supports the local Verilator host")
 }
@@ -42,6 +45,7 @@ object NemuHostConfig {
     watchpoint = true,
     vcd = false,
     performanceHtml = false,
+    cacheHtml = false,
     pipelineHtml = false,
     softwareDifftest = false,
     devices = true,
@@ -58,6 +62,7 @@ object NemuHostConfig {
 
   /** 本地 Verilator 的提交级流水线与软件自查配方。 */
   val LocalPipelineTrace: NemuHostConfig = LocalPerformance.copy(
+    cacheHtml = true,
     pipelineHtml = true,
     softwareDifftest = true
   )
@@ -68,7 +73,8 @@ object NemuHostConfig {
     trace = false,
     watchpoint = true,
     vcd = false,
-    performanceHtml = true,
+    performanceHtml = false,
+    cacheHtml = false,
     pipelineHtml = false,
     softwareDifftest = false,
     devices = false,
@@ -78,10 +84,10 @@ object NemuHostConfig {
     asan = false
   )
 
-  /** U55C v12 trace host recipe.  Trace availability is still discovered from
-    * the loaded xclbin mailbox; this preset only asks NEMU to render reports.
-    */
-  val U55cRuntimeTrace: NemuHostConfig = U55cBase.copy(
+  /** Dedicated batch host for the U55C v13 performance-monitor xclbin. */
+  val U55cPerformanceMonitor: NemuHostConfig = U55cBase.copy(
+    performanceHtml = true,
+    cacheHtml = true,
     pipelineHtml = true
   )
 
@@ -92,6 +98,7 @@ object NemuHostConfig {
     watchpoint = true,
     vcd = false,
     performanceHtml = false,
+    cacheHtml = false,
     pipelineHtml = false,
     softwareDifftest = false,
     devices = false,
@@ -107,7 +114,7 @@ object NemuHostConfig {
     Preset("LocalPerformance", LocalPerformance),
     Preset("LocalPipelineTrace", LocalPipelineTrace),
     Preset("U55cBase", U55cBase),
-    Preset("U55cRuntimeTrace", U55cRuntimeTrace),
+    Preset("U55cPerformanceMonitor", U55cPerformanceMonitor),
     Preset("Zcu102Base", Zcu102Base)
   )
 

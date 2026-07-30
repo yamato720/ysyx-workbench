@@ -25,7 +25,9 @@
 ```bash
 make -C npc build config=U55cNpcFpgaConfig
 make -C npc build config=U55cRv64Npc300MHzFpgaConfig
-make -C npc rebuild config=U55cRv64Npc300MHzDebugFpgaConfig
+make -C npc rebuild config=U55cRv64Npc300MHzPerformanceMonitorFpgaConfig
+make -C npc rebuild config=U55cRv64CacheNpc150MHzPerformanceMonitorFpgaConfig
+make -C npc rebuild config=U55cRv64CacheNpc300MHzPerformanceMonitorFpgaConfig
 make -C npc build config=U55cYsyxSocFpgaConfig
 make -C npc build config=Zcu102NpcFpgaConfig
 make -C npc build config=Zcu102YsyxSocFpgaConfig
@@ -40,17 +42,21 @@ IP 时序等独立硬件约束；构造时会与 catalog、CDE 板卡及 profile
 U55C 的 `FPGA_VITIS_XRT_MODE=unset` 只影响 `v++` 子进程，不改变保存的运行宿主。
 
 普通 U55C 构造使用 `npc-fpga-runtime-v11`：Vitis CU 元数据显式定义为 `ip_c`、`ap_ctrl_hs`、4 KiB 控制窗口和匹配 XLEN 的
-AXI 数据宽度，使 XRT 能取得 mailbox 控制上下文，而 NPC 仍由 mailbox 连续运行控制。`U55cRv64Npc300MHzDebugFpgaConfig`
-使用 `npc-fpga-runtime-v12`，增加仅该 Config 存在的 `m_axi_trace -> HBM[1]`。它的 16 MiB trace BO 保留前
-200000 条提交，FIFO 深度由 Scala profile 的 `FPGA_TRACE_CACHE_RECORDS` 固定为 URAM 资源。v11 仍可上板和
-交互调试，但无逐指令/流水硬件数据。ZCU102 使用 `npc-fpga-runtime-v7`。M 扩展继续由 Xilinx
+AXI 数据宽度，使 XRT 能取得 mailbox 控制上下文，而 NPC 仍由 mailbox 连续运行控制。v11 不生成
+`m_axi_trace`、HBM[1] trace BO 或 URAM FIFO，仍可上板和交互调试。独立的
+`U55cRv64Npc300MHzPerformanceMonitorFpgaConfig` 使用 v13，增加 256-bit `m_axi_trace` 到 HBM[1] 和
+2048-record URAM FIFO，固定 U55C platform 的 300 MHz `DATA_CLK`，且只接受 `run-bat`。链接后会从 xclbin
+校验实际 `DATA_CLK`，拒绝频率 profile 与物理产物不一致的构造。其 `FPGA_RUNTIME_SDB=0`，不会综合 halt/step
+控制器、CSR 或完整 GPR 快照；`U55cRv64CacheNpc{150,300}MHzPerformanceMonitorFpgaConfig` 在相同 trace ABI 上启用教学
+缓存，并在 `mtestexit` drain 后、core reset 前快照硬件实际 I$/D$ 配置和计数到 mailbox，供性能页读取。普通 v11 终端则显式保持 `FPGA_RUNTIME_SDB=1`。ZCU102 使用 `npc-fpga-runtime-v7`。M 扩展继续由 Xilinx
 整数乘除 IP 执行；所有公开 FPGA Config 固定 `F=0`、`D=0`。因此 FPGA 不生成硬件 FPR、本地 FPU、
 浮点 IP 或 NEMU 指令代执行服务；完整 F 扩展只由本地 Verilator/NEMU 仿真 Config 用于学习。U55C
 使用 XRT 轮询，ZCU102 使用 PS/UIO 通知，二者均不接入 RISC-V 外部中断。
 
 runtime v7 mailbox 将三条信号分开：控制寄存器的 guest MEIP 电平馈入 `core.io.interrupt`；`putch` 与
 completion 通过 shell notification 通知宿主；FPGA AM 对非标准机器 CSR `mtestexit`（`0x7c0`）的已提交写入会锁存
-退出码和提交 PC 后复位 core。EBREAK 只保留正常同步 breakpoint trap 状态；completion 不是 debug halt，也不是 guest 外部中断。
+退出码和提交 PC。缓存配置还会先 drain D$ 并锁存 cache 状态，随后才复位 core；EBREAK 只保留正常同步 breakpoint
+trap 状态；completion 不是 debug halt，也不是 guest 外部中断。
 
 ## RTL 资源收缩证据
 

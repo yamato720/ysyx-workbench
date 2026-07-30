@@ -37,7 +37,9 @@ class ConfigCatalogTest extends AnyFlatSpec {
     val names = generated.map(_.shortName).toSet
 
     assert(names.contains("StandaloneConfig"))
+    assert(names.contains("CacheSimulationConfig"))
     assert(names.contains("YsyxSimulationConfig"))
+    assert(names.contains("CacheYsyxSimulationConfig"))
     assert(names.contains("U55cYsyxSocFpgaConfig"))
     assert(names.contains("Zcu102NpcFpgaConfig"))
     assert(names.contains("FullIsa64PipelineDualForwardingSimulationConfig"))
@@ -46,7 +48,16 @@ class ConfigCatalogTest extends AnyFlatSpec {
     assert(names.contains("U55cRv64OperatorSimulationConfig"))
     assert(names.contains("U55cRv64NpcFpgaConfig"))
     assert(names.contains("U55cRv64Npc300MHzFpgaConfig"))
-    assert(names.contains("U55cRv64Npc300MHzDebugFpgaConfig"))
+    assert(names.contains("U55cRv64Npc300MHzPerformanceMonitorFpgaConfig"))
+    assert(names.contains("U55cRv64CacheNpc300MHzPerformanceMonitorFpgaConfig"))
+    assert(names.contains("U55cRv64CacheNpc150MHzPerformanceMonitorFpgaConfig"))
+    assert(names.contains("U55cCacheNpcFpgaConfig"))
+    assert(names.contains("U55cRv64CacheNpc300MHzFpgaConfig"))
+    assert(names.contains("U55cCacheYsyxSocFpgaConfig"))
+    Seq(100, 125, 150, 200, 250, 300).foreach { frequency =>
+      assert(names.contains(s"U55cRv64Npc${frequency}MHzPerformanceMonitorFpgaConfig"))
+    }
+    assert(!names.contains("U55cRv64Npc300MHzDebugFpgaConfig"))
     assert(!names.contains("U55cFullIsa64NpcFpgaConfig"))
     assert(!names.contains("FpgaConfig"))
     assert(!names.contains("ExternalAxiConfig"))
@@ -146,7 +157,7 @@ class ConfigCatalogTest extends AnyFlatSpec {
     val construction = new SimulationConfig
     val values = ConstructionProfile.values(entry, construction, construction.config).toMap
 
-    assert(values("PROFILE_FORMAT") == "18")
+    assert(values("PROFILE_FORMAT") == "21")
     assert(values("HOST_ABI") == "nemu-construction-v1")
     assert(values("NEMU_PRESET") == "LocalPipelineTrace")
     assert(values("NEMU_BACKEND") == "local")
@@ -198,6 +209,7 @@ class ConfigCatalogTest extends AnyFlatSpec {
       val entry = ConfigCatalog.resolve(construction.getClass.getName, Set("npc"))
       val values = ConstructionProfile.values(entry, construction, construction.config).toMap
       assert(values("NEMU_PERFORMANCE_HTML") == "1")
+      assert(values("NEMU_CACHE_HTML") == "1")
       assert(values("NEMU_PIPELINE_HTML") == "1")
       assert(values("NEMU_NPC_DIFFTEST") == "1")
       assert(values("NEMU_VCD") == "0")
@@ -209,6 +221,7 @@ class ConfigCatalogTest extends AnyFlatSpec {
     val scalarValues = ConstructionProfile.values(scalarEntry, scalar, scalar.config).toMap
     assert(scalarValues("PIPELINE") == "0")
     assert(scalarValues("NEMU_PERFORMANCE_HTML") == "1")
+    assert(scalarValues("NEMU_CACHE_HTML") == "1")
     assert(scalarValues("NEMU_PIPELINE_HTML") == "1")
   }
 }

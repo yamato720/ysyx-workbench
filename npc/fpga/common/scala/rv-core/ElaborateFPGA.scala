@@ -16,7 +16,8 @@ object ElaborateFPGA extends App {
   implicit val parameters: Parameters = construction
   val config = FpgaConfigParameters.npcCoreConfig
   val platform = FpgaConfigParameters.platform
-  val runtimeTrace = FpgaConfigParameters.runtimeTrace
+  val performanceMonitor = FpgaConfigParameters.performanceMonitor
+  val runtimeSdb = FpgaConfigParameters.runtimeSdb
   val ipAttachment = FpgaConfigParameters.ipAttachment
   val toolchain = construction match {
     case value: FpgaConstruction => value.fpgaToolchainConfig
@@ -28,6 +29,8 @@ object ElaborateFPGA extends App {
     s"Config catalog selected ${entry.board.getOrElse("no board")}, but ${entry.className} selected ${platform.board.name}")
   require(toolchain.device.board == platform.board.name,
     s"FPGA toolchain selected ${toolchain.device.board}, but hardware CDE selected ${platform.board.name}")
+  require(!performanceMonitor.enabled || platform.board == FpgaBoard.U55c,
+    s"${entry.className} 的 FPGA 性能监测只支持 U55C")
   println(s"正在生成 ${platform.board.name} FPGA 顶层：XLEN=${config.isa.xlen}, F=${config.isa.F}, 输出目录=$output")
   _root_.circt.stage.ChiselStage.emitSystemVerilogFile(
     platform.board match {
@@ -39,5 +42,6 @@ object ElaborateFPGA extends App {
   )
   ElaborateOutput.stripBlackBoxFileList(s"$output/NpcFpgaTop.sv")
   FpgaElaborationManifest.write(
-    Array("--target-dir", output), config, platform, runtimeTrace, ipAttachment, toolchain, entry.className, entry.target)
+    Array("--target-dir", output), config, platform, performanceMonitor, runtimeSdb,
+    ipAttachment, toolchain, entry.className, entry.target)
 }

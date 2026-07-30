@@ -209,7 +209,7 @@ $(CHISEL_STAMP): FORCE
 	mkdir -p "$(dir $@)"; \
 	echo '=== Generating Verilog from Chisel ==='; \
 	rm -rf "$(CHISEL_OUT)"; \
-	cd "$(CURDIR)" && NPC_SCALA_CONFIG="$(NPC_STANDALONE_SCALA_CONFIG)" sbt $(call NPC_BUILD_PROPS_WITH_CONFIG,$(NPC_STANDALONE_SCALA_CONFIG)) "root/runMain npc.Elaborate"; \
+	cd "$(CURDIR)" && NPC_SCALA_CONFIG="$(NPC_STANDALONE_SCALA_CONFIG)" NPC_ELABORATE_OUTPUT_DIR="$(CHISEL_OUT)" sbt $(call NPC_BUILD_PROPS_WITH_CONFIG,$(NPC_STANDALONE_SCALA_CONFIG)) "root/runMain npc.Elaborate"; \
 	"$(IP_SOURCE_MANIFEST_TOOL)" write simulation "$(CHISEL_SOURCE_MANIFEST)" "$(CURDIR)" \
 		--rtl "$(CHISEL_OUT)/CPU.sv" --model-list "$(IP_SIMULATION_MODELS)"; \
 	test -f "$(CHISEL_OUT)/CPU.sv"; touch "$@"
@@ -219,7 +219,7 @@ $(CHISEL_DPI_STAMP): FORCE
 	mkdir -p "$(dir $@)"; \
 	echo '=== Generating NEMU Verilog from Chisel ==='; \
 	rm -rf "$(CHISEL_DPI_OUT)"; \
-	cd "$(CURDIR)" && NPC_SCALA_CONFIG="$(NPC_SIMULATION_SCALA_CONFIG)" sbt $(call NPC_BUILD_PROPS_WITH_CONFIG,$(NPC_SIMULATION_SCALA_CONFIG)) "root/runMain npc.ElaborateDPI"; \
+	cd "$(CURDIR)" && NPC_SCALA_CONFIG="$(NPC_SIMULATION_SCALA_CONFIG)" NPC_ELABORATE_OUTPUT_DIR="$(CHISEL_DPI_OUT)" sbt $(call NPC_BUILD_PROPS_WITH_CONFIG,$(NPC_SIMULATION_SCALA_CONFIG)) "root/runMain npc.ElaborateDPI"; \
 	"$(IP_SOURCE_MANIFEST_TOOL)" write simulation "$(CHISEL_DPI_SOURCE_MANIFEST)" "$(CURDIR)" \
 		--rtl "$(CHISEL_DPI_OUT)/CPU.sv" --model-list "$(IP_SIMULATION_MODELS)"; \
 	test -f "$(CHISEL_DPI_OUT)/CPU.sv"; touch "$@"
@@ -339,6 +339,7 @@ run-difftest: chisel-cpu
 # with an APB DPI memory backed by NEMU's physical memory.
 soc-sim-verilog: check-soc-xlen
 	@$(MAKE) -C ./chisel/ysyxSoC sim-verilog INTERNAL_CONSTRUCTION=1 config=$(SOC_SIMULATION_SCALA_CONFIG) NPC_TARGET=SOC NPC_XLEN=$(NPC_XLEN) \
+		SIM_BUILD_DIR="$(SOC_SIM_DIR)" \
 		NPC_PIPELINE=$(SOC_NPC_PIPELINE) NPC_INTERLOCK=$(NPC_INTERLOCK) NPC_ID_FWD=$(SOC_NPC_ID_FWD) \
 		NPC_EX_FWD=$(SOC_NPC_EX_FWD) NPC_F=$(NPC_F) NPC_ARITH_BACKEND=$(NPC_ARITH_BACKEND) \
 		NPC_ARITH_OUTPUT_FIFO=$(NPC_ARITH_OUTPUT_FIFO) NPC_MUL_CYCLES=$(NPC_MUL_CYCLES) NPC_MUL_II=$(NPC_MUL_II) \
@@ -453,6 +454,10 @@ rebuild:
 	@test -n "$(strip $(config))" || { echo 'rebuild 必须提供 config=<Config短名或FQCN>' >&2; exit 2; }
 	@$(CONSTRUCTION_MANAGER) rebuild "$(CURDIR)" "$(strip $(config))"
 
+resume-post-link:
+	@test -n "$(strip $(config))" || { echo 'resume-post-link 必须提供 config=<Config短名或FQCN>' >&2; exit 2; }
+	@$(CONSTRUCTION_MANAGER) resume-post-link "$(CURDIR)" "$(strip $(config))"
+
 host-config-list:
 	@$(CONSTRUCTION_MANAGER) host-catalog "$(CURDIR)"
 
@@ -464,9 +469,7 @@ host-rebuild:
 	@exit 2
 
 version:
-	@if test -n "$(strip $(D))" && test -n "$(strip $(delete))" && test "$(strip $(D))" != "$(strip $(delete))"; then \
-		echo "D=$(strip $(D)) 与 delete=$(strip $(delete)) 不一致" >&2; exit 2; \
-	elif test -n "$(strip $(D))" || test -n "$(strip $(delete))"; then \
+	@if test -n "$(strip $(D))" || test -n "$(strip $(delete))"; then \
 		$(CONSTRUCTION_MANAGER) delete "$(CURDIR)" "$(strip $(D))" "$(strip $(delete))"; \
 	elif test -n "$(strip $(version))"; then \
 			$(CONSTRUCTION_MANAGER) list "$(CURDIR)" "$(strip $(version))"; \
@@ -476,7 +479,7 @@ version:
 		$(CONSTRUCTION_MANAGER) list "$(CURDIR)"; \
 	fi
 
-.PHONY: config-list build rebuild host-config-list host-build host-rebuild version
+.PHONY: config-list build rebuild resume-post-link host-config-list host-build host-rebuild version
 
 dpi-unit-test:
 	@mkdir -p "$(obj_dir)"; \

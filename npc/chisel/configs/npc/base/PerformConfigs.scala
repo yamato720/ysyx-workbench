@@ -99,6 +99,12 @@ class WithRegisteredInitialFetchRequestConfig extends ConfigFragment {
   )
 }
 
+/**
+  * 取消空闲态首个取指请求的寄存器化。
+  *
+  * 该片段用于直接连接本地 DPI RAM 的对照构造：DPI 路径没有外部 AXI 的长组合
+  * 时序，因而不需要这个仅为板卡接口设置的切分级。
+  */
 /** 为 CSR、异常和 mret 的串行控制路径使用独立整数 ALU。 */
 class WithSeparateSerialIntegerAluConfig extends ConfigFragment {
   override private[npc] def applyTo(base: NpcConfig): NpcConfig = base.copy(

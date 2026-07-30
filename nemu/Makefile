@@ -89,6 +89,11 @@ CFLAGS_BUILD += $(if $(CONFIG_CC_DEBUG),-Og -ggdb3,)
 CFLAGS_BUILD += $(if $(CONFIG_CC_ASAN),-fsanitize=address,)
 CFLAGS_TRACE += -DITRACE_COND=$(if $(CONFIG_ITRACE_COND),$(call remove_quote,$(CONFIG_ITRACE_COND)),true)
 CFLAGS  += $(CFLAGS_BUILD) $(CFLAGS_TRACE) -D__GUEST_ISA__=$(GUEST_ISA)
+# The construction profile freezes the core clock with the host ABI. Leave a
+# default for direct NEMU builds that are not associated with an NPC Config.
+ifneq ($(strip $(NPC_CLOCK_MHZ)),)
+CFLAGS += -DNPC_CLOCK_MHZ=$(NPC_CLOCK_MHZ)
+endif
 
 # The interpreter owns a separate SoftFloat archive.  It uses the vendored
 # source tree, but never consumes NPC's intermediate build products.

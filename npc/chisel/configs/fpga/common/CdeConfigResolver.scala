@@ -28,7 +28,7 @@ object CdeConfigResolver {
           case "fpga" =>
             val matchesPreset = (entry.board, entry.target) match {
               case (Some("u55c"), "NPC") => config.isInstanceOf[U55cNpcTerminal] ||
-                config.isInstanceOf[U55cDebugNpcTerminal]
+                config.isInstanceOf[U55cNpcPerformanceMonitorTerminal]
               case (Some("u55c"), "SOC") => config.isInstanceOf[U55cSocTerminal]
               case (Some("zcu102"), "NPC") => config.isInstanceOf[Zcu102NpcTerminal]
               case (Some("zcu102"), "SOC") => config.isInstanceOf[Zcu102SocTerminal]

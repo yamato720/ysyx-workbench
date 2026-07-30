@@ -25,8 +25,9 @@ private[npc] object ConstructionValidation {
 /** profile 与反射解析器共享的最小运行构造接口。 */
 trait HostConstruction {
   protected def configuredNemu: NemuHostConfig
+  protected def configuredCapability: String = "run"
 
-  final val capability: String = "run"
+  final def capability: String = configuredCapability
   def nemuConfig: NemuHostConfig = configuredNemu
   final def nemuPreset: String = NemuHostConfig.presetName(nemuConfig)
 }

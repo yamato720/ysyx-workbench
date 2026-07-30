@@ -160,9 +160,16 @@ static int decode_exec(Decode *s) {
   INSTPAT("??????? ????? ????? ??? ????? 11011 11", jal   , J, R(rd) = s->pc + 4; s->dnpc = s->pc + imm);
   INSTPAT("??????? ????? ????? 000 ????? 11001 11", jalr  , I, { word_t t = s->pc + 4; s->dnpc = (src1 + imm) & ~1; R(rd) = t; });
 
-// ecall, ebreak, fence, mret
+  // The reference model is uncached and sequential. FENCE has no state
+  // change here; the NPC conservatively drains its D$ before committing it.
+  INSTPAT("??????? ????? ????? 000 ????? 00011 11", fence, N, /* no side effect in NEMU */);
+
+  // Zifencei has no state change in the uncached reference model. The NPC
+  // performs its D$ flush and I$ invalidation before committing this opcode.
+  INSTPAT("??????? ????? ????? 001 ????? 00011 11", fence_i, N, /* no side effect in NEMU */);
+
+// ecall, ebreak, mret
   INSTPAT("0000000 00000 00000 000 00000 11100 11", ecall  , N, s->dnpc = isa_raise_intr(11, s->pc)); // M-mode ecall
-  INSTPAT("0000000 00000 00000 001 00000 11100 11", fence  , N, /* no side effect in NEMU */);
 #ifdef NPC_FPGA_REMOTE
   INSTPAT("0000000 00001 00000 000 00000 11100 11", ebreak , N, s->dnpc = isa_raise_intr(3, s->pc));
 #else

@@ -6,6 +6,13 @@ import java.nio.file.{Files, Path}
 private[npc] object ElaborateOutput {
   private val blackBoxFileListMarker = """// ----- 8< ----- FILE "firrtl_black_box_resource_files.f" ----- 8< -----"""
 
+  /** Config construction passes a private directory so concurrent Make jobs do
+    * not overwrite another Config's generated RTL. Direct Scala use keeps the
+    * historical local output paths.
+    */
+  def directory(default: String): String =
+    sys.env.get("NPC_ELABORATE_OUTPUT_DIR").map(_.trim).filter(_.nonEmpty).getOrElse(default)
+
   def stripBlackBoxFileList(path: String): Unit = {
     val file = Path.of(path)
     if (Files.exists(file)) {
@@ -21,15 +28,16 @@ private[npc] object ElaborateOutput {
 object Elaborate extends App {
   val (entry, construction) = ConfigResolver.resolve("StandaloneConfig")
   val config = construction.config
+  val output = ElaborateOutput.directory("./generated")
   println(s"正在生成 Verilog 文件... Config=${entry.className}, XLEN=${config.isa.xlen}, pipeline=${config.pipeline.enablePipeline}")
   _root_.circt.stage.ChiselStage.emitSystemVerilogFile(
     new NpcCore(config = config),
     Array(
-      "--target-dir", "./generated"
+      "--target-dir", output
     ),
     Array("--disable-annotation-unknown")
   )
-  ElaborateOutput.stripBlackBoxFileList("./generated/CPU.sv")
+  ElaborateOutput.stripBlackBoxFileList(s"$output/CPU.sv")
   println("生成完成！")
 }
 
@@ -37,15 +45,16 @@ object Elaborate extends App {
 object ElaborateDPI extends App {
   val (entry, construction) = ConfigResolver.resolve("SimulationConfig")
   val config = construction.config
+  val output = ElaborateOutput.directory("./generated-dpi")
   println(s"正在生成 NEMU 模式的 Verilog 文件... Config=${entry.className}, XLEN=${config.isa.xlen}, M 扩展后端=Chisel")
   _root_.circt.stage.ChiselStage.emitSystemVerilogFile(
     new NpcCore(config = config),
     Array(
-      "--target-dir", "./generated-dpi"
+      "--target-dir", output
     ),
     Array("--disable-annotation-unknown")
   )
-  ElaborateOutput.stripBlackBoxFileList("./generated-dpi/CPU.sv")
+  ElaborateOutput.stripBlackBoxFileList(s"$output/CPU.sv")
   println("NEMU 模式 Verilog 生成完成！")
 }
 

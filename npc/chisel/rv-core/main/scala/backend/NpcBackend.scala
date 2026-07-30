@@ -723,6 +723,9 @@ class NpcBackend(
     dst.nextPc := Mux(src.branch && src.branchTaken =/= 0.U, branchNextPc, src.pc + 4.U)
     dst.rd := src.rd
     dst.aluResult := src.aluResult
+    dst.storeData := src.storeData
+    dst.storeEnable := src.storeEnable
+    dst.storeAccessType := src.funct3
     dst.loadData := memData
     dst.csrReadData := src.csrReadData
     dst.writebackFromMemory := src.writebackFromMemory
@@ -838,6 +841,18 @@ class NpcBackend(
   val commitPcDebug = RegEnable(memoryWritebackReg.io.out.bits.pc, 0.U(cfg.xlen.W), commitFire)
   val commitInstDebug = RegEnable(memoryWritebackReg.io.out.bits.instruction, 0.U(32.W), commitFire)
   val commitNextPcDebug = RegEnable(commitNextPc, 0.U(cfg.xlen.W), commitFire)
+  val commitStore = commitFire && memoryWritebackReg.io.out.bits.storeEnable
+  val commitStoreValidDebug = RegNext(commitStore, false.B)
+  val commitStoreAddressDebug = RegEnable(
+    memoryWritebackReg.io.out.bits.aluResult, 0.U(cfg.xlen.W), commitStore)
+  val commitStoreMaskDebug = RegEnable(AxiLiteWstrb.genStrb(
+    memoryWritebackReg.io.out.bits.storeAccessType,
+    memoryWritebackReg.io.out.bits.aluResult(log2Ceil(cfg.xlen / 8) - 1, 0), cfg.xlen),
+    0.U((cfg.xlen / 8).W), commitStore)
+  val commitStoreDataDebug = RegEnable(AxiLiteWstrb.alignData(
+    memoryWritebackReg.io.out.bits.storeData,
+    memoryWritebackReg.io.out.bits.aluResult(log2Ceil(cfg.xlen / 8) - 1, 0), cfg.xlen),
+    0.U(cfg.xlen.W), commitStore)
   val commitFetchCyclesDebug = RegEnable(memoryWritebackReg.io.out.bits.perfFetchCycles, 0.U(64.W), commitFire)
   val commitDecodeCyclesDebug = RegEnable(memoryWritebackReg.io.out.bits.perfDecodeCycles, 0.U(64.W), commitFire)
   val commitExecuteCyclesDebug = RegEnable(memoryWritebackReg.io.out.bits.perfExecuteCycles, 0.U(64.W), commitFire)
@@ -889,6 +904,10 @@ class NpcBackend(
   io.debug.commitPc := commitPcDebug
   io.debug.commitInstruction := commitInstDebug
   io.debug.commitNextPc := commitNextPcDebug
+  io.debug.commitStoreValid := commitStoreValidDebug
+  io.debug.commitStoreAddress := commitStoreAddressDebug
+  io.debug.commitStoreData := commitStoreDataDebug
+  io.debug.commitStoreMask := commitStoreMaskDebug
   io.debug.sampleCommitValid := commitFire
   io.debug.sampleCommitPc := memoryWritebackReg.io.out.bits.pc
   io.debug.sampleCommitInstruction := memoryWritebackReg.io.out.bits.instruction

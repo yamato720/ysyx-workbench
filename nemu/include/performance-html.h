@@ -7,6 +7,8 @@
 
 #define PERFORMANCE_HTML_STAGE_COUNT 5
 #define PERFORMANCE_HTML_STALL_COUNT 5
+#define PERFORMANCE_HTML_CACHE_COUNT 2
+#define PERFORMANCE_HTML_CACHE_COUNTER_COUNT 5
 
 typedef enum {
   PERFORMANCE_HTML_OUTCOME_GOOD,
@@ -27,6 +29,20 @@ typedef struct {
 } PerformanceHtmlTimingRow;
 
 typedef struct {
+  bool enabled;
+  uint32_t capacity_bytes;
+  uint32_t line_bytes;
+  uint32_t ways;
+  uint32_t sets;
+  const char *mapping;
+  const char *replacement;
+  const char *read_miss;
+  const char *write_policy;
+  const char *write_miss;
+  const char *storage;
+} PerformanceHtmlCacheConfiguration;
+
+typedef struct {
   const char *label;
   const char *mode;
   const char *outcome_text;
@@ -38,8 +54,16 @@ typedef struct {
   uint64_t guest_instructions;
   bool monitoring_available;
   uint64_t trace_dropped;
+  uint64_t trace_saturated_records;
+  bool latest_samples_are_trace_prefix;
   uint32_t pipeline_features;
   uint64_t stalls[PERFORMANCE_HTML_STALL_COUNT];
+  bool cache_statistics_available;
+  uint64_t cache[PERFORMANCE_HTML_CACHE_COUNT][PERFORMANCE_HTML_CACHE_COUNTER_COUNT];
+  bool cache_configuration_available;
+  PerformanceHtmlCacheConfiguration cache_configuration[PERFORMANCE_HTML_CACHE_COUNT];
+  bool instruction_buffer_enabled;
+  uint32_t instruction_buffer_entries;
   bool last_commit_valid;
   const char *last_class;
   uint64_t last_pc;
@@ -52,9 +76,11 @@ typedef struct {
   size_t timing_row_count;
   size_t aggregate_row;
   bool instruction_html_available;
+  bool cache_html_available;
   bool pipeline_html_available;
 } PerformanceHtmlReport;
 
 int performance_html_write(const char *output_path, const PerformanceHtmlReport *report);
+int performance_html_write_cache(const char *output_path, const PerformanceHtmlReport *report);
 
 #endif

@@ -5,9 +5,11 @@ set -euo pipefail
 usage() {
   cat >&2 <<'EOF'
 用法：construction-manager.sh <命令> <npc-root> [参数]
-命令：catalog | host-catalog | resolve <config> <version> | build <config> | rebuild <config>
+命令：catalog | host-catalog | resolve <config> <version> | build <config> | rebuild <config> | resume-post-link <config>
       host-build <config> <all> <jobs> | ensure <config> <build> <host-rebuild>
-      list [selector] | delete <version>
+      list [selector] | delete <versions> [delete-alias]
+
+<versions> 是由逗号或连字符分隔的正整数列表，例如 1,2,3 或 1-2-3。
 EOF
   exit 2
 }
@@ -26,9 +28,9 @@ build_tool="$npc_root/scripts/build-construction.sh"
 refresh_simulation_host_tool="$npc_root/scripts/refresh-simulation-host.sh"
 phase_log_tool="$npc_root/scripts/phase-log.sh"
 artifact_tool="$npc_root/fpga/common/scripts/artifact-manifest.sh"
-mkdir -p "$root/.profiles" "$root/.failed" "$root/.hosts"
+mkdir -p "$root/.profiles" "$root/.failed" "$root/.hosts" "$root/.locks"
 catalog_ready=${NPC_CONFIG_CATALOG_READY:-0}
-profile_format=18
+profile_format=21
 profile_inputs_fingerprint_cache=''
 [[ $catalog_ready == 0 || $catalog_ready == 1 ]] || { echo "NPC_CONFIG_CATALOG_READY 只能是 0 或 1" >&2; exit 2; }
 
@@ -47,7 +49,7 @@ matching_mark() {
 valid_protocol_abi() {
   local scope=$1 board=${2:-} abi=$3
   case "$scope:$board:$abi" in
-    fpga:u55c:npc-fpga-runtime-v11|fpga:u55c:npc-fpga-runtime-v12|fpga:zcu102:npc-fpga-runtime-v7|npc::npc-dpi-v1|soc::ysyx-dpi-v1) return 0 ;;
+    fpga:u55c:npc-fpga-runtime-v11|fpga:u55c:npc-fpga-runtime-v13-performance-monitor|fpga:zcu102:npc-fpga-runtime-v7|npc::npc-dpi-v1|soc::ysyx-dpi-v1) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -72,7 +74,8 @@ normalize_scope() {
 # 历史 NEMU 配置类只用于迁移；新 profile 记录 companion object 中的稳定 preset。
 canonical_nemu_preset() {
   case "$1" in
-    LocalBase|LocalPerformance|LocalPipelineTrace|U55cBase|U55cRuntimeTrace|Zcu102Base|Custom|none) printf '%s\n' "$1" ;;
+    LocalBase|LocalPerformance|LocalPipelineTrace|U55cBase|U55cPerformanceMonitor|Zcu102Base|Custom|none) printf '%s\n' "$1" ;;
+    U55cRuntimeTrace) printf '%s\n' U55cBase ;;
     npc.nemu.DpiConfig|npc.nemu.LocalVerilatorConfig) printf '%s\n' LocalBase ;;
     npc.nemu.LocalVerilatorPerformanceConfig) printf '%s\n' LocalPerformance ;;
     npc.nemu.LocalVerilatorPipelineTraceConfig) printf '%s\n' LocalPipelineTrace ;;
@@ -151,7 +154,7 @@ migrate_config_names_locked() {
 
 migrate_profile_mode() {
   local file=$1 capability scope board replacement normalized_scope temporary inferred_preset host_backend host_devices
-  local saved_host_config saved_preset preset pipeline_html performance_html integer_execute_stages serial_execute_stages register_initial_fetch_request separate_serial_integer_alu serial_execute_result_forwarding divider_non_blocking needs_divider_non_blocking trace_enabled trace_bank trace_buffer trace_max trace_cache
+  local saved_host_config saved_preset preset pipeline_html performance_html cache_html integer_execute_stages serial_execute_stages register_initial_fetch_request separate_serial_integer_alu serial_execute_result_forwarding divider_non_blocking needs_divider_non_blocking runtime_sdb trace_enabled trace_bank trace_buffer trace_max trace_cache trace_format trace_record_bytes trace_data_width trace_burst_records
   [[ -f $file ]] || return 0
   capability=$(value "$file" CAPABILITY)
   scope=$(value "$file" SCOPE)
@@ -161,6 +164,7 @@ migrate_profile_mode() {
   case "$replacement:$normalized_scope:$board" in
     run:npc:*|run:soc:*) inferred_preset=LocalBase; host_backend=local; host_devices=1 ;;
     run:fpga:u55c) inferred_preset=U55cBase; host_backend=u55c; host_devices=0 ;;
+    batch:fpga:u55c) inferred_preset=U55cPerformanceMonitor; host_backend=u55c; host_devices=0 ;;
     run:fpga:zcu102) inferred_preset=Zcu102Base; host_backend=zcu102; host_devices=0 ;;
     generate-only:*:*|check-only:*:*) inferred_preset=none; host_backend=none; host_devices=0 ;;
     *) echo "无法为旧 profile 推断 NEMU host：$file（$replacement/$normalized_scope/$board）" >&2; exit 1 ;;
@@ -173,6 +177,7 @@ migrate_profile_mode() {
   fi
   pipeline_html=$(value "$file" NEMU_PIPELINE_HTML)
   performance_html=$(value "$file" NEMU_PERFORMANCE_HTML)
+  cache_html=$(value "$file" NEMU_CACHE_HTML)
   integer_execute_stages=$(value "$file" INTEGER_EXECUTE_STAGES)
   [[ -n $integer_execute_stages ]] || integer_execute_stages=1
   [[ $integer_execute_stages == 1 || $integer_execute_stages == 2 ]] || {
@@ -211,22 +216,36 @@ migrate_profile_mode() {
     echo "保存 profile 的 FPGA_DIVIDER_NON_BLOCKING 非法：$file（$divider_non_blocking）" >&2
     exit 1
   }
+  runtime_sdb=1
   trace_enabled=0; trace_bank=0; trace_buffer=0; trace_max=0; trace_cache=0
-  if [[ $(value "$file" PROTOCOL_ABI) == npc-fpga-runtime-v12 ]]; then
-    trace_enabled=1; trace_bank=1; trace_buffer=16777216; trace_max=200000; trace_cache=4096
-  fi
+  trace_format=0; trace_record_bytes=0; trace_data_width=0; trace_burst_records=0
+  case "$(value "$file" PROTOCOL_ABI)" in
+    npc-fpga-runtime-v12)
+      trace_enabled=1; trace_bank=1; trace_buffer=16777216; trace_max=200000; trace_cache=4096
+      trace_format=1; trace_record_bytes=48; trace_data_width=64; trace_burst_records=1
+      ;;
+    npc-fpga-runtime-v13-performance-monitor)
+      runtime_sdb=0
+      trace_enabled=1; trace_bank=1; trace_buffer=8388608; trace_max=200000; trace_cache=2048
+      trace_format=2; trace_record_bytes=32; trace_data_width=256; trace_burst_records=16
+      ;;
+  esac
   [[ $pipeline_html == 1 ]] && performance_html=1
+  [[ $cache_html == 1 ]] && performance_html=1
   [[ $performance_html == 0 || $performance_html == 1 ]] || performance_html=0
+  [[ $cache_html == 0 || $cache_html == 1 ]] || cache_html=0
   [[ $replacement != "$capability" || $normalized_scope != "$scope" ||
-    $(value "$file" PROFILE_FORMAT) != "$profile_format" || -z $(value "$file" NEMU_PERFORMANCE_HTML) ||
+    $(value "$file" PROFILE_FORMAT) != "$profile_format" || -z $(value "$file" NEMU_PERFORMANCE_HTML) || -z $(value "$file" NEMU_CACHE_HTML) ||
     -z $saved_preset || -n $saved_host_config || -z $(value "$file" INTEGER_EXECUTE_STAGES) ||
     -z $(value "$file" SERIAL_EXECUTE_STAGES) ||
     -z $(value "$file" REGISTER_INITIAL_FETCH_REQUEST) ||
     -z $(value "$file" SEPARATE_SERIAL_INTEGER_ALU) ||
     -z $(value "$file" SERIAL_EXECUTE_RESULT_FORWARDING) ||
-    -z $(value "$file" FPGA_RUNTIME_TRACE) || -z $(value "$file" FPGA_TRACE_HBM_BANK) ||
+    -z $(value "$file" FPGA_RUNTIME_SDB) || -z $(value "$file" FPGA_RUNTIME_TRACE) || -z $(value "$file" FPGA_TRACE_HBM_BANK) ||
     -z $(value "$file" FPGA_TRACE_BUFFER_BYTES) || -z $(value "$file" FPGA_TRACE_MAX_RECORDS) ||
-    -z $(value "$file" FPGA_TRACE_CACHE_RECORDS) ]] ||
+    -z $(value "$file" FPGA_TRACE_CACHE_RECORDS) || -z $(value "$file" FPGA_TRACE_FORMAT) ||
+    -z $(value "$file" FPGA_TRACE_RECORD_BYTES) || -z $(value "$file" FPGA_TRACE_DATA_WIDTH) ||
+    -z $(value "$file" FPGA_TRACE_BURST_RECORDS) ]] ||
     [[ $needs_divider_non_blocking == 0 || -n $(value "$file" FPGA_DIVIDER_NON_BLOCKING) ]] || return 0
 
   # 已经带完整 NEMU host 字段的保存 profile 只升级格式并补新字段，不能根据
@@ -234,32 +253,40 @@ migrate_profile_mode() {
   if [[ -n $saved_preset || -n $saved_host_config ]]; then
     temporary=$(mktemp "$file.profile-migration.XXXXXX")
     awk -v capability="$replacement" -v scope="$normalized_scope" \
-      -v profile_format="$profile_format" -v performance_html="$performance_html" -v preset="$preset" \
+      -v profile_format="$profile_format" -v performance_html="$performance_html" -v cache_html="$cache_html" -v preset="$preset" \
       -v integer_execute_stages="$integer_execute_stages" \
       -v serial_execute_stages="$serial_execute_stages" \
       -v register_initial_fetch_request="$register_initial_fetch_request" \
       -v separate_serial_integer_alu="$separate_serial_integer_alu" \
       -v serial_execute_result_forwarding="$serial_execute_result_forwarding" \
-      -v divider_non_blocking="$divider_non_blocking" -v needs_divider_non_blocking="$needs_divider_non_blocking" \
+      -v divider_non_blocking="$divider_non_blocking" -v needs_divider_non_blocking="$needs_divider_non_blocking" -v runtime_sdb="$runtime_sdb" \
       -v trace_enabled="$trace_enabled" -v trace_bank="$trace_bank" -v trace_buffer="$trace_buffer" \
-      -v trace_max="$trace_max" -v trace_cache="$trace_cache" '
+      -v trace_max="$trace_max" -v trace_cache="$trace_cache" -v trace_format="$trace_format" \
+      -v trace_record_bytes="$trace_record_bytes" -v trace_data_width="$trace_data_width" \
+      -v trace_burst_records="$trace_burst_records" '
       /^PROFILE_FORMAT=/ { print "PROFILE_FORMAT=" profile_format; next }
       /^CAPABILITY=/ { print "CAPABILITY=" capability; next }
       /^SCOPE=/ { print "SCOPE=" scope; next }
       /^NEMU_CONFIG_FQCN=/ { next }
       /^NEMU_PRESET=/ { if (!preset_seen++) print "NEMU_PRESET=" preset; next }
       /^NEMU_PERFORMANCE_HTML=/ { next }
+      /^NEMU_CACHE_HTML=/ { next }
       /^INTEGER_EXECUTE_STAGES=/ { if (!integer_execute_stages_seen++) print "INTEGER_EXECUTE_STAGES=" integer_execute_stages; next }
       /^SERIAL_EXECUTE_STAGES=/ { if (!serial_execute_stages_seen++) print "SERIAL_EXECUTE_STAGES=" serial_execute_stages; next }
       /^REGISTER_INITIAL_FETCH_REQUEST=/ { if (!register_initial_fetch_request_seen++) print "REGISTER_INITIAL_FETCH_REQUEST=" register_initial_fetch_request; next }
       /^SEPARATE_SERIAL_INTEGER_ALU=/ { if (!separate_serial_integer_alu_seen++) print "SEPARATE_SERIAL_INTEGER_ALU=" separate_serial_integer_alu; next }
       /^SERIAL_EXECUTE_RESULT_FORWARDING=/ { if (!serial_execute_result_forwarding_seen++) print "SERIAL_EXECUTE_RESULT_FORWARDING=" serial_execute_result_forwarding; next }
       /^FPGA_DIVIDER_NON_BLOCKING=/ { if (needs_divider_non_blocking && !divider_non_blocking_seen++) print "FPGA_DIVIDER_NON_BLOCKING=" divider_non_blocking; next }
+      /^FPGA_RUNTIME_SDB=/ { if (!runtime_sdb_seen++) print "FPGA_RUNTIME_SDB=" runtime_sdb; next }
       /^FPGA_RUNTIME_TRACE=/ { if (!trace_enabled_seen++) print "FPGA_RUNTIME_TRACE=" trace_enabled; next }
       /^FPGA_TRACE_HBM_BANK=/ { if (!trace_bank_seen++) print "FPGA_TRACE_HBM_BANK=" trace_bank; next }
       /^FPGA_TRACE_BUFFER_BYTES=/ { if (!trace_buffer_seen++) print "FPGA_TRACE_BUFFER_BYTES=" trace_buffer; next }
       /^FPGA_TRACE_MAX_RECORDS=/ { if (!trace_max_seen++) print "FPGA_TRACE_MAX_RECORDS=" trace_max; next }
       /^FPGA_TRACE_CACHE_RECORDS=/ { if (!trace_cache_seen++) print "FPGA_TRACE_CACHE_RECORDS=" trace_cache; next }
+      /^FPGA_TRACE_FORMAT=/ { if (!trace_format_seen++) print "FPGA_TRACE_FORMAT=" trace_format; next }
+      /^FPGA_TRACE_RECORD_BYTES=/ { if (!trace_record_bytes_seen++) print "FPGA_TRACE_RECORD_BYTES=" trace_record_bytes; next }
+      /^FPGA_TRACE_DATA_WIDTH=/ { if (!trace_data_width_seen++) print "FPGA_TRACE_DATA_WIDTH=" trace_data_width; next }
+      /^FPGA_TRACE_BURST_RECORDS=/ { if (!trace_burst_records_seen++) print "FPGA_TRACE_BURST_RECORDS=" trace_burst_records; next }
       { print }
       END {
         if (!preset_seen) print "NEMU_PRESET=" preset
@@ -269,12 +296,18 @@ migrate_profile_mode() {
         if (!separate_serial_integer_alu_seen) print "SEPARATE_SERIAL_INTEGER_ALU=" separate_serial_integer_alu
         if (!serial_execute_result_forwarding_seen) print "SERIAL_EXECUTE_RESULT_FORWARDING=" serial_execute_result_forwarding
         if (needs_divider_non_blocking && !divider_non_blocking_seen) print "FPGA_DIVIDER_NON_BLOCKING=" divider_non_blocking
+        if (!runtime_sdb_seen) print "FPGA_RUNTIME_SDB=" runtime_sdb
         if (!trace_enabled_seen) print "FPGA_RUNTIME_TRACE=" trace_enabled
         if (!trace_bank_seen) print "FPGA_TRACE_HBM_BANK=" trace_bank
         if (!trace_buffer_seen) print "FPGA_TRACE_BUFFER_BYTES=" trace_buffer
         if (!trace_max_seen) print "FPGA_TRACE_MAX_RECORDS=" trace_max
         if (!trace_cache_seen) print "FPGA_TRACE_CACHE_RECORDS=" trace_cache
+        if (!trace_format_seen) print "FPGA_TRACE_FORMAT=" trace_format
+        if (!trace_record_bytes_seen) print "FPGA_TRACE_RECORD_BYTES=" trace_record_bytes
+        if (!trace_data_width_seen) print "FPGA_TRACE_DATA_WIDTH=" trace_data_width
+        if (!trace_burst_records_seen) print "FPGA_TRACE_BURST_RECORDS=" trace_burst_records
         print "NEMU_PERFORMANCE_HTML=" performance_html
+        print "NEMU_CACHE_HTML=" cache_html
       }
     ' "$file" > "$temporary"
     mv "$temporary" "$file"
@@ -292,12 +325,17 @@ migrate_profile_mode() {
     /^SEPARATE_SERIAL_INTEGER_ALU=/ { next }
     /^SERIAL_EXECUTE_RESULT_FORWARDING=/ { next }
     /^FPGA_DIVIDER_NON_BLOCKING=/ { next }
+    /^FPGA_RUNTIME_SDB=/ { next }
     /^FPGA_RUNTIME_TRACE=/ { next }
     /^FPGA_TRACE_HBM_BANK=/ { next }
     /^FPGA_TRACE_BUFFER_BYTES=/ { next }
     /^FPGA_TRACE_MAX_RECORDS=/ { next }
     /^FPGA_TRACE_CACHE_RECORDS=/ { next }
-    /^NEMU_(CONFIG_FQCN|PRESET|BACKEND|TRACE|WATCHPOINT|VCD|PERFORMANCE_HTML|PIPELINE_HTML|NPC_DIFFTEST|DEVICES|OPTIMIZATION|DEBUG|LTO|ASAN)=/ { next }
+    /^FPGA_TRACE_FORMAT=/ { next }
+    /^FPGA_TRACE_RECORD_BYTES=/ { next }
+    /^FPGA_TRACE_DATA_WIDTH=/ { next }
+    /^FPGA_TRACE_BURST_RECORDS=/ { next }
+    /^NEMU_(CONFIG_FQCN|PRESET|BACKEND|TRACE|WATCHPOINT|VCD|PERFORMANCE_HTML|CACHE_HTML|PIPELINE_HTML|NPC_DIFFTEST|DEVICES|OPTIMIZATION|DEBUG|LTO|ASAN)=/ { next }
     { print }
   ' "$file" > "$temporary"
   {
@@ -307,6 +345,7 @@ migrate_profile_mode() {
     echo 'NEMU_WATCHPOINT=1'
     echo 'NEMU_VCD=0'
     echo 'NEMU_PERFORMANCE_HTML=0'
+    echo 'NEMU_CACHE_HTML=0'
     echo 'NEMU_PIPELINE_HTML=0'
     echo 'NEMU_NPC_DIFFTEST=0'
     echo "NEMU_DEVICES=$host_devices"
@@ -320,11 +359,16 @@ migrate_profile_mode() {
     echo "SEPARATE_SERIAL_INTEGER_ALU=$separate_serial_integer_alu"
     echo "SERIAL_EXECUTE_RESULT_FORWARDING=$serial_execute_result_forwarding"
     if [[ $needs_divider_non_blocking == 1 ]]; then echo "FPGA_DIVIDER_NON_BLOCKING=$divider_non_blocking"; fi
+    echo "FPGA_RUNTIME_SDB=$runtime_sdb"
     echo "FPGA_RUNTIME_TRACE=$trace_enabled"
     echo "FPGA_TRACE_HBM_BANK=$trace_bank"
     echo "FPGA_TRACE_BUFFER_BYTES=$trace_buffer"
     echo "FPGA_TRACE_MAX_RECORDS=$trace_max"
     echo "FPGA_TRACE_CACHE_RECORDS=$trace_cache"
+    echo "FPGA_TRACE_FORMAT=$trace_format"
+    echo "FPGA_TRACE_RECORD_BYTES=$trace_record_bytes"
+    echo "FPGA_TRACE_DATA_WIDTH=$trace_data_width"
+    echo "FPGA_TRACE_BURST_RECORDS=$trace_burst_records"
   } >> "$temporary"
   mv "$temporary" "$file"
 }
@@ -354,7 +398,7 @@ migrate_construction_mode() {
 }
 
 migrate_host_metadata() {
-  local construction=$1 host current preset canonical format pipeline_html performance_html temporary
+  local construction=$1 host current preset canonical format pipeline_html performance_html cache_html core_clock temporary
   host="$(dirname "$construction")/abi/nemu/host.env"
   [[ -f $host ]] || return 0
   current=$(value "$host" NEMU_CONFIG_FQCN)
@@ -366,20 +410,30 @@ migrate_host_metadata() {
   format=$(value "$host" HOST_FORMAT)
   pipeline_html=$(value "$host" NEMU_PIPELINE_HTML)
   performance_html=$(value "$host" NEMU_PERFORMANCE_HTML)
+  cache_html=$(value "$host" NEMU_CACHE_HTML)
+  core_clock=$(value "$host" CORE_CLOCK_MHZ)
   [[ $pipeline_html == 1 ]] && performance_html=1
+  [[ $cache_html == 1 ]] && performance_html=1
   [[ $performance_html == 0 || $performance_html == 1 ]] || performance_html=0
-  [[ -n $current || $canonical != "$preset" || $format != 5 || -z $pipeline_html ||
-    -z $(value "$host" NEMU_PERFORMANCE_HTML) ]] || return 0
+  [[ $cache_html == 0 || $cache_html == 1 ]] || cache_html=0
+  [[ -n $current || $canonical != "$preset" || $format != 7 || -z $pipeline_html || -z $core_clock ||
+    -z $(value "$host" NEMU_PERFORMANCE_HTML) || -z $(value "$host" NEMU_CACHE_HTML) ]] || return 0
   temporary=$(mktemp "$host.config-migration.XXXXXX")
-  awk -v preset="$canonical" -v performance_html="$performance_html" '
-    /^HOST_FORMAT=/ { print "HOST_FORMAT=5"; next }
+  awk -v preset="$canonical" -v performance_html="$performance_html" -v cache_html="$cache_html" '
+    /^HOST_FORMAT=/ { print "HOST_FORMAT=7"; next }
     /^NEMU_CONFIG_FQCN=/ { next }
     /^NEMU_PRESET=/ { if (!preset_seen++) print "NEMU_PRESET=" preset; next }
     /^NEMU_PERFORMANCE_HTML=/ { next }
+    /^NEMU_CACHE_HTML=/ { next }
+    /^CORE_CLOCK_MHZ=/ { next }
     { print }
     END {
       if (!preset_seen) print "NEMU_PRESET=" preset
       print "NEMU_PERFORMANCE_HTML=" performance_html
+      print "NEMU_CACHE_HTML=" cache_html
+      # v5 及以前的 host 固定以 300 MHz 编译；保留这个编译事实，使非 300 MHz
+      # FPGA 构造被校验为需要 host-build，而不会把报告频率静默伪装成正确值。
+      print "CORE_CLOCK_MHZ=300"
     }
   ' "$host" > "$temporary"
   mv "$temporary" "$host"
@@ -429,6 +483,27 @@ preserve_fpga_failure_evidence() {
 
 require_version_index() {
   [[ ${1:-} =~ ^[1-9][0-9]*$ ]] || { echo "非法版本序号 '${1:-}'：应为从 1 开始的正整数" >&2; exit 2; }
+}
+
+# D= 和 delete= 都接受同一组已保存构造的原始版本序号。规范化为有序集合，
+# 让两个别名可以用不同分隔符或顺序表示同一批删除目标。
+normalize_version_selector() {
+  local selector=${1:-} version_index
+  local -A selected=()
+
+  [[ -n $selector ]] || {
+    printf '\n'
+    return 0
+  }
+  [[ $selector =~ ^[1-9][0-9]*([,-][1-9][0-9]*)*$ ]] || {
+    echo "非法版本选择 '$selector'：应为逗号或连字符分隔的正整数列表，例如 1,2,3 或 1-2-3" >&2
+    exit 2
+  }
+  while IFS= read -r version_index; do
+    require_version_index "$version_index"
+    selected[$version_index]=1
+  done < <(tr ',-' '\n\n' <<< "$selector")
+  printf '%s\n' "${!selected[@]}" | LC_ALL=C sort -n | paste -sd, -
 }
 
 construction_environments() {
@@ -629,13 +704,14 @@ write_pending_version_info() {
 }
 
 prepare_stable_construction_directory() {
-  local directory=$1 fqcn=$2
-  rm -rf "$directory/abi" "$directory/fpga" "$directory/logs" "$directory/runtime"
+  local directory=$1 fqcn=$2 construction_id=$3
+  rm -rf "$directory/abi" "$directory/fpga" "$directory/logs" "$directory/runtime" "$directory/.work"
   rm -f "$directory/profile.env" "$directory/construction.env" "$directory/.complete"
   mkdir -p "$directory/logs/build"
   {
     echo 'CONSTRUCTION_INCOMPLETE=1'
     echo "CONFIG_FQCN=$fqcn"
+    echo "CONSTRUCTION_ID=$construction_id"
     echo "STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   } > "$directory/.incomplete"
 }
@@ -820,14 +896,18 @@ reindex_version_indexes_locked() {
 }
 
 ensure_version_indexes() {
-  exec 9>"$root/.lock"
-  flock 9
+  local lock_fd
+  exec {lock_fd}>"$root/.lock"
+  flock "$lock_fd"
   migrate_version_indexes_locked
+  flock -u "$lock_fd"
+  exec {lock_fd}>&-
 }
 
-# `build` 持有全局锁的时间覆盖完整 Chisel/Verilator/Vivado 流程。version 只读取
-# 最终 FQCN 目录的 tag/info，因此构造从创建到结束始终使用同一个可见目录名。
-# 只有旧正式构造还没有索引文件时才等待锁并执行一次文件迁移。
+# 全局锁只保护版本、profile 和目录元数据；长 Chisel/Verilator/Vivado 流程由
+# constructions/.locks/<FQCN>.lock 单独保护。version 只读取最终 FQCN 目录的
+# tag/info，因此构造从创建到结束始终使用同一个可见目录名。只有旧正式构造还没有
+# 索引文件时才等待全局锁并执行一次文件迁移。
 published_indexes_complete() {
   local file directory index tag_index
   local -A seen=()
@@ -945,7 +1025,9 @@ profile_for() {
   # 自动目录只包含挂载一个 terminal 层 trait 的完整终端，这些 trait 已组合 NEMU
   # 运行行为、scope 和 target。旧缓存里的 generate-only/check-only profile
   # 不能继续代表同名终端，必须从当前 Scala Config 重建。
-  if [[ $refresh == 1 || ! -f $output || $cached_fingerprint != "$inputs_fingerprint" || $(value "$output" CONFIG_FQCN) != "$fqcn" || $(value "$output" PROFILE_FORMAT) != "$profile_format" || $(value "$output" CAPABILITY) != run ]] || ! valid_protocol_abi "$scope" "$board" "$(value "$output" PROTOCOL_ABI)"; then
+  if [[ $refresh == 1 || ! -f $output || $cached_fingerprint != "$inputs_fingerprint" || $(value "$output" CONFIG_FQCN) != "$fqcn" || $(value "$output" PROFILE_FORMAT) != "$profile_format" || ! $(value "$output" CAPABILITY) =~ ^(run|batch)$ ]] || ! valid_protocol_abi "$scope" "$board" "$(value "$output" PROTOCOL_ABI)" || {
+    [[ $scope != fpga ]] || [[ -z $(value "$output" FPGA_PLATFORM_CLOCK_MHZ) || -z $(value "$output" FPGA_RUNTIME_SDB) || -z $(value "$output" FPGA_RUNTIME_TRACE) ]]
+  }; then
     NPC_CONFIG_CATALOG_READY=1 "$profile_tool" "$npc_root" "$fqcn" "$output"
     write_profile_inputs_fingerprint "$inputs_file" "$inputs_fingerprint"
   fi
@@ -977,7 +1059,7 @@ final_construction_by_version() {
 }
 
 verify_assets() {
-  local directory=$1 profile construction scope host_abi board platform artifacts manifest host
+  local directory=$1 profile construction scope host_abi board platform artifacts manifest host core_clock expected_core_clock
   profile="$directory/profile.env"
   construction="$directory/construction.env"
   [[ -f $profile && -f $construction ]] || {
@@ -994,12 +1076,19 @@ verify_assets() {
     }
     host="$directory/abi/nemu/host.env"
     if [[ -f $host ]]; then
-      for key in CONFIG_FQCN NEMU_PRESET NEMU_BACKEND NEMU_TRACE NEMU_WATCHPOINT NEMU_VCD NEMU_PERFORMANCE_HTML NEMU_PIPELINE_HTML \
+      for key in CONFIG_FQCN NEMU_PRESET NEMU_BACKEND NEMU_TRACE NEMU_WATCHPOINT NEMU_VCD NEMU_PERFORMANCE_HTML NEMU_CACHE_HTML NEMU_PIPELINE_HTML \
         NEMU_NPC_DIFFTEST NEMU_DEVICES NEMU_OPTIMIZATION NEMU_DEBUG NEMU_LTO NEMU_ASAN; do
         [[ $(value "$host" "$key") == $(value "$profile" "$key") ]] || {
           echo "构造 NEMU host 元数据与 profile 不匹配：$directory（$key）" >&2; return 1;
         }
       done
+      expected_core_clock=300
+      if [[ $scope == fpga ]]; then expected_core_clock=$(value "$profile" FPGA_CLOCK_MHZ); fi
+      core_clock=$(value "$host" CORE_CLOCK_MHZ)
+      [[ $core_clock == "$expected_core_clock" ]] || {
+        echo "构造 NEMU host 的报告时钟与冻结硬件 profile 不匹配：$directory（host=$core_clock MHz，profile=$expected_core_clock MHz）" >&2
+        return 1
+      }
     fi
   fi
   [[ $scope == fpga ]] || return 0
@@ -1128,9 +1217,73 @@ failed_fpga_host_recovery_candidate() {
   [[ -f $(version_tag_file "$directory") && -f $(version_info_file "$directory") ]] || return 1
   state=$(version_state_from_tag "$directory")
   [[ $state == failed || $state == interrupted ]] || return 1
-  [[ $(value "$profile" CAPABILITY) == run && $(value "$profile" SCOPE) == fpga &&
+  [[ $(value "$profile" CAPABILITY) =~ ^(run|batch)$ && $(value "$profile" SCOPE) == fpga &&
     $(value "$profile" HOST_ABI) != none && -s $directory/logs/build/nemu-host.log ]] || return 1
   verify_fpga_artifacts "$directory" "$profile"
+}
+
+# A Vitis link can finish the expensive implementation and xclbin packaging, then
+# fail only in a post-link check.  This recovery path deliberately accepts only
+# that narrow state: no link stamp or manifest, but a saved profile, completed
+# synthesis, a Vitis-success log, and the expected U55C assets.
+failed_fpga_post_link_recovery_candidate() {
+  local directory=$1 profile state platform artifacts xclbin link_log
+  profile="$directory/profile.env"
+  [[ -f $profile && -f $directory/.incomplete && ! -e $directory/.complete &&
+    ! -f $directory/construction.env ]] || return 1
+  [[ -f $(version_tag_file "$directory") && -f $(version_info_file "$directory") ]] || return 1
+  state=$(version_state_from_tag "$directory")
+  [[ $state == failed || $state == interrupted ]] || return 1
+  [[ $(value "$profile" CAPABILITY) =~ ^(run|batch)$ && $(value "$profile" SCOPE) == fpga &&
+    $(value "$profile" FPGA_BOARD) == u55c && $(value "$profile" HOST_ABI) != none ]] || return 1
+  [[ -f $directory/fpga/.synthesis.complete && ! -e $directory/fpga/.link.complete ]] || return 1
+  platform=$(value "$profile" FPGA_PLATFORM)
+  artifacts="$directory/fpga/artifacts"
+  xclbin="$artifacts/npc-$platform.xclbin"
+  link_log="$directory/logs/build/link.log"
+  [[ -s $xclbin && -s $link_log && ! -e $artifacts/artifact-manifest.env &&
+    ! -e $artifacts/SHA256SUMS ]] || return 1
+  grep -q 'Run completed\.' "$link_log"
+}
+
+same_hardware_profile() {
+  local saved=$1 current=$2
+  diff -u <(grep -v '^NEMU_' "$saved") <(grep -v '^NEMU_' "$current") >&2
+}
+
+complete_fpga_post_link_recovery() {
+  local directory=$1 profile=$2 artifacts platform fqcn variant xclbin wns link_stamp
+  artifacts="$directory/fpga/artifacts"
+  platform=$(value "$profile" FPGA_PLATFORM)
+  fqcn=$(value "$profile" CONFIG_FQCN)
+  variant=${fqcn//./_}
+  xclbin="$artifacts/npc-$platform.xclbin"
+  wns="$artifacts/npc.wns"
+  link_stamp="$directory/fpga/.link.complete"
+
+  "$phase_log_tool" run "$directory/logs/build" post-link-validation 4 5 -- \
+    bash -c '
+      set -euo pipefail
+      verifier=$1; xclbin=$2; platform_clock=$3; xrt_mode=$4; timing_tool=$5; reports=$6; wns_file=$7
+      timing_min=$8; artifact_tool=$9; artifacts=${10}; source_root=${11}; board=${12}; variant=${13}
+      platform=${14}; fqcn=${15}; host_abi=${16}; protocol_abi=${17}; asset=${18}; link_stamp=${19}
+      if [[ $xrt_mode == unset ]]; then env -u XILINX_XRT "$verifier" "$xclbin" "$platform_clock";
+      else "$verifier" "$xclbin" "$platform_clock"; fi
+      "$timing_tool" "$reports" > "$wns_file"
+      wns=$(cat "$wns_file")
+      awk -v wns="$wns" -v min="$timing_min" "BEGIN { exit !(wns >= min) }"
+      "$artifact_tool" write --directory "$artifacts" --source-root "$source_root" --release-tag UNRELEASED \
+        --board "$board" --variant "$variant" --type alveo --platform "$platform" --config-fqcn "$fqcn" \
+        --host-abi "$host_abi" --protocol-abi "$protocol_abi" --timing-wns "$wns" --asset "$asset"
+      "$artifact_tool" verify --directory "$artifacts" --board "$board" --platform "$platform" \
+        --config-fqcn "$fqcn" --host-abi "$host_abi" --protocol-abi "$protocol_abi" --release-tag UNRELEASED
+      touch "$link_stamp"
+    ' -- \
+    "$npc_root/fpga/u55c/scripts/verify-data-clock.sh" "$xclbin" "$(value "$profile" FPGA_PLATFORM_CLOCK_MHZ)" \
+    "$(value "$profile" FPGA_VITIS_XRT_MODE)" "$npc_root/fpga/common/scripts/extract-timing-wns.sh" \
+    "$directory/fpga/vitis-reports" "$wns" "$(value "$profile" FPGA_TIMING_WNS_MIN_NS)" \
+    "$artifact_tool" "$artifacts" "$workspace" u55c "$variant" "$platform" "$fqcn" \
+    "$(value "$profile" HOST_ABI)" "$(value "$profile" PROTOCOL_ABI)" "$(basename "$xclbin")" "$link_stamp"
 }
 
 bootstrap_failed_fpga_construction() {
@@ -1152,7 +1305,9 @@ next_id() {
   [[ $prefix =~ ^[0-9]{14}$ ]] || { echo "内部构造编号时间前缀必须是 14 位数字" >&2; exit 2; }
   for sequence in $(seq -w 0 99); do
     candidate="$prefix$sequence"
-    if ! grep -R -q --include=construction.env "^CONSTRUCTION_ID=$candidate$" "$root" 2>/dev/null; then
+    # 并行构造在工具执行期间尚未写 construction.env；.incomplete 中的预留编号
+    # 让同一秒启动的不同 Config 也不会得到相同的内部 ID。
+    if ! grep -R -q --include=construction.env --include=.incomplete "^CONSTRUCTION_ID=$candidate$" "$root" 2>/dev/null; then
       printf '%s\n' "$candidate"
       return
     fi
@@ -1161,10 +1316,55 @@ next_id() {
   exit 1
 }
 
-do_build_locked() {
-  local request=$1 force=$2 resolved scope board target profile fqcn retry_config capability final stage old_id version_index created rebuild_count source_rev log failed_dir
-  migrate_version_indexes_locked
-  resolved=$(resolve_catalog "$request")
+prepared_fqcn=''
+prepared_scope=''
+prepared_stage=''
+prepared_profile=''
+prepared_old_id=''
+prepared_version_index=''
+prepared_created=''
+prepared_rebuild_count=0
+prepared_source_rev=''
+prepared_build_tool=''
+
+# FPGA 构造可持续数十分钟。把 shell 驱动和它直接 exec 的 helper 固定在构造
+# 日志中，避免开发者在此期间编辑工作区脚本，使一个已完成的链接阶段在最后 host
+# 阶段因脚本被半写入而失败。Make/Scala/RTL 仍遵循本次构造已冻结的 profile。
+snapshot_build_driver() {
+  local directory=$1 destination source name
+  destination="$directory/logs/build/driver-scripts"
+  mkdir -p "$destination"
+  for source in "$build_tool" "$phase_log_tool" "$refresh_simulation_host_tool" "$npc_root/scripts/ip-source-manifest.sh"; do
+    [[ -x $source ]] || { echo "构造驱动不可执行：$source" >&2; exit 2; }
+    name=${source##*/}
+    install -m 0755 "$source" "$destination/$name"
+  done
+  (cd "$destination" && sha256sum build-construction.sh phase-log.sh refresh-simulation-host.sh ip-source-manifest.sh) \
+    > "$destination/SHA256SUMS"
+  printf '%s\n' "$destination/build-construction.sh"
+}
+
+mark_prepared_build_state() {
+  [[ -n $prepared_stage && -n $prepared_version_index ]] || return 0
+  write_version_tag "$prepared_stage" "$prepared_version_index" "$1"
+}
+
+interrupted_prepared_build() {
+  trap - ERR INT TERM
+  mark_prepared_build_state interrupted || true
+  exit 130
+}
+
+failed_prepared_build() {
+  trap - ERR INT TERM
+  mark_prepared_build_state failed || true
+  exit 1
+}
+
+# 此函数必须持有全局元数据锁和对应 FQCN 的构造锁。它只冻结 profile、版本和
+# 稳定目录；真正的 Chisel/Verilator/Vivado 工作会在释放全局锁后执行。
+prepare_build_locked() {
+  local request=$1 force=$2 resolved=$3 scope board target profile fqcn capability final stage old_id version_index created rebuild_count source_rev log
   IFS='|' read -r fqcn scope board target <<< "$resolved"
   final="$root/$fqcn"
   if [[ -d $final && $force != 1 ]] && version_directory_is_valid "$final"; then
@@ -1195,79 +1395,206 @@ do_build_locked() {
   # FQCN 目录是可视化工具的稳定入口。build 与 rebuild 都直接在这里工作，
   # 状态只由 version.tag 表示；不会创建、隐藏或重命名 staging 目录。
   stage="$final"
-  prepare_stable_construction_directory "$stage" "$fqcn"
+  prepare_stable_construction_directory "$stage" "$fqcn" "$old_id"
   write_pending_version_info "$stage" "$fqcn" "$scope" "$target" "$version_index"
   write_version_tag "$stage" "$version_index" building
-  trap 'write_version_tag "$stage" "$version_index" interrupted || true; exit 130' INT TERM
-  trap 'write_version_tag "$stage" "$version_index" failed || true; exit 1' ERR
+  prepared_fqcn=$fqcn
+  prepared_scope=$scope
+  prepared_stage=$stage
+  prepared_old_id=$old_id
+  prepared_version_index=$version_index
+  prepared_created=$created
+  prepared_rebuild_count=$rebuild_count
+  trap interrupted_prepared_build INT TERM
+  trap failed_prepared_build ERR
   profile=$(profile_for "$fqcn" 1)
   capability=$(value "$profile" CAPABILITY)
   if [[ $capability == check-only ]]; then
     write_version_tag "$stage" "$version_index" failed
+    trap - ERR INT TERM
     echo "$fqcn 是检查 Config，不能构造" >&2
-    exit 2
+    return 2
   fi
   cp "$profile" "$stage/profile.env"
   write_version_info "$stage" "$stage/profile.env" "$version_index"
   source_rev=$(git -C "$workspace" rev-parse HEAD 2>/dev/null || echo unknown)
   log="$stage/logs/build/all.log"
   : > "$log"
-  echo "开始构造 $fqcn"
-  if ! "$build_tool" "$workspace" "$stage" "$stage/profile.env"; then
-    if [[ $scope == fpga && -s $stage/logs/build/nemu-host.log ]] && \
-      verify_fpga_artifacts "$stage" "$stage/profile.env"; then
-      write_formal_construction "$stage" "$stage/profile.env" "$old_id" "$version_index" "$created" "$rebuild_count" "$source_rev"
-      echo 'FPGA 资产已通过 manifest/SHA-256 校验；可使用 host-build 只重试失败的 NEMU host。' >&2
-    fi
-    failed_dir="$root/.failed/$fqcn/build"
-    rm -rf "$failed_dir"
-    mkdir -p "$failed_dir"
-    cp -a "$stage/logs/build/." "$failed_dir/" 2>/dev/null || true
-    preserve_fpga_failure_evidence "$stage" "$failed_dir"
-    write_version_tag "$stage" "$version_index" failed
-    echo '构造失败；无效构造目录已保留。' >&2
-    echo '失败原因（关键日志）：' >&2
-    failure_excerpt "$failed_dir/all.log"
-    echo "完整日志目录：$failed_dir" >&2
-    retry_config=$(config_short_name "$fqcn")
-    echo "需要重试，请执行：make -C $npc_root rebuild config=$retry_config" >&2
-    exit 1
+  prepared_build_tool=$(snapshot_build_driver "$stage")
+  prepared_profile="$stage/profile.env"
+  prepared_source_rev=$source_rev
+}
+
+# 此函数只在持有对应 FQCN 的构造锁时调用。发布状态前重新获取全局锁，使版本
+# 索引、construction.env 和最终 tag 对 delete/reindex 保持同一个事务边界。
+run_prepared_build() {
+  local retry_config failed_dir metadata_lock_fd
+  echo "开始构造 $prepared_fqcn"
+  if "$prepared_build_tool" "$workspace" "$prepared_stage" "$prepared_profile"; then
+    exec {metadata_lock_fd}>"$root/.lock"
+    flock "$metadata_lock_fd"
+    write_formal_construction "$prepared_stage" "$prepared_profile" "$prepared_old_id" \
+      "$prepared_version_index" "$prepared_created" "$prepared_rebuild_count" "$prepared_source_rev"
+    verify_assets "$prepared_stage"
+    mark_construction_complete "$prepared_stage"
+    write_version_tag "$prepared_stage" "$prepared_version_index" complete
+    flock -u "$metadata_lock_fd"
+    exec {metadata_lock_fd}>&-
+    trap - ERR INT TERM
+    echo "已保存构造版本 $prepared_version_index：$prepared_stage"
+    return 0
   fi
-  write_formal_construction "$stage" "$stage/profile.env" "$old_id" "$version_index" "$created" "$rebuild_count" "$source_rev"
-  verify_assets "$stage"
-  mark_construction_complete "$stage"
-  write_version_tag "$stage" "$version_index" complete
+
+  exec {metadata_lock_fd}>"$root/.lock"
+  flock "$metadata_lock_fd"
+  if [[ $prepared_scope == fpga && -s $prepared_stage/logs/build/nemu-host.log ]] && \
+    verify_fpga_artifacts "$prepared_stage" "$prepared_profile"; then
+    write_formal_construction "$prepared_stage" "$prepared_profile" "$prepared_old_id" \
+      "$prepared_version_index" "$prepared_created" "$prepared_rebuild_count" "$prepared_source_rev"
+    echo 'FPGA 资产已通过 manifest/SHA-256 校验；可使用 host-build 只重试失败的 NEMU host。' >&2
+  fi
+  failed_dir="$root/.failed/$prepared_fqcn/build"
+  rm -rf "$failed_dir"
+  mkdir -p "$failed_dir"
+  cp -a "$prepared_stage/logs/build/." "$failed_dir/" 2>/dev/null || true
+  preserve_fpga_failure_evidence "$prepared_stage" "$failed_dir"
+  write_version_tag "$prepared_stage" "$prepared_version_index" failed
+  flock -u "$metadata_lock_fd"
+  exec {metadata_lock_fd}>&-
   trap - ERR INT TERM
-  echo "已保存构造版本 $version_index：$final"
+  echo '构造失败；无效构造目录已保留。' >&2
+  echo '失败原因（关键日志）：' >&2
+  failure_excerpt "$failed_dir/all.log"
+  echo "完整日志目录：$failed_dir" >&2
+  retry_config=$(config_short_name "$prepared_fqcn")
+  echo "需要重试，请执行：make -C $npc_root rebuild config=$retry_config" >&2
+  return 1
 }
 
 do_build() {
-  local request=$1 force=$2
-  exec 9>"$root/.lock"
-  flock 9
-  do_build_locked "$request" "$force"
+  local request=$1 force=$2 metadata_lock_fd build_lock_fd resolved fqcn
+  exec {metadata_lock_fd}>"$root/.lock"
+  flock "$metadata_lock_fd"
+  migrate_version_indexes_locked
+  resolved=$(resolve_catalog "$request")
+  IFS='|' read -r fqcn _ <<< "$resolved"
+  exec {build_lock_fd}>"$root/.locks/$fqcn.lock"
+  if ! flock -n "$build_lock_fd"; then
+    flock -u "$metadata_lock_fd"
+    exec {metadata_lock_fd}>&-
+    exec {build_lock_fd}>&-
+    echo "Config 正在构造，不能同时 build/rebuild：$fqcn" >&2
+    return 1
+  fi
+  prepare_build_locked "$request" "$force" "$resolved"
+  flock -u "$metadata_lock_fd"
+  exec {metadata_lock_fd}>&-
+  run_prepared_build
+  flock -u "$build_lock_fd"
+  exec {build_lock_fd}>&-
 }
 
-do_delete() {
-  local d_version=${1:-} delete_version=${2:-} version_index directory
-  [[ -n $d_version || -n $delete_version ]] || usage
-  if [[ -n $d_version && -n $delete_version && $d_version != "$delete_version" ]]; then
-    echo "D=$d_version 与 delete=$delete_version 不一致" >&2
-    exit 2
-  fi
-  version_index=${d_version:-$delete_version}
-  require_version_index "$version_index"
+do_resume_post_link() {
+  local request=$1 resolved fqcn scope board target directory profile current_profile version_index
+  resolved=$(resolve_catalog "$request")
+  IFS='|' read -r fqcn scope board target <<< "$resolved"
+  directory="$root/$fqcn"
+  [[ $scope == fpga && $board == u55c ]] || {
+    echo "resume-post-link 仅支持 U55C FPGA Config：$fqcn" >&2
+    return 2
+  }
+
   exec 9>"$root/.lock"
   flock 9
   migrate_version_indexes_locked
-  directory=$(final_construction_by_version "$version_index")
-  rm -rf -- "$directory"
+  failed_fpga_post_link_recovery_candidate "$directory" || {
+    echo "构造不是可恢复的 post-link 状态：$directory；请执行 make -C $npc_root rebuild config=$(config_short_name "$fqcn")。" >&2
+    return 1
+  }
+  profile="$directory/profile.env"
+  current_profile=$(profile_for "$fqcn" 1)
+  if ! same_hardware_profile "$profile" "$current_profile"; then
+    echo "当前 Config 的硬件字段已改变，不能复用旧 xclbin；请执行 make -C $npc_root rebuild config=$(config_short_name "$fqcn")。" >&2
+    return 1
+  fi
+
+  version_index=$(version_index_from_tag "$directory")
+  write_version_tag "$directory" "$version_index" building
+  if ! complete_fpga_post_link_recovery "$directory" "$profile"; then
+    write_version_tag "$directory" "$version_index" failed
+    echo "post-link 恢复校验失败；构造仍保持无效：$fqcn" >&2
+    return 1
+  fi
+  bootstrap_failed_fpga_construction "$directory" "$profile"
+  if ! do_host_build_directory "$directory"; then
+    write_version_tag "$directory" "$version_index" failed
+    echo "post-link 已验证，但 NEMU host 构造失败；可使用 host-build 重试：$fqcn" >&2
+    return 1
+  fi
+  verify_assets "$directory"
+  write_version_info "$directory" "$profile" "$version_index"
+  mark_construction_complete "$directory"
+  write_version_tag "$directory" "$version_index" complete
+  echo "已恢复 post-link 构造并发布版本 $version_index：$directory"
+}
+
+do_delete() {
+  local d_selector delete_selector selector version_index directory fqcn build_lock_fd
+  local -a version_indexes=() directories=() locked_build_fds=()
+  d_selector=$(normalize_version_selector "${1:-}")
+  delete_selector=$(normalize_version_selector "${2:-}")
+  [[ -n $d_selector || -n $delete_selector ]] || usage
+  if [[ -n $d_selector && -n $delete_selector && $d_selector != "$delete_selector" ]]; then
+    echo "D=${1:-} 与 delete=${2:-} 不一致" >&2
+    exit 2
+  fi
+  selector=${d_selector:-$delete_selector}
+  exec 9>"$root/.lock"
+  flock 9
+  migrate_version_indexes_locked
+
+  # 必须根据删除前的同一张版本表解析所有目标。不能每删除一个就重编号，否则
+  # D=1-2 会把原始版本 2 误当作重编号后的另一个构造。
+  IFS=, read -r -a version_indexes <<< "$selector"
+  for version_index in "${version_indexes[@]}"; do
+    directory=$(final_construction_by_version "$version_index")
+    directories+=("$directory")
+  done
+
+  # 删除会重编号所有后续版本，因此不仅目标目录会被写入。持有全局锁后，对每个
+  # 已发布 FQCN 尝试非阻塞构造锁；任一构造正在运行时整体拒绝，绝不留下部分删除
+  # 或 build 使用旧 VERSION_INDEX 覆盖重编号结果的状态。
+  while IFS= read -r directory; do
+    fqcn=$(value "$directory/profile.env" CONFIG_FQCN)
+    [[ -n $fqcn ]] || {
+      echo "构造缺少 Config FQCN：$directory" >&2
+      return 1
+    }
+    exec {build_lock_fd}>"$root/.locks/$fqcn.lock"
+    if ! flock -n "$build_lock_fd"; then
+      exec {build_lock_fd}>&-
+      for build_lock_fd in "${locked_build_fds[@]}"; do
+        flock -u "$build_lock_fd"
+        exec {build_lock_fd}>&-
+      done
+      echo "构造正在构造，不能删除或重新编号：$fqcn" >&2
+      return 1
+    fi
+    locked_build_fds+=("$build_lock_fd")
+  done < <(versioned_final_directories)
+  for directory in "${directories[@]}"; do
+    rm -rf -- "$directory"
+  done
   reindex_version_indexes_locked
-  echo "已删除构造版本 $version_index，并重新映射后续版本序号"
+  for build_lock_fd in "${locked_build_fds[@]}"; do
+    flock -u "$build_lock_fd"
+    exec {build_lock_fd}>&-
+  done
+  echo "已删除构造版本 $selector，并重新映射后续版本序号"
 }
 
 do_host_build_directory() {
-  local directory=$1 host_only=${2:-0} profile capability fqcn logs stage previous failed_dir current_profile
+  local directory=$1 host_only=${2:-0} profile capability fqcn logs stage previous failed_dir current_profile expected_core_clock
   local profile_stage construction_stage host_stage profile_backup construction_backup host_backup host_lock_fd profile_lock_fd
   local profile_backed_up=0 construction_backed_up=0 host_backed_up=0 logs_backed_up=0
   local profile_published=0 construction_published=0 host_published=0 logs_published=0
@@ -1280,7 +1607,7 @@ do_host_build_directory() {
   profile="$directory/profile.env"
   [[ -f $profile ]] || { echo "构造缺少 profile.env：$directory" >&2; return 1; }
   capability=$(value "$profile" CAPABILITY)
-  [[ $capability == run ]] || { echo "$(value "$profile" CONFIG_FQCN) 不是 run Config，不能构造 host" >&2; return 2; }
+  [[ $capability == run || $capability == batch ]] || { echo "$(value "$profile" CONFIG_FQCN) 不是可运行 Config，不能构造 host" >&2; return 2; }
   fqcn=$(value "$profile" CONFIG_FQCN)
   exec {host_lock_fd}>"$directory/abi/.host-refresh.lock"
   flock "$host_lock_fd"
@@ -1323,7 +1650,7 @@ do_host_build_directory() {
     echo "完整日志目录：$failed_dir" >&2
     return 1
   fi
-  for key in CONFIG_FQCN NEMU_PRESET NEMU_BACKEND NEMU_TRACE NEMU_WATCHPOINT NEMU_VCD NEMU_PERFORMANCE_HTML NEMU_PIPELINE_HTML \
+  for key in CONFIG_FQCN NEMU_PRESET NEMU_BACKEND NEMU_TRACE NEMU_WATCHPOINT NEMU_VCD NEMU_PERFORMANCE_HTML NEMU_CACHE_HTML NEMU_PIPELINE_HTML \
     NEMU_NPC_DIFFTEST NEMU_DEVICES NEMU_OPTIMIZATION NEMU_DEBUG NEMU_LTO NEMU_ASAN; do
     [[ $(value "$host_stage/host.env" "$key") == $(value "$profile_stage" "$key") ]] || {
       rm -rf "$stage" "$host_stage"
@@ -1332,6 +1659,14 @@ do_host_build_directory() {
       return 1
     }
   done
+  expected_core_clock=300
+  if [[ $(value "$profile_stage" SCOPE) == fpga ]]; then expected_core_clock=$(value "$profile_stage" FPGA_CLOCK_MHZ); fi
+  [[ $(value "$host_stage/host.env" CORE_CLOCK_MHZ) == "$expected_core_clock" ]] || {
+    rm -rf "$stage" "$host_stage"
+    rm -f "$profile_stage" "$construction_stage"
+    echo "新 NEMU host 的报告时钟与待发布 profile 不匹配：$fqcn" >&2
+    return 1
+  }
 
   profile_backup="$directory/.profile-host-previous.$$"
   construction_backup="$directory/.construction-host-previous.$$"
@@ -1496,7 +1831,7 @@ do_host_build_all() {
   while IFS= read -r env; do
     directory=$(dirname "$env")
     capability=$(value "$directory/profile.env" CAPABILITY)
-    [[ $capability == run ]] || continue
+    [[ $capability == run || $capability == batch ]] || continue
     (
       do_host_build_directory "$directory"
     ) &
@@ -1594,6 +1929,10 @@ case "$command" in
   rebuild)
     [[ $# == 1 ]] || usage
     do_build "$1" 1
+    ;;
+  resume-post-link)
+    [[ $# == 1 ]] || usage
+    do_resume_post_link "$1"
     ;;
   host-build)
     [[ $# == 3 ]] || usage

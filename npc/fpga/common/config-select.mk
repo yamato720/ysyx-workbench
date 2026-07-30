@@ -38,6 +38,7 @@ ifeq ($(FPGA_BUILD_REQUESTED),1)
     # config.mk 只提供 Tcl/IP 文件布局以及频率、地址和 IP 时序等独立硬件约束。
     # device/flow/reports/runtime 完整来自终端 FpgaToolchainConfig 渲染的 profile。
     BOARD_CONFIG_FPGA_ALLOWED_CLOCK_MHZ := $(FPGA_ALLOWED_CLOCK_MHZ)
+    BOARD_CONFIG_FPGA_PLATFORM_CLOCK_MHZ := $(FPGA_PLATFORM_CLOCK_MHZ)
     BOARD_CONFIG_FPGA_MEMORY_BASE := $(FPGA_MEMORY_BASE)
     BOARD_CONFIG_FPGA_MEMORY_HOST_BASE := $(FPGA_MEMORY_HOST_BASE)
     BOARD_CONFIG_FPGA_MEMORY_SIZE := $(FPGA_MEMORY_SIZE)
@@ -63,6 +64,12 @@ ifeq ($(FPGA_BUILD_REQUESTED),1)
     ifeq ($(filter $(FPGA_CLOCK_MHZ),$(BOARD_CONFIG_FPGA_ALLOWED_CLOCK_MHZ)),)
       $(error Scala FPGA_CLOCK_MHZ=$(FPGA_CLOCK_MHZ) 不在板卡允许频率 $(BOARD_CONFIG_FPGA_ALLOWED_CLOCK_MHZ) 中)
     endif
+    ifneq ($(FPGA_PLATFORM_CLOCK_MHZ),$(BOARD_CONFIG_FPGA_PLATFORM_CLOCK_MHZ))
+      $(error Scala FPGA_PLATFORM_CLOCK_MHZ=$(FPGA_PLATFORM_CLOCK_MHZ) 与板卡 config.mk 的 $(BOARD_CONFIG_FPGA_PLATFORM_CLOCK_MHZ) 不一致)
+    endif
+    ifeq ($(shell test "$(FPGA_CLOCK_MHZ)" -le "$(FPGA_PLATFORM_CLOCK_MHZ)" && echo yes),)
+      $(error Scala FPGA_CLOCK_MHZ=$(FPGA_CLOCK_MHZ) 超过 platform clock $(FPGA_PLATFORM_CLOCK_MHZ))
+    endif
     ifneq ($(call fpga_normalize_number,$(BOARD_CONFIG_FPGA_MEMORY_BASE)),$(call fpga_normalize_number,$(MEMORY_BASE)))
       $(error Scala memory base $(MEMORY_BASE) 与板卡 config.mk 的 $(BOARD_CONFIG_FPGA_MEMORY_BASE) 不一致)
     endif
@@ -84,8 +91,14 @@ ifeq ($(FPGA_BUILD_REQUESTED),1)
     ifneq ($(BOARD_CONFIG_FPGA_DIV_ADAPTER_CYCLES),$(FPGA_DIV_ADAPTER_CYCLES))
       $(error Scala divider adapter latency $(FPGA_DIV_ADAPTER_CYCLES) 与板卡 config.mk 的 $(BOARD_CONFIG_FPGA_DIV_ADAPTER_CYCLES) 不一致)
     endif
+    ifneq ($(filter 0 1,$(FPGA_RUNTIME_SDB)),$(FPGA_RUNTIME_SDB))
+      $(error FPGA_RUNTIME_SDB 必须是 0 或 1)
+    endif
     ifneq ($(filter 0 1,$(FPGA_RUNTIME_TRACE)),$(FPGA_RUNTIME_TRACE))
       $(error FPGA_RUNTIME_TRACE 必须是 0 或 1)
+    endif
+    ifeq ($(FPGA_RUNTIME_SDB):$(FPGA_RUNTIME_TRACE),1:1)
+      $(error FPGA SDB 与批处理性能监测必须互斥)
     endif
     ifeq ($(FPGA_RUNTIME_TRACE),1)
       ifneq ($(FPGA_CONFIG_NAME),u55c)
@@ -97,15 +110,26 @@ ifeq ($(FPGA_BUILD_REQUESTED),1)
       ifneq ($(FPGA_TRACE_HBM_BANK),1)
         $(error runtime trace 必须固定使用 HBM[1])
       endif
-      ifneq ($(FPGA_TRACE_BUFFER_BYTES),16777216)
-        $(error runtime trace 缓冲区必须为 16 MiB)
+      ifneq ($(FPGA_TRACE_BUFFER_BYTES),8388608)
+        $(error performance-monitor 缓冲区必须为 8 MiB)
       endif
       ifneq ($(FPGA_TRACE_MAX_RECORDS),200000)
-        $(error runtime trace 记录上限必须为 200000)
+        $(error performance-monitor 记录上限必须为 200000)
       endif
-      trace_cache_power_of_two := $(shell value='$(FPGA_TRACE_CACHE_RECORDS)'; test "$$value" -ge 2 2>/dev/null && test $$((value & (value - 1))) -eq 0 && echo 1)
-      ifneq ($(trace_cache_power_of_two),1)
-        $(error FPGA_TRACE_CACHE_RECORDS 必须是至少 2 的 2 次幂)
+      ifneq ($(FPGA_TRACE_CACHE_RECORDS),2048)
+        $(error performance-monitor FIFO 必须为 2048 records)
+      endif
+      ifneq ($(FPGA_TRACE_FORMAT),2)
+        $(error performance-monitor trace format 必须为 v2)
+      endif
+      ifneq ($(FPGA_TRACE_RECORD_BYTES),32)
+        $(error performance-monitor trace record 必须为 32 bytes)
+      endif
+      ifneq ($(FPGA_TRACE_DATA_WIDTH),256)
+        $(error performance-monitor trace AXI 必须为 256 bits)
+      endif
+      ifneq ($(FPGA_TRACE_BURST_RECORDS),16)
+        $(error performance-monitor trace burst 必须为 16 records)
       endif
     endif
     override NPC_XLEN := $(XLEN)

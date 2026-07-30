@@ -328,6 +328,11 @@ class NpcDecodeUnit(cfg: ISAConfig = ISAConfig()) extends Module {
     LUI   -> upperImmediateAlu(NpcAluOp.Integer.LUI),
     AUIPC -> upperImmediateAlu(NpcAluOp.Integer.AUIPC),
 
+    // 单核实现把 pred/succ 的任意 FENCE 组合保守地执行为完整内存屏障。
+    // 有 D$ 时 NpcCore 会在放行该指令前写回 dirty line；无缓存时 AXI-Lite
+    // 的顺序事务已经保证此前访问完成。
+    FENCE -> row(),
+
     // 特权控制指令：ECALL/EBREAK 都触发同步异常；MRET 在提交点 redirect 回 mepc。
     // Zicsr CSR 读改写指令单独放入 zicsrTable，关闭扩展时会成为 illegal instruction。
     ECALL  -> systemEcall,
@@ -349,6 +354,10 @@ class NpcDecodeUnit(cfg: ISAConfig = ISAConfig()) extends Module {
     } else {
       Seq.empty
     }
+
+  /** FENCE.I is a legal architectural no-op here; NpcCore performs cache maintenance before dispatch. */
+  private val zifenceiTable: Seq[(BitPat, List[UInt])] =
+    if (cfg.Zifencei) Seq(FENCE_I -> row()) else Seq.empty
 
   // 只在 RV64 配置下加入的指令。
   // cfg.xlen 是 Scala 生成参数，所以这里的 if 在 elaboration 时决定表里有没有这些项。
@@ -450,7 +459,7 @@ class NpcDecodeUnit(cfg: ISAConfig = ISAConfig()) extends Module {
   // 没有匹配到任何表项时，按 RISC-V 标准走 illegal instruction exception，
   // 而不是静默当成 NOP 吞掉。
   private val decoded = ListLookup(io.instruction, illegalInstruction,
-    (baseTable ++ zicsrTable ++ rv64Table ++ mTable ++ fTable).toArray)
+    (baseTable ++ zicsrTable ++ zifenceiTable ++ rv64Table ++ mTable ++ fTable).toArray)
 
   // 把 decoded 这条 List 拆回有名字的 Bundle 字段。
   // asBool 用在那些原本是 1 bit enable 的字段上；aluCtrl/csrOperation/executionUnit 保持 UInt 编码。

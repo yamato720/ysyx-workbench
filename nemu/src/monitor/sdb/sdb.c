@@ -64,7 +64,8 @@ static int cmd_q(char *args) {
 #ifdef NPC_FPGA_REMOTE
   extern int npc_debug_halt(void);
   extern bool npc_debug_is_halted(void);
-  if (!npc_debug_is_halted() && npc_debug_halt() != 0)
+  extern bool npc_runtime_has_completed(void);
+  if (!npc_runtime_has_completed() && !npc_debug_is_halted() && npc_debug_halt() != 0)
     fprintf(stderr, "failed to halt FPGA before exit: %s\n", strerror(errno));
 #endif
   quit();

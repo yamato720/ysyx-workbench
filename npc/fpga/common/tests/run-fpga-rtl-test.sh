@@ -6,6 +6,7 @@ npc_root=$(realpath "$npc_root")
 manager="$npc_root/scripts/construction-manager.sh"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT INT TERM
+export CONSTRUCTION_TEST_ROOT="$work/constructions"
 
 "$npc_root/scripts/generate-config-catalog.sh" "$npc_root"
 export NPC_CONFIG_CATALOG_READY=1
@@ -23,16 +24,27 @@ zcu_soc="$work/zcu102-soc"
 zcu_npc="$work/zcu102-npc"
 u55c_soc="$work/u55c-soc"
 u55c_rv64_npc="$work/u55c-rv64-npc"
-u55c_rv64_debug="$work/u55c-rv64-debug"
+u55c_cache_npc="$work/u55c-cache-npc"
+u55c_performance_monitor="$work/u55c-performance-monitor"
+u55c_cache_performance_monitor="$work/u55c-cache-performance-monitor"
+u55c_cache_150mhz_performance_monitor="$work/u55c-cache-150mhz-performance-monitor"
+u55c_100mhz_performance_monitor="$work/u55c-100mhz-performance-monitor"
 elaborate Zcu102YsyxSocFpgaConfig "$zcu_soc"
 elaborate Zcu102NpcFpgaConfig "$zcu_npc"
 elaborate U55cYsyxSocFpgaConfig "$u55c_soc"
 elaborate U55cRv64Npc300MHzFpgaConfig "$u55c_rv64_npc"
-elaborate U55cRv64Npc300MHzDebugFpgaConfig "$u55c_rv64_debug"
+elaborate U55cCacheNpcFpgaConfig "$u55c_cache_npc"
+elaborate U55cRv64Npc300MHzPerformanceMonitorFpgaConfig "$u55c_performance_monitor"
+elaborate U55cRv64CacheNpc300MHzPerformanceMonitorFpgaConfig "$u55c_cache_performance_monitor"
+elaborate U55cRv64CacheNpc150MHzPerformanceMonitorFpgaConfig "$u55c_cache_150mhz_performance_monitor"
+elaborate U55cRv64Npc100MHzPerformanceMonitorFpgaConfig "$u55c_100mhz_performance_monitor"
 
 mapfile -d '' -t zcu_soc_rtl < <(find "$zcu_soc/rtl" -type f \( -name '*.v' -o -name '*.sv' \) -print0 | sort -z)
 mapfile -d '' -t zcu_npc_rtl < <(find "$zcu_npc/rtl" -type f \( -name '*.v' -o -name '*.sv' \) -print0 | sort -z)
 mapfile -d '' -t u55c_rv64_npc_rtl < <(find "$u55c_rv64_npc/rtl" -type f \( -name '*.v' -o -name '*.sv' \) -print0 | sort -z)
+mapfile -d '' -t u55c_cache_npc_rtl < <(find "$u55c_cache_npc/rtl" -type f \( -name '*.v' -o -name '*.sv' \) -print0 | sort -z)
+mapfile -d '' -t u55c_performance_monitor_rtl < <(find "$u55c_performance_monitor/rtl" -type f \( -name '*.v' -o -name '*.sv' \) -print0 | sort -z)
+mapfile -d '' -t u55c_cache_performance_monitor_rtl < <(find "$u55c_cache_performance_monitor/rtl" -type f \( -name '*.v' -o -name '*.sv' \) -print0 | sort -z)
 (( ${#zcu_soc_rtl[@]} > 1 )) || { echo 'ysyx FPGA elaboration 未按模块拆分 RTL' >&2; exit 1; }
 (( ${#zcu_npc_rtl[@]} > 1 )) || { echo '裸 NPC FPGA elaboration 未按模块拆分 RTL' >&2; exit 1; }
 [[ -f $u55c_soc/rtl/NpcFpgaTop.sv ]] || { echo 'U55C 未生成 NpcFpgaTop' >&2; exit 1; }
@@ -65,11 +77,60 @@ grep -Rqs '^module FpgaRuntimeMailbox' "$zcu_npc/rtl" || { echo 'FPGA RTL 缺少
 if grep -Rqs 'io_trace_aw_valid' "$u55c_rv64_npc/rtl"; then
   echo '普通 U55C RTL 不应包含 trace AXI 端口' >&2; exit 1
 fi
-grep -Rqs 'io_trace_aw_valid' "$u55c_rv64_debug/rtl" || { echo 'Debug U55C RTL 缺少 trace AXI 端口' >&2; exit 1; }
-grep -Rqs 'trace_uram_fifo' "$u55c_rv64_debug/rtl" || { echo 'Debug U55C RTL 缺少命名 URAM FIFO' >&2; exit 1; }
-[[ -f $u55c_rv64_debug/rtl/trace_uram_fifo_4096x576.sv ]] || {
-  echo 'Debug U55C RTL 未按 Config 生成 4096x576 trace URAM FIFO' >&2; exit 1;
+grep -qx 'FPGA_RUNTIME_TRACE=1' "$u55c_performance_monitor/rtl/fpga-parameters.env"
+grep -qx 'FPGA_RUNTIME_SDB=0' "$u55c_performance_monitor/rtl/fpga-parameters.env"
+grep -qx 'FPGA_RUNTIME_TRACE=1' "$u55c_cache_performance_monitor/rtl/fpga-parameters.env"
+grep -qx 'FPGA_RUNTIME_SDB=0' "$u55c_cache_performance_monitor/rtl/fpga-parameters.env"
+grep -qx 'ICACHE_ENABLED=1' "$u55c_cache_performance_monitor/rtl/fpga-parameters.env"
+grep -qx 'DCACHE_ENABLED=1' "$u55c_cache_performance_monitor/rtl/fpga-parameters.env"
+grep -qx 'FPGA_CLOCK_MHZ=150' "$u55c_cache_150mhz_performance_monitor/rtl/fpga-parameters.env"
+grep -qx 'FPGA_PLATFORM_CLOCK_MHZ=300' "$u55c_cache_150mhz_performance_monitor/rtl/fpga-parameters.env"
+grep -qx 'ICACHE_ENABLED=1' "$u55c_cache_150mhz_performance_monitor/rtl/fpga-parameters.env"
+grep -qx 'DCACHE_ENABLED=1' "$u55c_cache_150mhz_performance_monitor/rtl/fpga-parameters.env"
+grep -qx 'FPGA_RUNTIME_SDB=1' "$u55c_rv64_npc/rtl/fpga-parameters.env"
+grep -qx 'ICACHE_ENABLED=1' "$u55c_cache_npc/rtl/fpga-parameters.env"
+grep -qx 'DCACHE_ENABLED=1' "$u55c_cache_npc/rtl/fpga-parameters.env"
+grep -Rqs '^module InstructionCache' "$u55c_cache_npc/rtl" || {
+  echo '缓存 U55C RTL 缺少 InstructionCache' >&2; exit 1;
 }
+grep -Rqs '^module DataCache' "$u55c_cache_npc/rtl" || {
+  echo '缓存 U55C RTL 缺少 DataCache' >&2; exit 1;
+}
+grep -Rqs '^module CacheMaintenanceController' "$u55c_cache_npc/rtl" || {
+  echo '缓存 U55C RTL 缺少维护控制器' >&2; exit 1;
+}
+grep -qx 'FPGA_TRACE_DATA_WIDTH=256' "$u55c_performance_monitor/rtl/fpga-parameters.env"
+grep -qx 'FPGA_TRACE_BURST_RECORDS=16' "$u55c_performance_monitor/rtl/fpga-parameters.env"
+grep -qx 'FPGA_CLOCK_MHZ=100' "$u55c_100mhz_performance_monitor/rtl/fpga-parameters.env"
+grep -qx 'FPGA_PLATFORM_CLOCK_MHZ=300' "$u55c_100mhz_performance_monitor/rtl/fpga-parameters.env"
+grep -Rqs 'performance_monitor_uram_fifo' "$u55c_performance_monitor/rtl" || {
+  echo '性能监测 RTL 缺少命名 URAM FIFO' >&2; exit 1;
+}
+if grep -Rqs '^module FpgaDebugController' "$u55c_performance_monitor/rtl"; then
+  echo '性能监测 RTL 不应综合 SDB halt/step 控制器' >&2; exit 1
+fi
+if grep -Rqs '^module FpgaDebugController' "$u55c_cache_performance_monitor/rtl"; then
+  echo '缓存性能监测 RTL 不应综合 SDB halt/step 控制器' >&2; exit 1
+fi
+grep -Rqs '^module InstructionCache' "$u55c_cache_performance_monitor/rtl" || {
+  echo '缓存性能监测 RTL 缺少 InstructionCache' >&2; exit 1;
+}
+grep -Rqs '^module DataCache' "$u55c_cache_performance_monitor/rtl" || {
+  echo '缓存性能监测 RTL 缺少 DataCache' >&2; exit 1;
+}
+grep -Eq '\[255:0\].*io_trace_w_bits_data' "$u55c_performance_monitor/rtl/NpcFpgaTop.sv" || {
+  echo '性能监测 trace 写数据端口不是 256 位' >&2; exit 1;
+}
+grep -Eq '\[7:0\].*io_trace_aw_bits_len' "$u55c_performance_monitor/rtl/NpcFpgaTop.sv" || {
+  echo '性能监测 trace burst length 端口缺失' >&2; exit 1;
+}
+
+verilator --binary --timing -Wno-fatal --top-module FpgaRuntimeTraceWriterTb \
+  --Mdir "$work/runtime-trace-writer" \
+  "$u55c_performance_monitor/rtl/FpgaRuntimeTraceWriter.sv" \
+  "$u55c_performance_monitor/rtl/performance_monitor_uram_fifo_2048x256.sv" \
+  "$npc_root/fpga/common/tests/fpga-runtime-trace-writer-tb.sv" >/dev/null
+"$work/runtime-trace-writer/VFpgaRuntimeTraceWriterTb"
 
 verilator --binary --timing -Wno-fatal -Wno-PINMISSING --top-module FpgaIntegerMultiplierAdapterTb \
   --Mdir "$work/integer-multiplier" "$npc_root/fpga-ip-generator/common/compute/source/sv/npc-integer-ip-adapters.sv" \
@@ -90,6 +151,11 @@ verilator --binary --timing -Wno-fatal -Wno-PINMISSING -DNPC_TEST_DIVIDER_NON_BL
 verilator --binary --timing -Wno-fatal -Wno-PINMISSING --top-module FpgaDebugControlTb \
   --Mdir "$work/debug" "${zcu_npc_rtl[@]}" "$npc_root/fpga/common/tests/fpga-debug-control-tb.sv" >/dev/null
 "$work/debug/VFpgaDebugControlTb"
+
+verilator --binary --timing -Wno-fatal -Wno-PINMISSING --top-module FpgaCacheDrainTb \
+  --Mdir "$work/cache-drain" "${u55c_cache_npc_rtl[@]}" \
+  "$npc_root/fpga/common/tests/fpga-cache-drain-tb.sv" >/dev/null
+"$work/cache-drain/VFpgaCacheDrainTb"
 
 verilator --binary --timing -Wno-fatal -Wno-PINMISSING -Wno-WIDTHEXPAND --top-module FpgaMachineExternalInterruptTb \
   --Mdir "$work/machine-external-interrupt" "${zcu_npc_rtl[@]}" \

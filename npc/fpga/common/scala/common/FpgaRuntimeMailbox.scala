@@ -4,13 +4,18 @@ import chisel3._
 import chisel3.util._
 import npc.protocol._
 
-/** 供 PS Linux 与 XRT 宿主访问的 FPGA 运行控制和调试寄存器组。 */
-class FpgaRuntimeMailbox(width: Int) extends Module {
+/** FPGA runtime control plane.
+  *
+  * `sdbEnabled=false` retains only the batch lifecycle registers required by
+  * a performance-monitor host.  The interactive halt/step FSM and wide
+  * architectural snapshots are then not synthesized.
+  */
+class FpgaRuntimeMailbox(width: Int, sdbEnabled: Boolean = true, cacheEnabled: Boolean = false) extends Module {
   require(width == 32 || width == 64)
 
   val io = IO(new Bundle {
     val axi = Flipped(new AxiLiteMasterIO(32, 32))
-    val runtime = Input(new FpgaRuntimeDebug(width))
+    val runtime = Input(new FpgaRuntimeDebug(width, sdbEnabled))
     val putch = Flipped(Decoupled(UInt(8.W)))
     val coreReset = Output(Bool())
     val dispatchPermit = Output(Bool())
@@ -21,8 +26,11 @@ class FpgaRuntimeMailbox(width: Int) extends Module {
     val traceStageSelector = Output(UInt(3.W))
     val traceStallSelector = Output(UInt(3.W))
     val trace = Input(new FpgaRuntimeTraceStatus)
+    val cache = Input(new FpgaRuntimeCacheStatus)
     val guestExternalInterrupt = Output(Bool())
     val mailboxInterrupt = Output(Bool())
+    val cacheDrainRequest = Output(Bool())
+    val cacheDrained = Input(Bool())
   })
 
   val coreReset = RegInit(true.B)
@@ -33,10 +41,16 @@ class FpgaRuntimeMailbox(width: Int) extends Module {
   val completionCode = RegInit(0.U(width.W))
   val completionPc = RegInit(0.U(width.W))
   val completionNextPc = RegInit(0.U(width.W))
-  val completionGprs = RegInit(VecInit(Seq.fill(32)(0.U(width.W))))
+  val completionDraining = RegInit(false.B)
+  // The core that owns these counters is reset at mtestexit. Keep a mailbox
+  // copy so the host can read the completed run after that reset.
+  val completionCache = RegInit(0.U.asTypeOf(new FpgaRuntimeCacheStatus))
+  val completionCacheValid = RegInit(false.B)
+  val completionCacheSnapshotPending = RegInit(false.B)
+  val completionGprs = if (sdbEnabled) Some(RegInit(VecInit(Seq.fill(32)(0.U(width.W))))) else None
   val guestExternalInterrupt = RegInit(false.B)
-  val gprIndex = RegInit(0.U(5.W))
-  val csrIndex = RegInit(0.U(3.W))
+  val gprIndex = if (sdbEnabled) Some(RegInit(0.U(5.W))) else None
+  val csrIndex = if (sdbEnabled) Some(RegInit(0.U(3.W))) else None
   val memoryHostBaseLow = RegInit(0.U(32.W))
   val memoryHostBaseHigh = RegInit(0.U(32.W))
   val traceHostBaseLow = RegInit(0.U(32.W))
@@ -46,17 +60,44 @@ class FpgaRuntimeMailbox(width: Int) extends Module {
   val traceStallSelector = RegInit(0.U(3.W))
   val traceClear = WireDefault(false.B)
 
-  val debugController = Module(new FpgaDebugController(width))
+  val batchCommitCount = RegInit(0.U(64.W))
   val debugCommand = WireDefault(0.U.asTypeOf(Valid(new FpgaDebugCommand)))
   val resetControl = WireDefault(0.U.asTypeOf(Valid(new FpgaResetControl)))
-  debugController.io.runtime := io.runtime
-  debugController.io.coreReset := coreReset
-  debugController.io.command := debugCommand
-  debugController.io.resetControl := resetControl
-  val debug = debugController.io.status
+  val debugDispatchPermit = WireDefault(!coreReset)
+  val debugCompletedSequence = WireDefault(0.U(32.W))
+  val debugProtocolError = WireDefault(false.B)
+  val debugStepping = WireDefault(false.B)
+  val debugHalting = WireDefault(false.B)
+  val debugStableHalted = WireDefault(coreReset)
+  val debugHalted = WireDefault(coreReset)
+  val debugRunning = WireDefault(!coreReset)
+  val debugStopReason = WireDefault(FpgaStopReason.none)
+  val debugHaltPc = WireDefault(0.U(width.W))
+  val debugHaltNextPc = WireDefault(0.U(width.W))
+  val debugCommitCount = WireDefault(batchCommitCount)
+  if (sdbEnabled) {
+    val debugController = Module(new FpgaDebugController(width))
+    debugController.io.runtime := io.runtime
+    debugController.io.coreReset := coreReset
+    debugController.io.command := debugCommand
+    debugController.io.resetControl := resetControl
+    debugDispatchPermit := debugController.io.dispatchPermit
+    debugCompletedSequence := debugController.io.status.completedSequence
+    debugProtocolError := debugController.io.status.protocolError
+    debugStepping := debugController.io.status.stepping
+    debugHalting := debugController.io.status.halting
+    debugStableHalted := debugController.io.status.stableHalted
+    debugHalted := debugController.io.status.halted
+    debugRunning := debugController.io.status.running
+    debugStopReason := debugController.io.status.stopReason
+    debugHaltPc := debugController.io.status.haltPc
+    debugHaltNextPc := debugController.io.status.haltNextPc
+    debugCommitCount := debugController.io.status.commitCount
+  }
 
   io.coreReset := coreReset
-  io.dispatchPermit := debugController.io.dispatchPermit
+  io.dispatchPermit := debugDispatchPermit && !completionDraining && !completionCacheSnapshotPending
+  io.cacheDrainRequest := completionDraining
   io.memoryHostBase := Cat(memoryHostBaseHigh, memoryHostBaseLow)
   io.traceHostBase := Cat(traceHostBaseHigh, traceHostBaseLow)
   io.traceClear := traceClear
@@ -70,6 +111,9 @@ class FpgaRuntimeMailbox(width: Int) extends Module {
   }
   io.guestExternalInterrupt := guestExternalInterrupt
   io.mailboxInterrupt := putchPending || completionPending
+  when(io.runtime.commitValid && !coreReset) {
+    batchCommitCount := batchCommitCount + 1.U
+  }
 
   val awValid = RegInit(false.B)
   val awAddress = Reg(UInt(32.W))
@@ -112,10 +156,12 @@ class FpgaRuntimeMailbox(width: Int) extends Module {
     switch(awAddress(11, 0)) {
       is("h40".U) { commandSequence := writeMasked(commandSequence, wData, wStrb) }
       is("h44".U) {
-        when(wStrb(0)) {
-          debugCommand.valid := true.B
-          debugCommand.bits.sequence := commandSequence
-          debugCommand.bits.operation := wData(2, 0)
+        if (sdbEnabled) {
+          when(wStrb(0)) {
+            debugCommand.valid := true.B
+            debugCommand.bits.sequence := commandSequence
+            debugCommand.bits.operation := wData(2, 0)
+          }
         }
       }
       is("h80".U) {
@@ -125,13 +171,21 @@ class FpgaRuntimeMailbox(width: Int) extends Module {
           resetControl.bits.asserted := wData(0)
           resetControl.bits.run := wData(1)
           when(wData(0) || wData(2)) { putchPending := false.B }
-          when(wData(0) || wData(1) || wData(3)) { completionPending := false.B }
+          when(wData(0) || wData(1) || wData(3)) {
+            completionPending := false.B
+            completionDraining := false.B
+            completionCacheSnapshotPending := false.B
+          }
           when(wData(0) || wData(1)) { traceClear := true.B }
+          // An acknowledgement commonly carries CORE_RESET as well (0x9), so
+          // only discard a completed cache snapshot for an actual re-arm.
+          when(!wData(3) || wData(1)) { completionCacheValid := false.B }
+          when(wData(0)) { batchCommitCount := 0.U }
         }
       }
       is("h70".U) { when(wStrb(0)) { guestExternalInterrupt := wData(0) } }
-      is("h8c".U) { when(wStrb(0)) { gprIndex := wData(4, 0) } }
-      is("h5c".U) { when(wStrb(0)) { csrIndex := wData(2, 0) } }
+      is("h8c".U) { if (sdbEnabled) { when(wStrb(0)) { gprIndex.get := wData(4, 0) } } }
+      is("h5c".U) { if (sdbEnabled) { when(wStrb(0)) { csrIndex.get := wData(2, 0) } } }
       is("hf0".U) { memoryHostBaseLow := writeMasked(memoryHostBaseLow, wData, wStrb) }
       is("hf4".U) { memoryHostBaseHigh := writeMasked(memoryHostBaseHigh, wData, wStrb) }
       is("h120".U) { traceHostBaseLow := writeMasked(traceHostBaseLow, wData, wStrb) }
@@ -149,67 +203,107 @@ class FpgaRuntimeMailbox(width: Int) extends Module {
   // completion boundary. It is a host notification, not a debug halt or a
   // RISC-V external interrupt; EBREAK remains a normal breakpoint trap.
   val completionCommit = io.runtime.completionCommitValid
-  when(completionCommit && !coreReset && !completionPending) {
-    completionPending := true.B
-    completionCode := io.runtime.gprs(10)
+  when(completionCommit && !coreReset && !completionPending && !completionDraining) {
+    completionCode := io.runtime.completionCode
     completionPc := io.runtime.completionCommitPc
     completionNextPc := io.runtime.completionCommitNextPc
-    completionGprs := io.runtime.gprs
+    if (sdbEnabled) { completionGprs.get := io.runtime.sdb.get.gprs }
+    if (cacheEnabled) {
+      completionDraining := true.B
+    } else {
+      completionPending := true.B
+      coreReset := true.B
+    }
+  }
+
+  when(cacheEnabled.B && completionDraining && io.cacheDrained && !completionCacheSnapshotPending) {
+    // Delay the snapshot by one clock after drain acknowledgement. A dirty
+    // writeback can update its counter on the acknowledgement edge.
+    completionCacheSnapshotPending := true.B
+  }
+
+  when(cacheEnabled.B && completionCacheSnapshotPending) {
+    completionCache := io.cache
+    completionCacheValid := true.B
+    completionCacheSnapshotPending := false.B
+    completionDraining := false.B
+    completionPending := true.B
     coreReset := true.B
   }
 
   def low(value: UInt): UInt = value(31, 0)
   def high(value: UInt): UInt = if (width == 64) value(63, 32) else 0.U(32.W)
-  val selectedCsr = MuxLookup(csrIndex, 0.U(width.W))(Seq(
-    0.U -> io.runtime.mstatus,
-    1.U -> io.runtime.mcause,
-    2.U -> io.runtime.mepc,
-    3.U -> io.runtime.mtvec,
-    5.U -> io.runtime.nextArchitecturalPc
-  ))
-  val selectedGpr = Mux(completionPending, completionGprs(gprIndex), io.runtime.gprs(gprIndex))
+  def cachePolicy(configuration: FpgaCacheConfiguration): UInt = Cat(
+    0.U(23.W), configuration.storage, configuration.writeMiss,
+    configuration.writePolicy, configuration.readMiss, configuration.replacement,
+    configuration.mapping
+  )
+  val visibleCache = WireDefault(io.cache)
+  when(completionCacheValid) { visibleCache := completionCache }
+  val selectedCsr = WireDefault(0.U(width.W))
+  val selectedGpr = WireDefault(0.U(width.W))
+  val sdbMstatus = WireDefault(0.U(width.W))
+  val sdbCurrentPc = WireDefault(0.U(width.W))
+  val sdbFrontendInstruction = WireDefault(0.U(32.W))
+  val sdbBackpressureReasons = WireDefault(0.U(9.W))
+  if (sdbEnabled) {
+    val sdb = io.runtime.sdb.get
+    selectedCsr := MuxLookup(csrIndex.get, 0.U(width.W))(Seq(
+      0.U -> sdb.mstatus,
+      1.U -> sdb.mcause,
+      2.U -> sdb.mepc,
+      3.U -> sdb.mtvec,
+      5.U -> sdb.nextArchitecturalPc
+    ))
+    selectedGpr := Mux(completionPending, completionGprs.get(gprIndex.get), sdb.gprs(gprIndex.get))
+    sdbMstatus := sdb.mstatus
+    sdbCurrentPc := sdb.currentPc
+    sdbFrontendInstruction := sdb.frontendInstruction
+    sdbBackpressureReasons := sdb.backpressureReasons
+  }
   def readRegister(address: UInt): UInt = MuxLookup(address(11, 0), 0.U(32.W))(Seq(
-    "h3c".U -> 7.U(32.W),
+    "h3c".U -> (if (sdbEnabled) 7.U(32.W) else 0.U(32.W)),
     "h40".U -> commandSequence,
-    "h48".U -> debug.completedSequence,
-    "h4c".U -> Cat(0.U(26.W), debug.protocolError, coreReset,
-      debug.stepping, debug.halting, debug.stableHalted, debug.running),
-    "h50".U -> low(debug.haltNextPc),
-    "h54".U -> high(debug.haltNextPc),
-    "h58".U -> Cat(0.U(28.W), debug.stopReason),
-    "h5c".U -> Cat(0.U(29.W), csrIndex),
+    "h48".U -> debugCompletedSequence,
+    "h4c".U -> Cat(0.U(26.W), debugProtocolError, coreReset,
+      debugStepping, debugHalting, debugStableHalted, debugRunning),
+    "h50".U -> low(debugHaltNextPc),
+    "h54".U -> high(debugHaltNextPc),
+    "h58".U -> Cat(0.U(28.W), debugStopReason),
+    "h5c".U -> Cat(0.U(29.W), if (sdbEnabled) csrIndex.get else 0.U(3.W)),
     "h60".U -> low(completionPc),
     "h64".U -> high(completionPc),
     "h68".U -> low(completionNextPc),
     "h6c".U -> high(completionNextPc),
     "h70".U -> Cat(0.U(31.W), guestExternalInterrupt),
     "h80".U -> Cat(0.U(31.W), coreReset),
-    "h84".U -> Cat(0.U(27.W), completionPending, debug.protocolError, putchPending,
-      debug.stableHalted, debug.running),
-    "h88".U -> Cat(2.U(8.W), 7.U(8.W), (width == 64).B, 0.U(7.W), width.U(8.W)),
-    "h8c".U -> Cat(0.U(27.W), gprIndex),
+    "h84".U -> Cat(0.U(27.W), completionPending, debugProtocolError, putchPending,
+      debugStableHalted, debugRunning),
+    "h88".U -> Cat(2.U(8.W), (if (sdbEnabled) 7.U(8.W) else 0.U(8.W)),
+      (width == 64).B, 0.U(7.W), width.U(8.W)),
+    "h8c".U -> Cat(0.U(27.W), if (sdbEnabled) gprIndex.get else 0.U(5.W)),
     "h90".U -> low(selectedGpr),
     "h94".U -> high(selectedGpr),
     "h98".U -> 0.U,
     "h9c".U -> 0.U,
     "ha0".U -> 0.U,
-    "ha4".U -> low(io.runtime.mstatus),
-    "ha8".U -> high(io.runtime.mstatus),
-    "hac".U -> low(io.runtime.currentPc),
-    "hb0".U -> high(io.runtime.currentPc),
-    "hb4".U -> low(Mux(debug.halted, debug.haltPc, io.runtime.commitPc)),
-    "hb8".U -> high(Mux(debug.halted, debug.haltPc, io.runtime.commitPc)),
+    "ha4".U -> low(sdbMstatus),
+    "ha8".U -> high(sdbMstatus),
+    "hac".U -> low(sdbCurrentPc),
+    "hb0".U -> high(sdbCurrentPc),
+    "hb4".U -> low(Mux(debugHalted, debugHaltPc, io.runtime.commitPc)),
+    "hb8".U -> high(Mux(debugHalted, debugHaltPc, io.runtime.commitPc)),
     "hbc".U -> io.runtime.commitInstruction,
-    "hc0".U -> low(Mux(debug.halted, debug.haltNextPc, io.runtime.commitNextPc)),
-    "hc4".U -> high(Mux(debug.halted, debug.haltNextPc, io.runtime.commitNextPc)),
+    "hc0".U -> low(Mux(debugHalted, debugHaltNextPc, io.runtime.commitNextPc)),
+    "hc4".U -> high(Mux(debugHalted, debugHaltNextPc, io.runtime.commitNextPc)),
     "hc8".U -> io.runtime.cycleCount(31, 0),
     "hcc".U -> io.runtime.cycleCount(63, 32),
-    "hd0".U -> debug.commitCount(31, 0),
-    "hd4".U -> debug.commitCount(63, 32),
+    "hd0".U -> debugCommitCount(31, 0),
+    "hd4".U -> debugCommitCount(63, 32),
     "hd8".U -> low(completionCode),
     "hdc".U -> high(completionCode),
-    "he0".U -> Cat(0.U(23.W), io.runtime.backpressureReasons),
-    "he4".U -> io.runtime.frontendInstruction,
+    "he0".U -> Cat(0.U(23.W), sdbBackpressureReasons),
+    "he4".U -> sdbFrontendInstruction,
     "he8".U -> Cat(0.U(24.W), putchData),
     "hec".U -> low(selectedCsr),
     "hf0".U -> memoryHostBaseLow,
@@ -250,7 +344,43 @@ class FpgaRuntimeMailbox(width: Int) extends Module {
     "h17c".U -> Cat(0.U(29.W), io.trace.pipelineFeatures),
     "h180".U -> Cat(0.U(30.W), io.trace.drained, io.trace.enabled),
     "h184".U -> io.trace.lastTotal(31, 0),
-    "h188".U -> io.trace.lastTotal(63, 32)
+    "h188".U -> io.trace.lastTotal(63, 32),
+    // Cache monitoring is mailbox-only: it leaves the fixed v13 HBM trace
+    // record untouched while exposing the elaborated geometry and exact
+    // whole-run counters to the remote NEMU report.
+    "h190".U -> Cat(0.U(29.W), visibleCache.instructionBufferEnabled,
+      visibleCache.data.configuration.enabled, visibleCache.instruction.configuration.enabled),
+    "h194".U -> visibleCache.instructionBufferEntries,
+    "h198".U -> visibleCache.instruction.configuration.capacityBytes,
+    "h19c".U -> visibleCache.instruction.configuration.lineBytes,
+    "h1a0".U -> visibleCache.instruction.configuration.ways,
+    "h1a4".U -> visibleCache.instruction.configuration.sets,
+    "h1a8".U -> cachePolicy(visibleCache.instruction.configuration),
+    "h1ac".U -> visibleCache.instruction.statistics.hits(31, 0),
+    "h1b0".U -> visibleCache.instruction.statistics.hits(63, 32),
+    "h1b4".U -> visibleCache.instruction.statistics.misses(31, 0),
+    "h1b8".U -> visibleCache.instruction.statistics.misses(63, 32),
+    "h1bc".U -> visibleCache.instruction.statistics.refills(31, 0),
+    "h1c0".U -> visibleCache.instruction.statistics.refills(63, 32),
+    "h1c4".U -> visibleCache.instruction.statistics.writebacks(31, 0),
+    "h1c8".U -> visibleCache.instruction.statistics.writebacks(63, 32),
+    "h1cc".U -> visibleCache.instruction.statistics.evictions(31, 0),
+    "h1d0".U -> visibleCache.instruction.statistics.evictions(63, 32),
+    "h1d4".U -> visibleCache.data.configuration.capacityBytes,
+    "h1d8".U -> visibleCache.data.configuration.lineBytes,
+    "h1dc".U -> visibleCache.data.configuration.ways,
+    "h1e0".U -> visibleCache.data.configuration.sets,
+    "h1e4".U -> cachePolicy(visibleCache.data.configuration),
+    "h1e8".U -> visibleCache.data.statistics.hits(31, 0),
+    "h1ec".U -> visibleCache.data.statistics.hits(63, 32),
+    "h1f0".U -> visibleCache.data.statistics.misses(31, 0),
+    "h1f4".U -> visibleCache.data.statistics.misses(63, 32),
+    "h1f8".U -> visibleCache.data.statistics.refills(31, 0),
+    "h1fc".U -> visibleCache.data.statistics.refills(63, 32),
+    "h200".U -> visibleCache.data.statistics.writebacks(31, 0),
+    "h204".U -> visibleCache.data.statistics.writebacks(63, 32),
+    "h208".U -> visibleCache.data.statistics.evictions(31, 0),
+    "h20c".U -> visibleCache.data.statistics.evictions(63, 32)
   ))
 
   when(io.axi.ar.fire) {

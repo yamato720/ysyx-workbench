@@ -18,8 +18,10 @@ Chisel；rv-core 保留 ISA 译码与操作码映射，ysyxSoC 保留 Diplomacy 
 ```bash
 make -C npc config-list
 make -C npc build config=SimulationConfig
+make -C npc build config=CacheSimulationConfig
 make -C npc build config=U55cYsyxSocFpgaConfig
 make -C npc rebuild config=U55cYsyxSocFpgaConfig
+make -C npc resume-post-link config=U55cRv64CacheNpc150MHzPerformanceMonitorFpgaConfig
 make -C npc host-config-list
 make -C npc host-build config=U55cRv64Npc300MHzFpgaConfig
 make -C npc host-build all=1 jobs=-1
@@ -29,6 +31,8 @@ make -C npc version config=SimulationConfig
 make -C npc version version=1
 make -C npc version D=1
 make -C npc version delete=1
+make -C npc version D=1-2-3
+make -C npc version delete=1,2,3
 ```
 
 CPU 测试的正式运行入口位于 `am-kernels/tests/cpu-tests`：
@@ -36,6 +40,7 @@ CPU 测试的正式运行入口位于 `am-kernels/tests/cpu-tests`：
 ```bash
 make -C am-kernels/tests/cpu-tests run ALL=add config=SimulationConfig
 make -C am-kernels/tests/cpu-tests run-bat ALL="add div" config=YsyxSimulationConfig
+make -C am-kernels/tests/cpu-tests run-bat ALL="add div fence fence-i" config=CacheSimulationConfig
 make -C am-kernels/tests/cpu-tests run ALL=add version=1
 make -C am-kernels/tests/cpu-tests run-bat ALL="add div" \
   version=1,2 jobs=2
@@ -57,7 +62,33 @@ make -C am-kernels/tests/cpu-tests run-bat ALL="forwarding matrix-mul fpu" \
 它显示已有的 `constructions/<FQCN>/` 构造，不罗列尚未构造的 Config。属性位图固定为
 `Version RV32 RV64 M F Zicsr Pipe ID EX valid?`；`Arch` 以 `NPC`/`SoC` 显示，`RunningTime` 以
 `SIM`/`FPGA` 显示，最右侧 `Config` 为对应保存构造的短名。`valid?` 为 `+` 时该正式构造当前可运行；进行中的构造和缺少必要资产的构造保留显示
-但为空。`D=<序号>` 与 `delete=<序号>` 都会删除对应构造并紧凑重映射后续序号；同时给出时必须相同。
+但为空。`D=<序号列表>` 与 `delete=<序号列表>` 都会删除对应构造并紧凑重映射后续序号。列表可用逗号或
+连字符分隔，例如 `D=1,2,3` 与 `D=1-2-3`；所有目标都按删除前的同一张版本表先解析，最后才统一删除和
+重编号，不需要根据中途变化的编号重复执行。两个别名同时给出时必须表示同一集合，顺序与分隔符可以不同。
+
+## 可配置缓存
+
+缓存必须由独立终端显式启用；`SimulationConfig`、`YsyxSimulationConfig` 以及普通 U55C/ZCU102
+终端仍保持原来的无缓存 RTL 和外部端口。公开缓存终端为 `CacheSimulationConfig`、
+`CacheYsyxSimulationConfig`、`U55cCacheNpcFpgaConfig`、`U55cRv64CacheNpc300MHzFpgaConfig` 和
+`U55cCacheYsyxSocFpgaConfig`。`U55cRv64CacheNpc{150,300}MHzPerformanceMonitorFpgaConfig` 是
+缓存版 U55C batch-only 性能监测终端。
+
+教学预设固定为 4 KiB、16-byte line、2-way Tree-PLRU 的 I$/D$，D$ 使用 write-back 与
+write-allocate，顺序 instruction buffer 为 4 项。`CacheGeometry` 自动从容量、line 和映射方式推导
+set、way、tag/index/offset；替换、分配、写策略和 `Auto`/`Registers`/`Uram` 存储风格可由
+`npc/base/CacheConfigs.scala` 的片段覆盖。`Uram` 只允许 FPGA 构造。
+
+I$/D$ 位于前后端与 `NpcMemoryFabric` 之间，只缓存主存范围；MMIO 保持单拍 AXI-Lite 旁路。line refill
+和 dirty writeback 逐个 XLEN beat 完成，不改变 AXI4/HBM 物理接口。基础 ISA 的任意 `FENCE`
+pred/succ 组合按保守完整屏障执行：等待旧事务、drain D$ 后才放行后续指令，但不失效 I$。`FENCE.I`
+会在同样的 D$ drain 后 invalidate I$，并丢弃 instruction buffer 与未完成取指中的年轻内容。FPGA
+`mtestexit` 同样先等待 D$ drain；mailbox 在复位核心前锁存 I$/D$ 配置和统计，供性能页读取该次运行的
+完成态计数。提交级 store 调试事件保持 self-difftest
+看到的是架构 store，而不是延后的物理 writeback。
+
+缓存会改变硬件 ABI。首次 FPGA 构造使用 `build`；已有同名缓存 FPGA 构造必须执行例如
+`make -C npc rebuild config=U55cCacheNpcFpgaConfig`，`host-build` 不能把旧 xclbin 变成缓存硬件。
 
 ## 构造策略
 
@@ -65,6 +96,7 @@ make -C am-kernels/tests/cpu-tests run-bat ALL="forwarding matrix-mul fpu" \
 | --- | --- | --- | --- |
 | `check-only` | 只做 Scala/RTL 检查 | 不进入公开 Make 构造或运行入口 | 由测试直接调用 |
 | `run` | `npc`/`soc` 为本地仿真，`fpga` 为上板运行（由 `TARGET` 选择裸核或 SoC） | NPC/SoC 首次运行自动生成；FPGA 需 `build` | `rebuild` 在同一 FQCN 目录重构硬件与运行宿主；仅更新 C/C++ 宿主用 `host-build` |
+| `batch` | 只允许批处理的 FPGA 运行终端 | FPGA 需 `build` | 与 `run` 相同；`run` 会被拒绝 |
 
 FPGA 的首次构造需显式执行 `build`；已有 FPGA 构造不会因源码、Config 或工具变化自动重建，需要新硬件时
 必须显式执行 `rebuild`。`build` 和 `rebuild` 都直接使用稳定的 FQCN 目录，开始时会清理该目录中旧 ABI、
@@ -76,15 +108,31 @@ RTL、FPGA 资产和运行产物；中断或失败后目录会保留为无效状
 和缺资产构造；它会沿用同一个版本号和 FQCN 目录。`valid?=+` 的构造会被 `build` 明确拒绝，必须使用
 `make rebuild config=<Config>` 替换硬件 ABI。
 
+不同 FQCN 的 `build`/`rebuild` 可并行：全局锁只短暂保护 Config profile、稳定目录和版本号分配，随后
+Chisel/Verilator/Vivado/Vitis 长流程由 `constructions/.locks/<FQCN>.lock` 单独保护。因此同一 Config 的
+重复构造会立即拒绝，而不是与已有构造争用目录；`D=`/`delete=` 会在任一受影响构造仍在运行时整体拒绝，
+避免重编号覆盖运行中构造保存的版本号。本地 NPC/SoC 将可再生 RTL、Verilator、SoftFloat 和 SoC
+模拟工作目录放在各自构造的 `.work/` 下，成功后才冻结 ABI，因此不会共用 `generated*`、`intermediate`
+或 `build-sim`。已启动的旧 manager 进程仍按它启动时的脚本锁策略运行。
+
 普通 `run`/`run-bat` 只验证并直接执行已保存的 `abi/nemu/nemu-exec`，不会启动 NEMU Make。运行宿主的
 C/C++ 和 menuconfig 增量依赖只在 `host-build` 或运行入口的 `host-rebuild=1` 时运行，并原子替换
-保存 profile 的 `NEMU_*` 段与 `abi/nemu/`；当前终端的硬件和 `FpgaToolchainConfig` 变化不会被吸收。
+保存 profile 的 `NEMU_*` 段与 `abi/nemu/`；当前终端的硬件和 `FpgaToolchainConfig` 变化不会被吸收。对 FPGA
+构造，host 会从已冻结的 `FPGA_CLOCK_MHZ` 编译性能报告换算值，并在 `abi/nemu/host.env` 记录
+`CORE_CLOCK_MHZ`；它必须与保存硬件 profile 一致，旧的 300 MHz host 在 150 MHz xclbin 上需要一次
+`host-build`，但不需要重建 bitstream。
 Chisel、生成 RTL、Verilator ABI、`npc/csrc` glue 与 FPGA 文件仍只由 `rebuild` 更新。
 
 若 FPGA 构造已经完成链接并生成完整 manifest/SHA-256 资产，却只在末尾的 NEMU host 阶段失败或中断，
 `host-build config=<Config>` 会校验保留资产、只重试 host，并在 host 与资产复验通过后发布原版本。缺少
 `nemu-host` 失败证据、manifest/SHA-256 校验失败或硬件中间阶段失败的构造仍必须使用 `build`/`rebuild`，不会被
 `host-build` 提前发布。
+
+若 U55C 的 Vitis link 已成功生成预期 xclbin，却在 manifest、平台 `DATA_CLK`、WNS 或 host 之前的
+post-link 校验失败，可执行 `make -C npc resume-post-link config=<Config>` 补走最后的校验和发布步骤。该入口只接受
+保留的 profile、synthesis stamp、Vitis 成功日志和未校验 xclbin 都完整的失败/中断构造；它先比较当前 Config 的
+所有非 `NEMU_*` 硬件字段，再实际校验 `DATA_CLK`、WNS 和 artifact manifest/SHA-256，最后构造 host。任一证据
+缺失或硬件字段变化都会拒绝恢复，仍必须执行 `rebuild`；该命令不会重新运行 Vivado/Vitis，也不能用于替换硬件 ABI。
 
 对于另一套流程已经生成的 xclbin，可直接执行
 `make -C npc host-build config=U55cRv64Npc300MHzFpgaConfig`，只生成匹配的 U55C NEMU host，输出在
@@ -106,7 +154,7 @@ constructions/
     version.info
     abi/{rtl,verilator,nemu,softfloat,glue}/
     logs/
-    runtime/<test>/<timestamp-ns>-<pid>/{performance.html,instructions.html,pipeline.html,wave-*.vcd}
+    runtime/<test>/<timestamp-ns>-<pid>/{performance.html,instructions.html,cache.html,pipeline.html,wave-*.vcd}
   npc.fpga.u55c.U55cYsyxSocFpgaConfig/
     construction.env
     profile.env
@@ -119,8 +167,8 @@ constructions/
 
 首次构造开始时分配从 `1` 开始的连续版本序号，并以 `version.tag` 的 `building` 状态立即可见。同一个
 Config 重构时保留版本序号和
-`CREATED_AT`，更新 `UPDATED_AT`、`REBUILD_COUNT` 和 Config 固定的 ABI；`make version D=<序号>` 删除后会将
-后续版本紧凑重映射。内部时间 ID 仅用于并发安全和
+`CREATED_AT`，更新 `UPDATED_AT`、`REBUILD_COUNT` 和 Config 固定的 ABI；`make version D=<序号列表>` 删除后会将
+未删除的后续版本紧凑重映射。内部时间 ID 仅用于并发安全和
 迁移排序，不是 Make 接口。从创建到完成，构造始终直接使用 `constructions/<FQCN>/`；目录名不会因
 `build`、`rebuild`、完成或中断而变化。最新一次的 Chisel、SoftFloat、Verilator、FPGA 和 NEMU host 原始输出
 分别保存在 `logs/build/<阶段>.log` 与 `logs/host/nemu-host.log`。每类只保留最新日志；失败的关键证据另存
@@ -145,8 +193,11 @@ NEMU host 的 `performanceHtml` 可选项会在运行结束时写入
 `runtime/<test>/<timestamp-ns>-<pid>/performance.html`。它是报告主页，包含总体 CPI/IPC/MIPS、宿主耗时、
 流水配置、stall 对比、五阶段平均占比、各 load/store/M 操作的平均与最大延迟、最近分类样本和最后提交；
 同一份提交记录还会生成可搜索、分页的 `instructions.html` 逐指令明细。主页以新窗口打开可用的子报告，
-子报告均可返回主页。`pipelineHtml` 是 `performanceHtml` 的提交记录子特征：本地 Verilator 复用软件记录，
-U55C v12 Debug xclbin 从 HBM 回放同一格式的硬件记录；两者都不收集第二份轨迹。对应本地 host 还会同时启用 NEMU 软件逐提交自查。记录只包含已提交
+子报告均可返回主页。`cacheHtml` 是依赖 `performanceHtml` 的独立开关：只有硬件 I$ 或 D$ 实际启用时才生成
+`cache.html`，单独展示几何、策略、instruction buffer 与命中率/事件计数；无缓存运行不会留下空页面。
+`LocalPipelineTrace` 和 `U55cPerformanceMonitor` 默认启用，可通过 `.copy(cacheHtml = false)` 覆盖。
+`pipelineHtml` 是 `performanceHtml` 的提交记录子特征：本地 Verilator 复用软件记录，
+不会收集第二份轨迹。对应本地 host 还会同时启用 NEMU 软件逐提交自查。记录只包含已提交
 指令，默认保留前 20 万条；流水页提供 PC/反汇编搜索、分页、周期缩放和 IF/ID/EX/MEM/WB 悬浮信息，超限
 时继续统计丢弃条数。所有本地 NPC/SoC 仿真终端当前都启用 performance 与 pipeline；标量核心显示顺序阶段时间线，流水线核心
 还会显示阶段重叠与停顿。软件自查逐条比较 NPC 与 NEMU 的 GPR、FPR、FCSR 和下一 PC，可直接报告首个
@@ -200,7 +251,7 @@ FPGA 分支的唯一来源，无需重复叠加平台标签。
 `ConfigResolver` 得到 `ConstructionConfig`；SoC/FPGA 入口通过 `CdeConfigResolver` 得到 CDE
 `Config`，并从 `NpcCoreConfigKey` 取得完成的 L1 `NpcConfig`。每个运行终端只挂载一个与本地/板卡及
 NPC/SoC 目标精确匹配的 `LocalNpcTerminal`、`LocalSocTerminal`、`U55cNpcTerminal`、
-`U55cDebugNpcTerminal`、`U55cSocTerminal`、`Zcu102NpcTerminal` 或 `Zcu102SocTerminal`。这些预设已经提供完整
+`U55cSocTerminal`、`Zcu102NpcTerminal` 或 `Zcu102SocTerminal`。这些预设已经提供完整
 `NemuHostConfig` 默认值，FPGA 预设同时提供分组式 `FpgaToolchainConfig` 默认值；当前内置
 `Configs.scala` 均一步挂载，不重复展开配方。每个 Config 显式混入一个计算 IP terminal，绝不通过
 Config 构造参数或 CDE `++` 链单独选择。显式自定义终端仍可在保持 scope、target 与板卡匹配的
@@ -215,11 +266,18 @@ core/mailbox reset 无法清除的 HBM/AXI 未完成事务；未传该参数时�
 BDF；选择其他 device 时需要同时设置 `NEMU_FPGA_XRT_BDF=<dddd:bb:dd.f>`，也可用
 `NEMU_FPGA_XBUTIL` 指定 `xbutil` 路径。
 
-普通 U55C profile 固定 `npc-fpga-runtime-v11` 调试和运行控制 ABI。`U55cRv64Npc300MHzDebugFpgaConfig`
-使用独立的 `npc-fpga-runtime-v12`：除相同的 `ip_c`、`ap_ctrl_hs`、4 KiB 控制窗口和 XLEN AXI 数据宽度外，
-它额外把 `m_axi_trace` 固定连接到 HBM[1]，分配 16 MiB BO，记录前 200000 条提交。片上 FIFO 为 URAM，
-深度由 Config 的 `FpgaRuntimeTraceConfig.cacheRecords` 固定，默认 4096。普通 v11 xclbin 仍支持 SDB `si`、`c`、
-寄存器和内存调试，但性能主页会明确标注硬件未启用监测，host-only 构造不能把 v11 变成 v12。ZCU102 使用
+普通 U55C profile 固定 `npc-fpga-runtime-v11` 调试和运行控制 ABI；它不会生成
+`m_axi_trace`、HBM trace BO 或 URAM FIFO，且 host 不生成性能、逐指令或流水 HTML。v11 xclbin 仍支持 SDB `si`、`c`、
+寄存器和内存调试。`U55cRv64Npc{100,125,150,200,250,300}MHzPerformanceMonitorFpgaConfig` 与
+`U55cRv64CacheNpc{150,300}MHzPerformanceMonitorFpgaConfig` 是独立的
+`npc-fpga-runtime-v13-performance-monitor` ABI：仅支持 `run-bat`，将 32-byte 提交记录经 256-bit
+`m_axi_trace` 写入 HBM[1]，并用 2048-record URAM FIFO 吸收突发。普通 monitor 支持后缀所示的
+100/125/150/200/250/300 MHz；缓存 monitor 当前提供 150 与 300 MHz 核心时钟，且均移除 SDB halt/step、CSR 和完整 GPR 快照硬件。U55C 标准平台将 HBM-connected RTL kernel 的 `DATA_CLK`
+固定为 300 MHz；构造从 xclbin 校验这一平台频率。低频核心由 wrapper MMCM 生成，并以逐 AXI 通道异步 FIFO 跨回平台域。每个频点必须完整 `rebuild`；对 v11
+外部 xclbin 执行 host-only 构造不会凭空提供监测数据。缓存版在 `mtestexit` drain 后、core reset 前将状态快照到
+mailbox 的只读区，再读取
+I$/D$ 的实际几何、策略、instruction buffer 深度、命中/未命中、填充、写回和替换计数；它不改变 v13 HBM trace
+record。ZCU102 使用
 `npc-fpga-runtime-v7`。FPGA AM 用非标准机器 CSR `mtestexit`（`0x7c0`）报告结束，EBREAK 仍保留 breakpoint trap 语义。M 由 Xilinx 整数乘除 IP 执行，
 公开 FPGA Config 固定 `F=0`、`D=0`。因此 FPGA 不生成硬件 FPR、本地 FPU、浮点 IP 或 NEMU 指令
 代执行服务；本地 Verilator 构造仍保留既有浮点模型和 FPR，供学习完整 F 扩展。此 ABI 或 FPGA 配置

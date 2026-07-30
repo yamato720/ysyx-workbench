@@ -3,22 +3,27 @@ package npc
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 
-/** FPGA runtime trace 写入 `profile.env` 的投影。
+/** FPGA performance monitor 写入 `profile.env` 的投影。
   *
   * 它不选择或启用硬件；唯一的硬件来源是板级 CDE
-  * `FpgaRuntimeTraceConfigKey`。该投影只让通用 profile 代码保持对 FPGA
+  * `FpgaPerformanceMonitorConfigKey`。该投影只让通用 profile 代码保持对 FPGA
   * 实现类型无依赖。
   */
-final case class RuntimeTraceProfile(
+final case class PerformanceMonitorProfile(
   enabled: Boolean,
   hbmBank: Int,
   bufferBytes: Int,
   maxRecords: Int,
-  cacheRecords: Int
+  cacheRecords: Int,
+  formatVersion: Int,
+  recordBytes: Int,
+  traceDataWidth: Int,
+  burstRecords: Int
 )
 
-object RuntimeTraceProfile {
-  val Disabled: RuntimeTraceProfile = RuntimeTraceProfile(false, 0, 0, 0, 0)
+object PerformanceMonitorProfile {
+  val Disabled: PerformanceMonitorProfile =
+    PerformanceMonitorProfile(false, 0, 0, 0, 0, 0, 0, 0, 0)
 }
 
 /** Make、NEMU 和 FPGA 工具共同消费的规范化构造描述。 */
@@ -33,12 +38,27 @@ object ConstructionProfile {
     key -> value
   }
 
+  private def cacheValues(prefix: String, cache: CacheConfig): Seq[(String, String)] = Seq(
+    s"${prefix}_ENABLED" -> bit(cache.enabled),
+    s"${prefix}_CAPACITY_BYTES" -> cache.geometry.capacityBytes.toString,
+    s"${prefix}_LINE_BYTES" -> cache.geometry.lineBytes.toString,
+    s"${prefix}_MAPPING" -> cache.geometry.mapping.name,
+    s"${prefix}_WAYS" -> cache.geometry.ways.toString,
+    s"${prefix}_SETS" -> cache.geometry.sets.toString,
+    s"${prefix}_REPLACEMENT" -> cache.replacement.name,
+    s"${prefix}_READ_MISS" -> cache.policy.readMiss.name,
+    s"${prefix}_WRITE_POLICY" -> cache.policy.write.name,
+    s"${prefix}_WRITE_MISS" -> cache.policy.writeMiss.name,
+    s"${prefix}_STORAGE" -> cache.storage.name
+  )
+
   def values(
     entry: ConfigCatalog.Entry,
     host: HostConstruction,
     config: NpcConfig,
     extra: Seq[(String, String)] = Seq.empty,
-    runtimeTrace: RuntimeTraceProfile = RuntimeTraceProfile.Disabled
+    performanceMonitor: PerformanceMonitorProfile = PerformanceMonitorProfile.Disabled,
+    runtimeSdbEnabled: Boolean = true
   ): Seq[(String, String)] = {
     val capability = host.capability
     val settings = host.nemuConfig
@@ -48,9 +68,11 @@ object ConstructionProfile {
       Option.when(config.isa.M)("m"),
       Option.when(config.isa.F)("f"),
       Option.when(config.isa.D)("d"),
-      Option.when(config.isa.Zicsr)("_zicsr")
+      Option.when(config.isa.Zicsr)("_zicsr"),
+      Option.when(config.isa.Zifencei)("_zifencei")
     ).flatten.mkString
-    require(capability == "run", s"终端 Config ${entry.className} 必须是可运行的 NEMU Config")
+    require(Set("run", "batch").contains(capability),
+      s"终端 Config ${entry.className} 必须是可运行的 NEMU Config")
     val hostAbi = "nemu-construction-v1"
     val expectedBackend = (entry.scope, entry.board) match {
       case ("npc" | "soc", _) => Some("local")
@@ -66,9 +88,18 @@ object ConstructionProfile {
       actual = settings.backend.id
     } require(actual == expected,
       s"Config ${entry.className} 的 NEMU host=$actual 与 $entry 作用域/板卡要求的 $expected 不兼容")
-    val protocolAbi = protocolAbiFor(entry, runtimeTrace)
+    val protocolAbi = protocolAbiFor(entry, performanceMonitor)
+    val requestsHardwareReports = settings.performanceHtml || settings.cacheHtml || settings.pipelineHtml
+    if (entry.scope == "fpga" && entry.board.contains("u55c")) {
+      require(requestsHardwareReports == performanceMonitor.enabled,
+        s"U55C HTML reports must match the performance-monitor hardware ABI: ${entry.className}")
+    }
+    require(!(performanceMonitor.enabled && runtimeSdbEnabled),
+      s"FPGA performance monitoring and interactive SDB are mutually exclusive: ${entry.className}")
+    require(entry.scope == "fpga" || !config.cache.usesUram,
+      s"CacheStorage.Uram is only valid for an FPGA construction: ${entry.className}")
     val base = Seq(
-      "PROFILE_FORMAT" -> "18",
+      "PROFILE_FORMAT" -> "21",
       "CONFIG_SHORT_NAME" -> entry.shortName,
       "CONFIG_FQCN" -> entry.className,
       "SCOPE" -> entry.scope,
@@ -80,6 +111,7 @@ object ConstructionProfile {
       "NEMU_WATCHPOINT" -> bit(settings.watchpoint),
       "NEMU_VCD" -> bit(settings.vcd),
       "NEMU_PERFORMANCE_HTML" -> bit(settings.performanceHtml),
+      "NEMU_CACHE_HTML" -> bit(settings.cacheHtml),
       "NEMU_PIPELINE_HTML" -> bit(settings.pipelineHtml),
       "NEMU_NPC_DIFFTEST" -> bit(settings.softwareDifftest),
       "NEMU_DEVICES" -> bit(settings.devices),
@@ -88,11 +120,16 @@ object ConstructionProfile {
       "NEMU_LTO" -> bit(settings.lto),
       "NEMU_ASAN" -> bit(settings.asan),
       "PROTOCOL_ABI" -> protocolAbi,
-      "FPGA_RUNTIME_TRACE" -> bit(runtimeTrace.enabled),
-      "FPGA_TRACE_HBM_BANK" -> runtimeTrace.hbmBank.toString,
-      "FPGA_TRACE_BUFFER_BYTES" -> runtimeTrace.bufferBytes.toString,
-      "FPGA_TRACE_MAX_RECORDS" -> runtimeTrace.maxRecords.toString,
-      "FPGA_TRACE_CACHE_RECORDS" -> runtimeTrace.cacheRecords.toString,
+      "FPGA_RUNTIME_SDB" -> bit(runtimeSdbEnabled),
+      "FPGA_RUNTIME_TRACE" -> bit(performanceMonitor.enabled),
+      "FPGA_TRACE_HBM_BANK" -> performanceMonitor.hbmBank.toString,
+      "FPGA_TRACE_BUFFER_BYTES" -> performanceMonitor.bufferBytes.toString,
+      "FPGA_TRACE_MAX_RECORDS" -> performanceMonitor.maxRecords.toString,
+      "FPGA_TRACE_CACHE_RECORDS" -> performanceMonitor.cacheRecords.toString,
+      "FPGA_TRACE_FORMAT" -> performanceMonitor.formatVersion.toString,
+      "FPGA_TRACE_RECORD_BYTES" -> performanceMonitor.recordBytes.toString,
+      "FPGA_TRACE_DATA_WIDTH" -> performanceMonitor.traceDataWidth.toString,
+      "FPGA_TRACE_BURST_RECORDS" -> performanceMonitor.burstRecords.toString,
       "TARGET" -> entry.target,
       "XLEN" -> config.isa.xlen.toString,
       "ISA_STRING" -> s"rv${config.isa.xlen}i$isaExtensions",
@@ -100,6 +137,7 @@ object ConstructionProfile {
       "F" -> bit(config.isa.F),
       "D" -> bit(config.isa.D),
       "ZICSR" -> bit(config.isa.Zicsr),
+      "ZIFENCEI" -> bit(config.isa.Zifencei),
       "PIPELINE" -> bit(config.pipeline.enablePipeline),
       "INTERLOCK" -> bit(config.pipeline.enableInterlock),
       "ID_FWD" -> bit(config.pipeline.forwarding.enableIdForwarding),
@@ -137,25 +175,30 @@ object ConstructionProfile {
       "AXI_ID_WIDTH" -> config.axi.idWidth.toString,
       "AXI_EXTERNAL" -> bit(config.axi.useExternalMaster)
     )
-    val all = (base ++ config.operators.routes.profileValues(config.isa) ++ extra)
+    val cache = cacheValues("ICACHE", config.cache.icache) ++
+      cacheValues("DCACHE", config.cache.dcache) ++ Seq(
+        "INSTRUCTION_BUFFER_ENABLED" -> bit(config.cache.instructionBuffer.enabled),
+        "INSTRUCTION_BUFFER_ENTRIES" -> config.cache.instructionBuffer.entries.toString
+      )
+    val all = (base ++ cache ++ config.operators.routes.profileValues(config.isa) ++ extra)
       .map { case (key, value) => safe(key, value) }
     val duplicates = all.groupBy(_._1).collect { case (key, values) if values.size > 1 => key }
     require(duplicates.isEmpty, s"profile 含重复字段：${duplicates.toSeq.sorted.mkString(", ")}")
     all
   }
 
-  /** 从终端范围与板级 trace 投影推导硬件协议 ABI。 */
-  def protocolAbiFor(entry: ConfigCatalog.Entry, runtimeTrace: RuntimeTraceProfile): String = {
-    require(!runtimeTrace.enabled || (entry.scope == "fpga" && entry.board.contains("u55c") &&
-      entry.target == "NPC"),
-      s"runtime trace is only supported by the U55C bare-NPC terminal: ${entry.className}")
-    (entry.scope, entry.board, runtimeTrace.enabled) match {
-      case ("npc", _, _) => "npc-dpi-v1"
-      case ("soc", _, _) => "ysyx-dpi-v1"
-      case ("fpga", Some("u55c"), true) => "npc-fpga-runtime-v12"
-      case ("fpga", Some("u55c"), false) => "npc-fpga-runtime-v11"
-      case ("fpga", _, _) => "npc-fpga-runtime-v7"
-      case (scope, _, _) => throw new IllegalArgumentException(s"未知终端作用域：$scope")
+  /** 从终端范围和监测 ABI 推导硬件协议 ABI。 */
+  def protocolAbiFor(entry: ConfigCatalog.Entry, performanceMonitor: PerformanceMonitorProfile): String = {
+    require(!performanceMonitor.enabled ||
+      (entry.scope == "fpga" && entry.board.contains("u55c") && entry.target == "NPC"),
+      s"FPGA performance monitoring only supports the U55C bare-NPC terminal: ${entry.className}")
+    (entry.scope, entry.board) match {
+      case ("npc", _) => "npc-dpi-v1"
+      case ("soc", _) => "ysyx-dpi-v1"
+      case ("fpga", Some("u55c")) if performanceMonitor.enabled => "npc-fpga-runtime-v13-performance-monitor"
+      case ("fpga", Some("u55c")) => "npc-fpga-runtime-v11"
+      case ("fpga", _) => "npc-fpga-runtime-v7"
+      case (scope, _) => throw new IllegalArgumentException(s"未知终端作用域：$scope")
     }
   }
 

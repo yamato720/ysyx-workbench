@@ -74,3 +74,15 @@ class WithoutZicsrConfig extends ConfigFragment {
   override private[npc] def applyTo(base: NpcConfig): NpcConfig =
     base.copy(isa = base.isa.copy(F = false, D = false, Zicsr = false))
 }
+
+/** 启用缓存维护指令 FENCE.I。 */
+class WithZifenceiConfig extends ConfigFragment {
+  override private[npc] def applyTo(base: NpcConfig): NpcConfig =
+    base.copy(isa = base.isa.copy(Zifencei = true))
+}
+
+/** 显式禁用 Zifencei；若同时启用缓存，最终参数校验会拒绝该组合。 */
+class WithoutZifenceiConfig extends ConfigFragment {
+  override private[npc] def applyTo(base: NpcConfig): NpcConfig =
+    base.copy(isa = base.isa.copy(Zifencei = false))
+}
