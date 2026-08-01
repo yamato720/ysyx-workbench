@@ -111,12 +111,18 @@ enum NPCPipelineStallCounter {
 };
 
 struct NPCPipelineTiming {
+    uint64_t start[NPC_TIMING_STAGE_COUNT] = {};
     uint64_t stage[NPC_TIMING_STAGE_COUNT] = {};
+    uint64_t memory_queue_start = 0;
+    uint64_t memory_service_start = 0;
+    uint64_t memory_queue_cycles = 0;
+    uint64_t memory_service_cycles = 0;
 };
 
 struct NPCPipelineTimingAggregate {
     uint64_t sample_count = 0;
     uint64_t total_stage_cycles[NPC_TIMING_STAGE_COUNT] = {};
+    uint64_t total_memory_queue_cycles = 0;
     uint64_t max_total_cycles = 0;
 };
 
@@ -137,7 +143,7 @@ static uint64_t pipeline_timing_total(const NPCPipelineTiming &timing) {
     for (int stage = 0; stage < NPC_TIMING_STAGE_COUNT; stage++) {
         total += timing.stage[stage];
     }
-    return total;
+    return total + timing.memory_queue_cycles;
 }
 
 static uint32_t classify_pipeline_timing(uint32_t instruction) {
@@ -217,6 +223,7 @@ static void update_pipeline_timing_aggregate(
     for (int stage = 0; stage < NPC_TIMING_STAGE_COUNT; stage++) {
         aggregate.total_stage_cycles[stage] += timing.stage[stage];
     }
+    aggregate.total_memory_queue_cycles += timing.memory_queue_cycles;
     if (total > aggregate.max_total_cycles) {
         aggregate.max_total_cycles = total;
     }
@@ -229,11 +236,24 @@ static void update_pipeline_timing_aggregate(
 }
 
 static void record_committed_pipeline_timing(uint64_t pc, uint32_t instruction) {
+    last_commit_timing.start[NPC_TIMING_IF] = NPC_DEBUG_BACKEND(commitFetchStartCycle);
+    last_commit_timing.start[NPC_TIMING_ID] = NPC_DEBUG_BACKEND(commitDecodeStartCycle);
+    last_commit_timing.start[NPC_TIMING_EX] = NPC_DEBUG_BACKEND(commitExecuteStartCycle);
+    last_commit_timing.start[NPC_TIMING_MEM] = NPC_DEBUG_BACKEND(commitMemoryStartCycle);
+    last_commit_timing.start[NPC_TIMING_WB] = NPC_DEBUG_BACKEND(commitWritebackStartCycle);
     last_commit_timing.stage[NPC_TIMING_IF] = NPC_DEBUG_BACKEND(commitFetchCycles);
     last_commit_timing.stage[NPC_TIMING_ID] = NPC_DEBUG_BACKEND(commitDecodeCycles);
     last_commit_timing.stage[NPC_TIMING_EX] = NPC_DEBUG_BACKEND(commitExecuteCycles);
     last_commit_timing.stage[NPC_TIMING_MEM] = NPC_DEBUG_BACKEND(commitMemoryCycles);
     last_commit_timing.stage[NPC_TIMING_WB] = NPC_DEBUG_BACKEND(commitWritebackCycles);
+    last_commit_timing.memory_queue_start =
+        NPC_DEBUG_BACKEND(commitMemoryQueueStartCycle);
+    last_commit_timing.memory_service_start =
+        NPC_DEBUG_BACKEND(commitMemoryServiceStartCycle);
+    last_commit_timing.memory_queue_cycles =
+        NPC_DEBUG_BACKEND(commitMemoryQueueCycles);
+    last_commit_timing.memory_service_cycles =
+        NPC_DEBUG_BACKEND(commitMemoryServiceCycles);
     last_commit_timing_class = classify_pipeline_timing(instruction);
     const uint32_t summary_class = summarize_pipeline_timing_class(last_commit_timing_class);
 
@@ -846,6 +866,16 @@ uint64_t get_npc_timing_max_total_cycles(uint32_t timing_class) {
     return pipeline_timing_aggregates[timing_class].max_total_cycles;
 }
 
+uint64_t get_npc_timing_memory_queue_cycles(uint32_t timing_class) {
+    if (timing_class >= NPC_TIMING_CLASS_COUNT) return 0;
+    return pipeline_timing_aggregates[timing_class].total_memory_queue_cycles;
+}
+
+uint64_t get_npc_timing_last_memory_queue_cycles(uint32_t timing_class) {
+    if (timing_class >= NPC_TIMING_CLASS_COUNT) return 0;
+    return pipeline_timing_latest_samples[timing_class].timing.memory_queue_cycles;
+}
+
 uint64_t get_npc_timing_last_pc(uint32_t timing_class) {
     if (timing_class >= NPC_TIMING_CLASS_COUNT) return 0;
     return pipeline_timing_latest_samples[timing_class].pc;
@@ -870,8 +900,29 @@ uint64_t get_npc_last_timing_stage_cycles(uint32_t stage) {
     return last_commit_timing.stage[stage];
 }
 
+uint64_t get_npc_last_timing_stage_start(uint32_t stage) {
+    if (stage >= NPC_TIMING_STAGE_COUNT) return 0;
+    return last_commit_timing.start[stage];
+}
+
 uint64_t get_npc_last_timing_total_cycles() {
     return pipeline_timing_total(last_commit_timing);
+}
+
+uint64_t get_npc_last_timing_memory_queue_start() {
+    return last_commit_timing.memory_queue_start;
+}
+
+uint64_t get_npc_last_timing_memory_service_start() {
+    return last_commit_timing.memory_service_start;
+}
+
+uint64_t get_npc_last_timing_memory_queue_cycles() {
+    return last_commit_timing.memory_queue_cycles;
+}
+
+uint64_t get_npc_last_timing_memory_service_cycles() {
+    return last_commit_timing.memory_service_cycles;
 }
 
 void cleanup_npc() {
@@ -985,6 +1036,16 @@ extern "C" {
                 default: return 0;
             }
         }
+        if (cache == 2) {
+            switch (counter) {
+                case 0: return NPC_DEBUG_CORE(cache_unifiedL2_hits);
+                case 1: return NPC_DEBUG_CORE(cache_unifiedL2_misses);
+                case 2: return NPC_DEBUG_CORE(cache_unifiedL2_refills);
+                case 3: return NPC_DEBUG_CORE(cache_unifiedL2_writebacks);
+                case 4: return NPC_DEBUG_CORE(cache_unifiedL2_evictions);
+                default: return 0;
+            }
+        }
         return 0;
     }
 
@@ -1020,6 +1081,14 @@ extern "C" {
         return get_npc_timing_max_total_cycles(timing_class);
     }
 
+    uint64_t npc_get_timing_memory_queue_cycles(uint32_t timing_class) {
+        return get_npc_timing_memory_queue_cycles(timing_class);
+    }
+
+    uint64_t npc_get_timing_last_memory_queue_cycles(uint32_t timing_class) {
+        return get_npc_timing_last_memory_queue_cycles(timing_class);
+    }
+
     uint64_t npc_get_timing_last_pc(uint32_t timing_class) {
         return get_npc_timing_last_pc(timing_class);
     }
@@ -1040,8 +1109,28 @@ extern "C" {
         return get_npc_last_timing_stage_cycles(stage);
     }
 
+    uint64_t npc_get_last_timing_stage_start(uint32_t stage) {
+        return get_npc_last_timing_stage_start(stage);
+    }
+
     uint64_t npc_get_last_timing_total_cycles() {
         return get_npc_last_timing_total_cycles();
+    }
+
+    uint64_t npc_get_last_timing_memory_queue_start() {
+        return get_npc_last_timing_memory_queue_start();
+    }
+
+    uint64_t npc_get_last_timing_memory_service_start() {
+        return get_npc_last_timing_memory_service_start();
+    }
+
+    uint64_t npc_get_last_timing_memory_queue_cycles() {
+        return get_npc_last_timing_memory_queue_cycles();
+    }
+
+    uint64_t npc_get_last_timing_memory_service_cycles() {
+        return get_npc_last_timing_memory_service_cycles();
     }
     
     void npc_cleanup() {

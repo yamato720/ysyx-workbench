@@ -64,12 +64,19 @@ extern uint64_t npc_get_pipeline_stall_count(uint32_t counter);
 extern uint64_t npc_get_timing_sample_count(uint32_t timing_class);
 extern uint64_t npc_get_timing_total_cycles(uint32_t timing_class, uint32_t stage);
 extern uint64_t npc_get_timing_max_total_cycles(uint32_t timing_class);
+extern uint64_t npc_get_timing_memory_queue_cycles(uint32_t timing_class);
+extern uint64_t npc_get_timing_last_memory_queue_cycles(uint32_t timing_class);
 extern uint64_t npc_get_timing_last_pc(uint32_t timing_class);
 extern uint32_t npc_get_timing_last_instruction(uint32_t timing_class);
 extern uint64_t npc_get_timing_last_stage_cycles(uint32_t timing_class, uint32_t stage);
 extern uint32_t npc_get_last_timing_class();
 extern uint64_t npc_get_last_timing_stage_cycles(uint32_t stage);
+extern uint64_t npc_get_last_timing_stage_start(uint32_t stage);
 extern uint64_t npc_get_last_timing_total_cycles();
+extern uint64_t npc_get_last_timing_memory_queue_start();
+extern uint64_t npc_get_last_timing_memory_service_start();
+extern uint64_t npc_get_last_timing_memory_queue_cycles();
+extern uint64_t npc_get_last_timing_memory_service_cycles();
 #endif
 #include "../../src/monitor/sdb/sdb.h"
 
@@ -203,8 +210,15 @@ static uint64_t npc_recorded_trace_sequence;
 static void npc_record_pipeline_html(
     Decode *instruction, uint64_t sequence, uint64_t commit_cycle) {
   uint64_t stage[PIPELINE_HTML_STAGE_COUNT];
+#ifndef NPC_FPGA_REMOTE
+  uint64_t stage_start[PIPELINE_HTML_STAGE_COUNT];
+  PipelineHtmlMemoryTiming memory = {};
+#endif
   for (uint32_t index = 0; index < PIPELINE_HTML_STAGE_COUNT; index++) {
     stage[index] = npc_get_last_timing_stage_cycles(index);
+#ifndef NPC_FPGA_REMOTE
+    stage_start[index] = npc_get_last_timing_stage_start(index);
+#endif
   }
 
   const int instruction_length = (instruction->isa.inst & 0x3) == 0x3 ? 4 : 2;
@@ -212,8 +226,20 @@ static void npc_record_pipeline_html(
   void disassemble(char *str, int size, uint64_t pc, uint8_t *code, int nbyte);
   disassemble(disassembly, sizeof(disassembly), instruction->pc,
               (uint8_t *)&instruction->isa.inst, instruction_length);
+#ifdef NPC_FPGA_REMOTE
   npc_pipeline_html_record(sequence, instruction->pc, instruction->isa.inst,
                            disassembly, commit_cycle, stage);
+#else
+  memory.valid = (instruction->isa.inst & 0x7f) == 0x03 ||
+                 (instruction->isa.inst & 0x7f) == 0x23;
+  memory.queue_start_cycle = npc_get_last_timing_memory_queue_start();
+  memory.service_start_cycle = npc_get_last_timing_memory_service_start();
+  memory.queue_cycles = npc_get_last_timing_memory_queue_cycles();
+  memory.service_cycles = npc_get_last_timing_memory_service_cycles();
+  npc_pipeline_html_record_absolute_with_memory(
+      sequence, instruction->pc, instruction->isa.inst, disassembly,
+      commit_cycle, stage, stage_start, &memory);
+#endif
   if (sequence > npc_recorded_trace_sequence)
     npc_recorded_trace_sequence = sequence;
 }
@@ -322,11 +348,11 @@ static void npc_interrupt_handler(int signal_number) {
 }
 #endif
 
-#define NPC_BACKPRESSURE_WATCHDOG_US (5ULL * 1000ULL * 1000ULL)
+#define NPC_PROGRESS_WATCHDOG_US (5ULL * 1000ULL * 1000ULL)
 
-static void npc_report_backpressure_watchdog(vaddr_t guest_pc, uint64_t cycles_before,
-                                               uint64_t commits_before, uint64_t blocked_us,
-                                               uint32_t reasons) {
+static void npc_report_progress_watchdog(vaddr_t guest_pc, uint64_t cycles_before,
+                                         uint64_t commits_before, uint64_t blocked_us,
+                                         uint32_t reasons) {
   static const struct {
     uint32_t bit;
     const char *description;
@@ -346,17 +372,20 @@ static void npc_report_backpressure_watchdog(vaddr_t guest_pc, uint64_t cycles_b
       NPC_BACKPRESSURE_LSU_AXI | NPC_BACKPRESSURE_SERIAL_EX |
       NPC_BACKPRESSURE_REDIRECT_FLUSH | NPC_BACKPRESSURE_UNCLASSIFIED_BUSY;
 
-  printf(ANSI_FG_RED "[NPC watchdog] no commit while backpressured for %.3f s" ANSI_NONE "\n",
+  printf(ANSI_FG_RED "[NPC watchdog] no architectural progress for %.3f s" ANSI_NONE "\n",
          (double)blocked_us / 1000000.0);
   printf("  guest pc=" FMT_WORD " hardware pc=" FMT_WORD " frontend inst=0x%08x\n",
          guest_pc, (vaddr_t)npc_get_current_pc(), npc_get_frontend_instruction());
   printf("  commits=%" PRIu64 " hardware cycles=%" PRIu64 " (+%" PRIu64 ") reasons=0x%08x\n",
          commits_before, npc_get_cycle_count(), npc_get_cycle_count() - cycles_before, reasons);
-  printf("  blocking reasons:\n");
+  printf("  sampled blocking reasons:\n");
   for (int i = 0; i < ARRLEN(reason_names); i++) {
     if (reasons & reason_names[i].bit) {
       printf("    - %s\n", reason_names[i].description);
     }
+  }
+  if (reasons == 0) {
+    printf("    - none reported by the mailbox\n");
   }
   if (reasons & ~known_mask) {
     printf("    - reserved/future reason bits: 0x%08x\n", reasons & ~known_mask);
@@ -518,7 +547,9 @@ static uint32_t npc_cache_environment_u32(const char *name) {
 }
 
 static bool npc_fill_cache_configuration_from_profile(PerformanceHtmlReport *report) {
-  static const char *prefixes[] = {"NEMU_CACHE_ICACHE", "NEMU_CACHE_DCACHE"};
+  static const char *prefixes[] = {
+    "NEMU_CACHE_ICACHE", "NEMU_CACHE_DCACHE", "NEMU_CACHE_L2CACHE",
+  };
   const char *enabled = getenv("NEMU_CACHE_ICACHE_ENABLED");
   if (enabled == NULL) return false;
   for (uint32_t cache = 0; cache < PERFORMANCE_HTML_CACHE_COUNT; cache++) {
@@ -595,6 +626,11 @@ static void npc_fill_cache_configuration(PerformanceHtmlReport *report) {
 }
 #endif
 
+static const char *npc_memory_statistics_mode(void) {
+  const char *mode = getenv("NEMU_MEMORY_STATISTICS_MODE");
+  return mode != NULL && strcmp(mode, "ServiceOnly") == 0 ? "ServiceOnly" : "Split";
+}
+
 static void npc_finish_performance_html(void) {
   if (npc_performance_html_finished) return;
   npc_performance_html_finished = true;
@@ -613,6 +649,12 @@ static void npc_finish_performance_html(void) {
       rows[timing_class].stage_total[stage] = npc_get_timing_total_cycles(timing_class, stage);
       rows[timing_class].last_stage[stage] = npc_get_timing_last_stage_cycles(timing_class, stage);
     }
+ #ifndef NPC_FPGA_REMOTE
+    rows[timing_class].memory_queue_total =
+        npc_get_timing_memory_queue_cycles(timing_class);
+    rows[timing_class].last_memory_queue =
+        npc_get_timing_last_memory_queue_cycles(timing_class);
+ #endif
     rows[timing_class].last_pc = npc_get_timing_last_pc(timing_class);
     rows[timing_class].last_instruction = npc_get_timing_last_instruction(timing_class);
   }
@@ -644,6 +686,11 @@ static void npc_finish_performance_html(void) {
     .mode = "NPC-SoC",
 #else
     .mode = "NPC",
+#endif
+#ifdef NPC_FPGA_REMOTE
+    .memory_statistics_mode = "ServiceOnly",
+#else
+    .memory_statistics_mode = npc_memory_statistics_mode(),
 #endif
     .outcome_text = outcome_text,
     .outcome = outcome,
@@ -691,6 +738,9 @@ static void npc_finish_performance_html(void) {
   for (uint32_t stage = 0; stage < NPC_TIMING_STAGE_COUNT; stage++) {
     report.last_stage[stage] = npc_get_last_timing_stage_cycles(stage);
   }
+#ifndef NPC_FPGA_REMOTE
+  report.last_memory_queue = npc_get_last_timing_memory_queue_cycles();
+#endif
 
   const char *directory = getenv("NEMU_RUNTIME_OUTPUT_DIR");
   const char *base = directory == NULL || directory[0] == '\0' ? "." : directory;
@@ -887,8 +937,7 @@ void get_current_iringbuf(char* buf) {
 static void exec_once(Decode *s, vaddr_t pc) {
   uint64_t cycles_before = npc_get_cycle_count();
   uint64_t commits_before = npc_get_commit_count();
-  uint64_t blocking_started_at = 0;
-  bool blocking = false;
+  const uint64_t progress_started_at = get_time();
 
 #ifdef NPC_FPGA_REMOTE
   if (npc_debug_is_interactive() && npc_debug_step() != 0) {
@@ -903,33 +952,23 @@ static void exec_once(Decode *s, vaddr_t pc) {
   // Update NEMU's CPU state from NPC
   s->pc = pc;
   s->snpc = pc;
-  // Advance a cycle at a time so a ready/valid deadlock returns control to
-  // NEMU. Both interactive commands and batch mode reach this same path.
+  // 逐周期推进，使 ready/valid 死锁能够回到 NEMU；交互命令和批处理共用此路径。
   while (npc_get_commit_count() == commits_before) {
     npc_step_cycle();
     if (npc_get_commit_count() != commits_before) {
       break;
     }
 
-    const uint32_t reasons = npc_get_backpressure_reasons();
-    if (reasons != 0) {
-      const uint64_t now = get_time();
-      if (!blocking) {
-        blocking = true;
-        blocking_started_at = now;
-      }
-      if (now - blocking_started_at >= NPC_BACKPRESSURE_WATCHDOG_US) {
-        npc_report_backpressure_watchdog(pc, cycles_before, commits_before,
-                                         now - blocking_started_at, reasons);
-        set_nemu_state(NEMU_ABORT, pc, -1);
-        return;
-      }
-    } else {
-      blocking = false;
+    const uint64_t now = get_time();
+    if (now - progress_started_at >= NPC_PROGRESS_WATCHDOG_US) {
+      npc_report_progress_watchdog(pc, cycles_before, commits_before,
+                                   now - progress_started_at,
+                                   npc_get_backpressure_reasons());
+      set_nemu_state(NEMU_ABORT, pc, -1);
+      return;
     }
 
-    // A simulator finish without a retirement is not a backpressure timeout,
-    // but it cannot produce a valid architectural instruction either.
+    // 仿真器在提交前结束不是停顿超时，但同样无法形成有效的架构指令。
     if (npc_is_finished()) {
       printf(ANSI_FG_RED "[NPC] simulator finished before instruction commit" ANSI_NONE
              " at pc=" FMT_WORD "\n", pc);
@@ -1162,9 +1201,7 @@ static void execute(uint64_t n) {
   for (;n > 0; n --) {
     stored_gpr();
     exec_once(&s, cpu.pc);
-    // A cycle-level NPC watchdog can abort before exec_once has a committed
-    // instruction to populate in Decode. Do not trace or difftest that
-    // incomplete record.
+    // cycle 级 watchdog 可能在 exec_once 填充 Decode 前中止；此时不能追踪或自查该不完整记录。
     if (nemu_state.state == NEMU_ABORT) break;
     g_nr_guest_inst ++;
     trace_and_difftest(&s, cpu.pc);
@@ -1201,8 +1238,8 @@ static void execute_fpga_free_run(void) {
   const bool interactive = npc_debug_is_interactive();
   struct sigaction action = {0};
   struct sigaction previous = {0};
-  uint64_t blocking_started_at = 0;
-  bool blocking = false;
+  uint64_t last_progress_commits = commits_before;
+  uint64_t progress_started_at = get_time();
   bool watchdog_fired = false;
   action.sa_handler = npc_interrupt_handler;
   sigemptyset(&action.sa_mask);
@@ -1217,22 +1254,20 @@ static void execute_fpga_free_run(void) {
       npc_step_cycle();
       if (npc_is_finished() || npc_interrupt_requested) break;
 
-      const uint32_t reasons = npc_get_backpressure_reasons();
-      if (reasons != 0) {
-        const uint64_t now = get_time();
-        if (!blocking) {
-          blocking = true;
-          blocking_started_at = now;
-        }
-        if (now - blocking_started_at >= NPC_BACKPRESSURE_WATCHDOG_US) {
-          npc_report_backpressure_watchdog(cpu.pc, cycles_before, commits_before,
-                                           now - blocking_started_at, reasons);
-          set_nemu_state(NEMU_ABORT, cpu.pc, -1);
-          watchdog_fired = true;
-          break;
-        }
-      } else {
-        blocking = false;
+      const uint64_t commits = npc_get_commit_count();
+      if (commits != last_progress_commits) {
+        last_progress_commits = commits;
+        progress_started_at = get_time();
+        continue;
+      }
+      const uint64_t now = get_time();
+      if (now - progress_started_at >= NPC_PROGRESS_WATCHDOG_US) {
+        npc_report_progress_watchdog(cpu.pc, cycles_before, commits_before,
+                                     now - progress_started_at,
+                                     npc_get_backpressure_reasons());
+        set_nemu_state(NEMU_ABORT, cpu.pc, -1);
+        watchdog_fired = true;
+        break;
       }
     }
     if (npc_interrupt_requested) {
@@ -1245,8 +1280,7 @@ static void execute_fpga_free_run(void) {
           nemu_state.state = NEMU_STOP;
         }
       } else {
-        // A batch cancellation must not look like a passing AM test.  The
-        // atexit cleanup below returns the mailbox-controlled core to reset.
+        // 批处理取消不能伪装成通过；atexit 清理会把 mailbox 控制的核心重新复位。
         set_nemu_state(NEMU_ABORT, npc_get_pc(), -1);
       }
     } else if (!watchdog_fired && npc_runtime_has_completed()) {

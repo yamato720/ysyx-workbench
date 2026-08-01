@@ -33,6 +33,20 @@ class CacheRtlStructureTest extends AnyFlatSpec {
     assert(uramSystemVerilog.contains("ram_style = \"ultra\""))
   }
 
+  "PipelinedCacheController" should "elaborate S0/S1 stages, ordered queues, and blocking maintenance" in {
+    val cache = CacheConfig(enabled = true, geometry = geometry, storage = CacheStorage.Auto)
+    val chirrtl = _root_.circt.stage.ChiselStage.emitCHIRRTL(
+      new PipelinedCacheController(cache, 32, 64, 0x80000000L, 0x10000000L,
+        readOnly = false, PipelinedCacheQueueConfig.TwoCycleLocal))
+
+    assert(chirrtl.contains("module PipelinedCacheController"))
+    assert(chirrtl.contains("s0Valid"))
+    assert(chirrtl.contains("s1Valid"))
+    assert(chirrtl.contains("requestQueue"))
+    assert(chirrtl.contains("responseQueue"))
+    assert(chirrtl.contains("maintenanceCanStart"))
+  }
+
   "NpcCore" should "insert both caches and the maintenance controller only for the explicit Config" in {
     val legacy = _root_.circt.stage.ChiselStage.emitCHIRRTL(new NpcCore(new SimulationConfig().config))
     val cached = _root_.circt.stage.ChiselStage.emitCHIRRTL(new NpcCore(new CacheSimulationConfig().config))
@@ -44,5 +58,31 @@ class CacheRtlStructureTest extends AnyFlatSpec {
     assert(cached.contains("module CacheMaintenanceController"))
     assert(cached.contains("module InstructionBuffer"))
     assert(cached.contains("commitStoreValid"))
+  }
+
+  it should "place a unified L2 only in the explicit wide-HBM hierarchy" in {
+    val wideL2 = NpcConfig(
+      isa = ISAConfig(xlen = 64, Zicsr = true, Zifencei = true),
+      axi = AxiConfig(dataWidth = 64, useExternalMaster = true, externalDataWidth = 512),
+      cache = CacheHierarchyConfig.WideHbmWithL2
+    ).validated
+    val legacy = _root_.circt.stage.ChiselStage.emitCHIRRTL(new NpcCore(new SimulationConfig().config))
+    val cached = _root_.circt.stage.ChiselStage.emitCHIRRTL(new NpcCore(wideL2))
+
+    assert(!legacy.contains("module UnifiedL2Cache"))
+    assert(cached.contains("module UnifiedL2Cache"))
+    assert(cached.contains("l2Flush"))
+  }
+
+  it should "elaborate the local two-cycle hierarchy without changing the blocking presets" in {
+    val pipelined = _root_.circt.stage.ChiselStage.emitCHIRRTL(
+      new NpcCore(new PipelinedTwoCycleWideL2SimulationConfig().config))
+
+    assert(pipelined.contains("module PipelinedCacheController"))
+    assert(pipelined.contains("module PipelinedIFetchAXIAdapter"))
+    assert(pipelined.contains("module PipelinedMemoryStage"))
+    assert(pipelined.contains("module PipelinedAxiLiteArbiter2"))
+    assert(pipelined.contains("module PipelinedAxiLiteCrossbar"))
+    assert(pipelined.contains("module PipelinedAxiLiteDpiRamSlave"))
   }
 }

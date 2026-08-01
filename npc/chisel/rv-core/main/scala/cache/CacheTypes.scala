@@ -3,7 +3,7 @@ package npc
 import chisel3._
 import chisel3.util.Cat
 
-/** Cache line payload. AXI-Lite still transfers one XLEN-sized beat at a time. */
+/** cache line 载荷。CPU 保持 XLEN 宽度，cache line-memory port 可以使用更宽的 beat。 */
 class CacheLine(val beats: Int, val dataWidth: Int) extends Bundle {
   val data = Vec(beats, UInt(dataWidth.W))
 }

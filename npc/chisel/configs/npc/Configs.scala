@@ -15,6 +15,31 @@ class CacheSimulationConfig extends ConstructionConfig(
   new CacheSimulationCoreConfig
 ) with LocalNpcTerminal with NemuSimulationIpTerminal
 
+/**
+  * 仅含 L1 的宽 HBM 本地时序实验。73--81 cycle 的确定性 DPI 响应区间是经过校准的
+  * 功能模型，不是逐周期精确的 HBM 控制器仿真。
+  */
+class HbmJitterCacheSimulationConfig extends ConstructionConfig(
+  new HbmJitterCacheSimulationCoreConfig
+) with LocalNpcTerminal with NemuSimulationIpTerminal
+
+/** L1+L2 宽 HBM DPI 抖动构造，用于和仅 L1 端点进行本地周期对比。 */
+class HbmJitterL2CacheSimulationConfig extends ConstructionConfig(
+  new HbmJitterL2CacheSimulationCoreConfig
+) with LocalNpcTerminal with NemuSimulationIpTerminal
+
+/** 本地 RV64IM 两拍 L1/L2、512-bit DPI Fabric 仿真终端。 */
+class PipelinedTwoCycleWideL2SimulationConfig extends ConstructionConfig(
+  new PipelinedTwoCycleWideL2SimulationCoreConfig
+) with LocalNpcTerminal with NemuSimulationIpTerminal
+
+/** 仅 L1 的宽 HBM DPI 抖动构造，启用交互式 SDB VCD 采集。 */
+class HbmJitterCacheVcdSimulationConfig extends ConstructionConfig(
+  new HbmJitterCacheSimulationCoreConfig
+) with LocalNpcTerminal with NemuSimulationIpTerminal {
+  override protected val configuredNemu: NemuHostConfig = NemuHostConfig.LocalVcdTrace
+}
+
 /** 启用流水线的 NPC 本地仿真终端。 */
 class PipelineSimulationConfig extends ConstructionConfig(
   new PipelineSimulationCoreConfig

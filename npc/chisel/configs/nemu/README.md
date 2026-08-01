@@ -14,6 +14,7 @@
 | `NemuHostConfig.LocalBase` | local | 本地 Verilator 基础 host |
 | `NemuHostConfig.LocalPerformance` | local | 增加性能主页与逐指令明细 |
 | `NemuHostConfig.LocalPipelineTrace` | local | 增加流水线 HTML 与逐提交软件自查 |
+| `NemuHostConfig.LocalVcdTrace` | local | 在 `LocalPipelineTrace` 上启用 SDB 交互式 VCD |
 | `NemuHostConfig.U55cBase` | u55c | U55C XRT host |
 | `NemuHostConfig.U55cPerformanceMonitor` | u55c | v13 U55C 批处理性能报告 host |
 | `NemuHostConfig.Zcu102Base` | zcu102 | ZCU102 PS Linux host |
@@ -34,6 +35,11 @@ XLEN、F、NPC/SoC、板卡地址、mailbox ABI 与 FPGA 平台始终从硬件 C
 计数，主页会在该文件存在时显示入口。`LocalPipelineTrace` 与 `U55cPerformanceMonitor` 默认开启该功能；
 其他自定义终端可用 `NemuHostConfig.LocalPipelineTrace.copy(cacheHtml = false)` 关闭。`pipelineHtml` 复用同一份
 提交记录生成 `pipeline.html`，不会隐式开启 VCD 或 ITRACE。
+
+`LocalVcdTrace` 是唯一的内置 VCD 配方：它同时启用 `trace` 与 `vcd`，因此 NEMU 提供 SDB `start`/`stop`
+命令；`start` 后的波形写入当前运行目录的 `wave-001.vcd`，`stop` 会关闭并刷新文件。VCD 需要 Verilator
+在硬件构造阶段启用 `--trace` 并链接 `verilated_vcd_c.o`，所以从无 VCD 构造切换到该配方必须完整
+`build`/`rebuild`，不能仅刷新 NEMU host。
 
 ```bash
 make -C npc host-config-list

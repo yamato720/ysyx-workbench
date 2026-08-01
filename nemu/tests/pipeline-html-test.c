@@ -22,6 +22,7 @@ static char *read_file(const char *path) {
 }
 
 int main(void) {
+  assert(setenv("NEMU_MEMORY_STATISTICS_MODE", "Split", 1) == 0);
   const uint64_t stage[PIPELINE_HTML_STAGE_COUNT] = {1, 3, 2, 1, 1};
   PipelineHtmlInterval intervals[PIPELINE_HTML_STAGE_COUNT];
   pipeline_html_compute_intervals(20, stage, intervals);
@@ -52,6 +53,15 @@ int main(void) {
   assert(strstr(content, ".row>.meta:nth-child(-n+4){position:sticky") != NULL);
   assert(strstr(content, ".row>.meta:nth-child(4){left:calc(var(--col-seq) + var(--col-pc) + var(--col-inst))") != NULL);
   assert(strstr(content, "viewport.style.setProperty('--timeline-width',timelineWidth+'px')") != NULL);
+  assert(strstr(content, ">WAIT<") != NULL);
+  assert(strstr(content, ">QUEUE<") != NULL);
+  assert(strstr(content, "id=\"detailModal\"") != NULL);
+  assert(strstr(content, "function timelineBlocks(record)") != NULL);
+  assert(strstr(content, "function openDetail(record,block,target)") != NULL);
+  assert(strstr(content, "trace.memory_statistics_mode!=='ServiceOnly'") != NULL);
+  assert(strstr(content, "stage queue") != NULL);
+  assert(strstr(content, "b.addEventListener('click'") != NULL);
+  assert(strstr(content, ".stage.wait{background:var(--wait)") != NULL);
   assert(strstr(content, "href=\"performance.html\"") != NULL);
   free(content);
   assert(pipeline_html_write_instructions(empty) == 0);
@@ -64,10 +74,40 @@ int main(void) {
   free(content);
   pipeline_html_destroy(empty);
 
+  assert(setenv("NEMU_MEMORY_STATISTICS_MODE", "ServiceOnly", 1) == 0);
+  PipelineHtmlRecorder *service_only = pipeline_html_create(path, "service-only", PIPELINE_HTML_DEFAULT_LIMIT);
+  assert(service_only != NULL);
+  const uint64_t service_start[PIPELINE_HTML_STAGE_COUNT] = {3, 8, 12, 15, 19};
+  const PipelineHtmlMemoryTiming service_memory = {
+    .valid = true,
+    .queue_start_cycle = 13,
+    .service_start_cycle = 15,
+    .queue_cycles = 2,
+    .service_cycles = 4,
+  };
+  pipeline_html_record_with_starts_and_memory(
+      service_only, 1, 0x80000000, 0x00100073, "lw", 20,
+      stage, service_start, &service_memory);
+  assert(pipeline_html_finish(service_only, stalls) == 0);
+  content = read_file(path);
+  assert(strstr(content, "\"memory_statistics_mode\":\"ServiceOnly\"") != NULL);
+  free(content);
+  pipeline_html_destroy(service_only);
+  assert(setenv("NEMU_MEMORY_STATISTICS_MODE", "Split", 1) == 0);
+
   PipelineHtmlRecorder *escaped = pipeline_html_create(path, "case</script>", 3);
   assert(escaped != NULL);
-  pipeline_html_record(escaped, 1, 0x80000000, 0x00100073,
-                       "addi a0, a0, <&\\\"", 20, stage);
+  const uint64_t absolute_start[PIPELINE_HTML_STAGE_COUNT] = {3, 8, 12, 15, 19};
+  const PipelineHtmlMemoryTiming memory = {
+    .valid = true,
+    .queue_start_cycle = 13,
+    .service_start_cycle = 15,
+    .queue_cycles = 2,
+    .service_cycles = 4,
+  };
+  pipeline_html_record_with_starts_and_memory(
+      escaped, 1, 0x80000000, 0x00100073, "addi a0, a0, <&\\\"", 20,
+      stage, absolute_start, &memory);
   for (uint64_t index = 2; index <= 5; index++) {
     pipeline_html_record(escaped, index, 0x80000000 + index * 4,
                          0x00000013, "nop", 20 + index, stage);
@@ -79,11 +119,22 @@ int main(void) {
   assert(strstr(content, "case\\u003c/script\\u003e") != NULL);
   assert(strstr(content, "addi a0, a0, \\u003c\\u0026") != NULL);
   assert(strstr(content, "\"pc\":\"0x80000000\"") != NULL);
+  assert(strstr(content, "\"absolute\":true") != NULL);
+  assert(strstr(content, "\"s\":[3,8,12,15,19]") != NULL);
+  assert(strstr(content, "\"memory_statistics_mode\":\"Split\"") != NULL);
+  assert(strstr(content, "\"queueStart\":13") != NULL);
+  assert(strstr(content, "\"serviceStart\":15") != NULL);
+  assert(strstr(content, "\"queue\":2") != NULL);
+  assert(strstr(content, "\"service\":4") != NULL);
+  assert(strstr(content, "请求握手") != NULL);
+  assert(strstr(content, "下游完成") != NULL);
   assert(strstr(content, "\"dropped\":2") != NULL);
   free(content);
   assert(pipeline_html_write_instructions(escaped) == 0);
   content = read_file(instruction_path);
   assert(strstr(content, "\"pc\":\"0x80000000\"") != NULL);
+  assert(strstr(content, "\"absolute\":true") != NULL);
+  assert(strstr(content, "\"s\":[3,8,12,15,19]") != NULL);
   free(content);
   pipeline_html_destroy(escaped);
 

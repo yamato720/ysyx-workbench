@@ -5,7 +5,7 @@ import org.chipsalliance.cde.config.Parameters
 import org.scalatest.flatspec.AnyFlatSpec
 import npc.ExternalAxiConfig
 import npc.{ArithmeticRouteOperation, ComputeBackend, ConfigCatalog, ConstructionConfig, ConstructionProfile, FloatingCheckConfig, FpgaIpTerminal, FpgaToolchainConfig, NemuHostConfig, NemuSimulationIpTerminal, NpcConfig, NpcCoreComponents, NpcCoreConfigKey, OperatorIpTimingConfig, OperatorRouteTarget, Rv64IMFZicsrConfig, WithNpcCoreConfig}
-import npc.fpga.u55c.{U55cCacheNpcFpgaConfig, U55cCacheYsyxSocFpgaConfig, U55cNpcFpgaConfig, U55cRv64CacheNpc150MHzPerformanceMonitorFpgaConfig, U55cRv64CacheNpc300MHzFpgaConfig, U55cRv64CacheNpc300MHzPerformanceMonitorFpgaConfig, U55cRv64Npc300MHzPerformanceMonitorFpgaConfig, U55cRv64Npc300MHzFpgaConfig, U55cRv64NpcFpgaConfig, U55cXilinxIpAttachment, U55cYsyxSocFpgaConfig}
+import npc.fpga.u55c.{U55cCacheNpcFpgaConfig, U55cCacheYsyxSocFpgaConfig, U55cNpcFpgaConfig, U55cRv64CacheNpc150MHzPerformanceMonitorFpgaConfig, U55cRv64CacheNpc300MHzFpgaConfig, U55cRv64CacheNpc300MHzPerformanceMonitorFpgaConfig, U55cRv64Hbm512CacheNpc150MHzPerformanceMonitorFpgaConfig, U55cRv64Hbm512L2CacheNpc150MHzPerformanceMonitorFpgaConfig, U55cRv64Npc300MHzPerformanceMonitorFpgaConfig, U55cRv64Npc300MHzFpgaConfig, U55cRv64NpcFpgaConfig, U55cXilinxIpAttachment, U55cYsyxSocFpgaConfig}
 import npc.fpga.zcu102.{Zcu102NpcFpgaConfig, Zcu102YsyxSocFpgaConfig}
 import ysyx.{YsyxPlatformParameters, YsyxSimulationConfig, YsyxSocConfig}
 
@@ -192,21 +192,76 @@ class FpgaConfigCompositionTest extends AnyFlatSpec {
     "freeze a 150 MHz cache core behind the 300 MHz U55C platform shell" in {
     implicit val parameters: Parameters = new U55cRv64CacheNpc150MHzPerformanceMonitorFpgaConfig
     val terminal = new U55cRv64CacheNpc150MHzPerformanceMonitorFpgaConfig
-    val profile = ConstructionProfile.values(
-      ConfigCatalog.resolve("U55cRv64CacheNpc150MHzPerformanceMonitorFpgaConfig", Set("fpga")),
-      terminal,
-      FpgaConfigParameters.npcCoreConfig,
-      performanceMonitor = FpgaConfigParameters.performanceMonitor.profile,
-      runtimeSdbEnabled = FpgaConfigParameters.runtimeSdb.enabled
-    ).toMap
+    val platformManifest = FpgaConfigParameters.platform
+      .manifestValues(FpgaConfigParameters.npcCoreConfig).toMap
     assert(FpgaConfigParameters.platform.clockMHz == 150)
     assert(FpgaConfigParameters.platform.platformClockMHz == 300)
     assert(FpgaConfigParameters.npcCoreConfig.cache.icache.enabled)
     assert(FpgaConfigParameters.performanceMonitor.enabled)
     assert(!FpgaConfigParameters.runtimeSdb.enabled)
     assert(terminal.capability == "batch")
-    assert(profile("FPGA_CLOCK_MHZ") == "150")
-    assert(profile("FPGA_PLATFORM_CLOCK_MHZ") == "300")
+    assert(platformManifest("FPGA_CLOCK_MHZ") == "150")
+    assert(platformManifest("FPGA_PLATFORM_CLOCK_MHZ") == "300")
+  }
+
+  "U55cRv64Hbm512CacheNpc150MHzPerformanceMonitorFpgaConfig" should
+    "keep the RV64 CPU port while using one 512-bit HBM beat per 64-byte line" in {
+    implicit val parameters: Parameters = new U55cRv64Hbm512CacheNpc150MHzPerformanceMonitorFpgaConfig
+    val terminal = new U55cRv64Hbm512CacheNpc150MHzPerformanceMonitorFpgaConfig
+    val config = FpgaConfigParameters.npcCoreConfig
+    val profile = ConstructionProfile.values(
+      ConfigCatalog.resolve("U55cRv64Hbm512CacheNpc150MHzPerformanceMonitorFpgaConfig", Set("fpga")),
+      terminal,
+      config,
+      performanceMonitor = FpgaConfigParameters.performanceMonitor.profile,
+      runtimeSdbEnabled = FpgaConfigParameters.runtimeSdb.enabled
+    ).toMap
+
+    assert(config.isa.xlen == 64)
+    assert(config.axi.dataWidth == 64)
+    assert(config.memoryDataWidth == 512)
+    assert(config.cache.icache.geometry.lineBytes == 64)
+    assert(config.cache.dcache.geometry.lineBytes == 64)
+    assert(FpgaConfigParameters.performanceMonitor.enabled)
+    assert(!FpgaConfigParameters.runtimeSdb.enabled)
+    assert(terminal.capability == "batch")
+    assert(profile("AXI_MEMORY_DATA_WIDTH") == "512")
+    assert(profile("ICACHE_LINE_BYTES") == "64")
+    assert(profile("DCACHE_LINE_BYTES") == "64")
+  }
+
+  "U55cRv64Hbm512L2CacheNpc150MHzPerformanceMonitorFpgaConfig" should
+    "retain the 512-bit L1 ABI and add the shared 256 KiB L2 profile" in {
+    implicit val parameters: Parameters = new U55cRv64Hbm512L2CacheNpc150MHzPerformanceMonitorFpgaConfig
+    val terminal = new U55cRv64Hbm512L2CacheNpc150MHzPerformanceMonitorFpgaConfig
+    val config = FpgaConfigParameters.npcCoreConfig
+    val profile = ConstructionProfile.values(
+      ConfigCatalog.resolve("U55cRv64Hbm512L2CacheNpc150MHzPerformanceMonitorFpgaConfig", Set("fpga")),
+      terminal,
+      config,
+      performanceMonitor = FpgaConfigParameters.performanceMonitor.profile,
+      runtimeSdbEnabled = FpgaConfigParameters.runtimeSdb.enabled
+    ).toMap
+
+    assert(config.axi.dataWidth == 64)
+    assert(config.memoryDataWidth == 512)
+    assert(config.cache.icache.geometry.lineBytes == 64)
+    assert(config.cache.dcache.geometry.lineBytes == 64)
+    assert(config.cache.l2cache.enabled)
+    assert(config.cache.l2cache.geometry.capacityBytes == 256 * 1024)
+    assert(config.cache.l2cache.geometry.lineBytes == 64)
+    assert(config.cache.l2cache.geometry.ways == 8)
+    assert(config.cache.l2cache.replacement == npc.CacheReplacement.TreePLRU)
+    assert(config.cache.l2cache.policy.write == npc.CacheWritePolicy.WriteBack)
+    assert(config.cache.l2cache.policy.writeMiss == npc.CacheWriteMissPolicy.WriteAllocate)
+    assert(terminal.capability == "batch")
+    assert(profile("AXI_MEMORY_DATA_WIDTH") == "512")
+    assert(profile("L2CACHE_ENABLED") == "1")
+    assert(profile("L2CACHE_CAPACITY_BYTES") == (256 * 1024).toString)
+    assert(profile("L2CACHE_LINE_BYTES") == "64")
+    assert(profile("L2CACHE_WAYS") == "8")
+    assert(profile("L2CACHE_WRITE_POLICY") == "write-back")
+    assert(profile("L2CACHE_WRITE_MISS") == "write-allocate")
   }
 
   "Zcu102NpcFpgaConfig" should "use the PS UIO notification path with the same strict routes" in {

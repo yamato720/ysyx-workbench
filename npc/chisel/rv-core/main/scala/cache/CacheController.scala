@@ -8,8 +8,8 @@ import npc.protocol._
   * Blocking, single-MSHR AXI-Lite cache controller.
   *
   * Refills and dirty writebacks are deliberately emitted as one AXI-Lite beat
-  * at a time. The external AXI4 bridge and board ports therefore keep their
-  * existing non-burst ABI.
+  * at a time. The CPU-side port can remain XLEN-wide while the line-memory
+  * port is wider, allowing a 64-byte line to use one 512-bit HBM AXI beat.
   */
 class CacheController(
   cache: CacheConfig,
@@ -17,27 +17,37 @@ class CacheController(
   dataWidth: Int,
   mainMemoryBase: Long,
   mainMemorySize: Long,
-  readOnly: Boolean
+  readOnly: Boolean,
+  memoryDataWidth: Int = 0
 ) extends Module {
   require(cache.enabled, "CacheController requires an enabled CacheConfig")
+  private val effectiveMemoryDataWidth = if (memoryDataWidth == 0) dataWidth else memoryDataWidth
   cache.validate(addrWidth, dataWidth)
+  cache.validateMemoryBus(effectiveMemoryDataWidth)
+  require(effectiveMemoryDataWidth >= dataWidth &&
+    (effectiveMemoryDataWidth & (effectiveMemoryDataWidth - 1)) == 0,
+    s"cache memory width must be a power of two no narrower than CPU width ($dataWidth), got $effectiveMemoryDataWidth")
 
   private val geometry = cache.geometry
   private val sets = geometry.sets
   private val ways = geometry.ways
-  private val beatBytes = dataWidth / 8
-  private val beats = geometry.lineBytes / beatBytes
-  private val lineWidth = beats * dataWidth
+  private val cpuBeatBytes = dataWidth / 8
+  private val memoryBeatBytes = effectiveMemoryDataWidth / 8
+  private val cpuBeats = geometry.lineBytes / cpuBeatBytes
+  private val memoryBeats = geometry.lineBytes / memoryBeatBytes
+  private val lineWidth = geometry.lineBytes * 8
   private val setWidth = math.max(1, log2Ceil(sets))
   private val wayWidth = math.max(1, log2Ceil(ways))
-  private val beatWidth = math.max(1, log2Ceil(beats))
+  private val memoryBeatWidth = math.max(1, log2Ceil(memoryBeats))
   private val tagWidth = geometry.tagBits(addrWidth)
-  private val fullStrobe = ((BigInt(1) << beatBytes) - 1).U(beatBytes.W)
-  private val fullBeatSize = log2Ceil(beatBytes).U(3.W)
+  private val memoryFullStrobe = ((BigInt(1) << memoryBeatBytes) - 1).U(memoryBeatBytes.W)
+  private val memoryFullBeatSize = log2Ceil(memoryBeatBytes).U(3.W)
+  private val memoryLaneBits = log2Ceil(memoryBeatBytes)
+  private val cpuLaneBits = log2Ceil(cpuBeatBytes)
 
   val io = IO(new Bundle {
     val cpu = Flipped(new AxiLiteMasterIO(addrWidth, dataWidth))
-    val memory = new AxiLiteMasterIO(addrWidth, dataWidth)
+    val memory = new AxiLiteMasterIO(addrWidth, effectiveMemoryDataWidth)
     val maintenanceRequest = Input(Bool())
     val maintenanceInvalidate = Input(Bool())
     val maintenanceDone = Output(Bool())
@@ -45,7 +55,7 @@ class CacheController(
     val statistics = Output(new CacheStatistics)
   })
 
-  val array = Module(new CacheArray(cache, addrWidth, dataWidth, hasDirty = !readOnly))
+  val array = Module(new CacheArray(cache, addrWidth, effectiveMemoryDataWidth, hasDirty = !readOnly))
   val replacement = Module(new CacheReplacementUnit(sets, ways, cache.replacement))
 
   val Seq(sIdle, sCollectWrite, sLookupIssue, sLookupEvaluate,
@@ -60,10 +70,10 @@ class CacheController(
   val reqSize = Reg(UInt(3.W))
   val reqProt = Reg(UInt(3.W))
   val reqData = Reg(UInt(dataWidth.W))
-  val reqStrobe = Reg(UInt(beatBytes.W))
+  val reqStrobe = Reg(UInt(cpuBeatBytes.W))
   val reqSet = CacheAddress.set(reqAddr, geometry)
   val reqTag = CacheAddress.tag(reqAddr, geometry, addrWidth)
-  val reqBeat = CacheAddress.beat(reqAddr, geometry, beatBytes)
+  val reqBeat = CacheAddress.beat(reqAddr, geometry, cpuBeatBytes)
 
   val awCaptured = RegInit(false.B)
   val awAddr = Reg(UInt(addrWidth.W))
@@ -71,7 +81,7 @@ class CacheController(
   val awProt = Reg(UInt(3.W))
   val wCaptured = RegInit(false.B)
   val wData = Reg(UInt(dataWidth.W))
-  val wStrobe = Reg(UInt(beatBytes.W))
+  val wStrobe = Reg(UInt(cpuBeatBytes.W))
 
   val responseData = RegInit(0.U(dataWidth.W))
   val responseCode = RegInit(AxiLiteResp.OKAY)
@@ -84,10 +94,10 @@ class CacheController(
   val victimWay = Reg(UInt(wayWidth.W))
   val victimTag = Reg(UInt(tagWidth.W))
   val victimLine = Reg(UInt(lineWidth.W))
-  val writebackBeat = RegInit(0.U(beatWidth.W))
+  val writebackBeat = RegInit(0.U(memoryBeatWidth.W))
   val writebackMaintenance = RegInit(false.B)
   val refillLine = Reg(UInt(lineWidth.W))
-  val refillBeat = RegInit(0.U(beatWidth.W))
+  val refillBeat = RegInit(0.U(memoryBeatWidth.W))
 
   val maintenanceSet = RegInit(0.U(setWidth.W))
   val maintenanceWay = RegInit(0.U(wayWidth.W))
@@ -111,9 +121,17 @@ class CacheController(
     addr >= mainMemoryBase.U(addrWidth.W) &&
       addr < (mainMemoryBase + mainMemorySize).U(addrWidth.W)
 
-  def lineBeat(line: UInt, beat: UInt): UInt = {
-    val vector = line.asTypeOf(Vec(beats, UInt(dataWidth.W)))
+  def cpuLineBeat(line: UInt, beat: UInt): UInt = {
+    val vector = line.asTypeOf(Vec(cpuBeats, UInt(dataWidth.W)))
     vector(beat)
+  }
+
+  def memoryLineBeat(line: UInt, beat: UInt): UInt = {
+    if (memoryBeats == 1) line
+    else {
+      val vector = line.asTypeOf(Vec(memoryBeats, UInt(effectiveMemoryDataWidth.W)))
+      vector(beat)
+    }
   }
 
   def selectLine(index: UInt): UInt =
@@ -122,19 +140,58 @@ class CacheController(
   def selectMeta(index: UInt): CacheTagMeta =
     if (ways == 1) array.io.readMeta(0) else array.io.readMeta(index)
 
-  def replaceBeat(line: UInt, beat: UInt, data: UInt): UInt = {
-    val next = Wire(Vec(beats, UInt(dataWidth.W)))
-    next := line.asTypeOf(Vec(beats, UInt(dataWidth.W)))
+  def replaceCpuBeat(line: UInt, beat: UInt, data: UInt): UInt = {
+    val next = Wire(Vec(cpuBeats, UInt(dataWidth.W)))
+    next := line.asTypeOf(Vec(cpuBeats, UInt(dataWidth.W)))
     next(beat) := data
     next.asUInt
   }
 
+  def replaceMemoryBeat(line: UInt, beat: UInt, data: UInt): UInt = {
+    if (memoryBeats == 1) data
+    else {
+      val next = Wire(Vec(memoryBeats, UInt(effectiveMemoryDataWidth.W)))
+      next := line.asTypeOf(Vec(memoryBeats, UInt(effectiveMemoryDataWidth.W)))
+      next(beat) := data
+      next.asUInt
+    }
+  }
+
   def writeMask(strobe: UInt): UInt =
-    VecInit((0 until beatBytes).map(lane => Fill(8, strobe(lane)))).asUInt
+    VecInit((0 until cpuBeatBytes).map(lane => Fill(8, strobe(lane)))).asUInt
 
   def mergeWrite(oldData: UInt, data: UInt, strobe: UInt): UInt = {
     val mask = writeMask(strobe)
     (oldData & ~mask) | (data & mask)
+  }
+
+  // CPU data/strobe 已位于其 XLEN 宽 word 内的正确位置。应把该 word 放入宽主存的
+  // 对应 word 位置，而不能再按原始 byte offset 移位；后者会丢失宽 beat 最后一个
+  // CPU word 的访问，例如位于 512-bit beat 第 60 byte 的 32-bit store 会移出 bit 511。
+  private val memoryWordOffset =
+    if (memoryBeatBytes == cpuBeatBytes) 0.U(1.W)
+    else reqAddr(memoryLaneBits - 1, cpuLaneBits)
+  private val memoryDataShift = memoryWordOffset << log2Ceil(dataWidth)
+  private val memoryStrobeShift = memoryWordOffset << cpuLaneBits
+  private val memoryRequestAddress =
+    if (memoryBeatBytes == cpuBeatBytes) reqAddr
+    else Mux(isMainMemory(reqAddr),
+      Cat(reqAddr(addrWidth - 1, memoryLaneBits), 0.U(memoryLaneBits.W)), reqAddr)
+
+  /** 将 CPU 宽度的 bypass/write-through 事务展开到选中的宽 AXI lane。 */
+  def expandCpuData(data: UInt): UInt = {
+    if (effectiveMemoryDataWidth == dataWidth) data
+    else (Cat(0.U((effectiveMemoryDataWidth - dataWidth).W), data) << memoryDataShift)(effectiveMemoryDataWidth - 1, 0)
+  }
+
+  def expandCpuStrobe(strobe: UInt): UInt = {
+    if (effectiveMemoryDataWidth == dataWidth) strobe
+    else (Cat(0.U((memoryBeatBytes - cpuBeatBytes).W), strobe) << memoryStrobeShift)(memoryBeatBytes - 1, 0)
+  }
+
+  def extractCpuData(data: UInt): UInt = {
+    if (effectiveMemoryDataWidth == dataWidth) data
+    else (data >> memoryDataShift)(dataWidth - 1, 0)
   }
 
   def victimBase(tag: UInt, set: UInt): UInt = {
@@ -203,15 +260,15 @@ class CacheController(
 
   // Downstream defaults.
   io.memory.aw.valid := false.B
-  io.memory.aw.bits.addr := reqAddr
+  io.memory.aw.bits.addr := memoryRequestAddress
   io.memory.aw.bits.size := reqSize
   io.memory.aw.bits.prot := reqProt
   io.memory.w.valid := false.B
-  io.memory.w.bits.data := reqData
-  io.memory.w.bits.strb := reqStrobe
+  io.memory.w.bits.data := expandCpuData(reqData)
+  io.memory.w.bits.strb := expandCpuStrobe(reqStrobe)
   io.memory.b.ready := false.B
   io.memory.ar.valid := false.B
-  io.memory.ar.bits.addr := reqAddr
+  io.memory.ar.bits.addr := memoryRequestAddress
   io.memory.ar.bits.size := reqSize
   io.memory.ar.bits.prot := reqProt
   io.memory.r.ready := false.B
@@ -244,8 +301,8 @@ class CacheController(
     (cache.policy.readMiss == CacheReadMissPolicy.ReadAllocate).B)
 
   val writebackAddress = victimBase(victimTag,
-    Mux(writebackMaintenance, maintenanceSet, reqSet)) + (writebackBeat * beatBytes.U)
-  val refillAddress = CacheAddress.lineBase(reqAddr, geometry, addrWidth) + (refillBeat * beatBytes.U)
+    Mux(writebackMaintenance, maintenanceSet, reqSet)) + (writebackBeat * memoryBeatBytes.U)
+  val refillAddress = CacheAddress.lineBase(reqAddr, geometry, addrWidth) + (refillBeat * memoryBeatBytes.U)
 
   switch(state) {
     is(sIdle) {
@@ -335,11 +392,11 @@ class CacheController(
         replacement.io.accessWay := hitWay
         val hitLine = selectLine(hitWay)
         when(reqWrite) {
-          val updatedBeat = mergeWrite(lineBeat(hitLine, reqBeat), reqData, reqStrobe)
+          val updatedBeat = mergeWrite(cpuLineBeat(hitLine, reqBeat), reqData, reqStrobe)
           if (cache.policy.write == CacheWritePolicy.WriteBack) {
             array.io.dataWriteEnable := true.B
             array.io.dataWriteWay := hitWay
-            array.io.dataWriteLine := replaceBeat(hitLine, reqBeat, updatedBeat)
+            array.io.dataWriteLine := replaceCpuBeat(hitLine, reqBeat, updatedBeat)
             array.io.metaWriteEnable := true.B
             array.io.metaWriteWay := hitWay
             array.io.metaWrite.valid := true.B
@@ -349,10 +406,10 @@ class CacheController(
             responseCode := AxiLiteResp.OKAY
             state := sRespondWrite
           } else {
-            beginWriteThrough(replaceBeat(hitLine, reqBeat, updatedBeat), hitWay)
+            beginWriteThrough(replaceCpuBeat(hitLine, reqBeat, updatedBeat), hitWay)
           }
         }.otherwise {
-          responseData := lineBeat(hitLine, reqBeat)
+          responseData := cpuLineBeat(hitLine, reqBeat)
           responseCode := AxiLiteResp.OKAY
           state := sRespondRead
         }
@@ -393,7 +450,7 @@ class CacheController(
     is(sPassReadData) {
       io.memory.r.ready := true.B
       when(io.memory.r.fire) {
-        responseData := io.memory.r.bits.data
+        responseData := extractCpuData(io.memory.r.bits.data)
         responseCode := io.memory.r.bits.resp
         state := sRespondRead
       }
@@ -425,11 +482,11 @@ class CacheController(
     is(sWritebackSend) {
       io.memory.aw.valid := !sendAwDone
       io.memory.aw.bits.addr := writebackAddress
-      io.memory.aw.bits.size := fullBeatSize
+      io.memory.aw.bits.size := memoryFullBeatSize
       io.memory.aw.bits.prot := 0.U
       io.memory.w.valid := !sendWDone
-      io.memory.w.bits.data := lineBeat(victimLine, writebackBeat)
-      io.memory.w.bits.strb := fullStrobe
+      io.memory.w.bits.data := memoryLineBeat(victimLine, writebackBeat)
+      io.memory.w.bits.strb := memoryFullStrobe
       when(io.memory.aw.fire) { sendAwDone := true.B }
       when(io.memory.w.fire) { sendWDone := true.B }
       when((sendAwDone || io.memory.aw.fire) && (sendWDone || io.memory.w.fire)) {
@@ -449,7 +506,7 @@ class CacheController(
             responseData := 0.U
             state := sRespondRead
           }
-        }.elsewhen(writebackBeat === (beats - 1).U) {
+        }.elsewhen(writebackBeat === (memoryBeats - 1).U) {
           array.io.metaWriteEnable := true.B
           array.io.metaWriteSet := Mux(writebackMaintenance, maintenanceSet, reqSet)
           array.io.metaWriteWay := victimWay
@@ -473,7 +530,7 @@ class CacheController(
     is(sRefillAddress) {
       io.memory.ar.valid := true.B
       io.memory.ar.bits.addr := refillAddress
-      io.memory.ar.bits.size := fullBeatSize
+      io.memory.ar.bits.size := memoryFullBeatSize
       io.memory.ar.bits.prot := reqProt
       when(io.memory.ar.fire) { state := sRefillData }
     }
@@ -487,12 +544,12 @@ class CacheController(
             state := sRespondRead
           }
         }.otherwise {
-          val completedLine = replaceBeat(refillLine, refillBeat, io.memory.r.bits.data)
-          when(refillBeat === (beats - 1).U) {
+          val completedLine = replaceMemoryBeat(refillLine, refillBeat, io.memory.r.bits.data)
+          when(refillBeat === (memoryBeats - 1).U) {
             val installedLine = WireDefault(completedLine)
             when(reqWrite && (cache.policy.write == CacheWritePolicy.WriteBack).B) {
-              installedLine := replaceBeat(completedLine, reqBeat,
-                mergeWrite(lineBeat(completedLine, reqBeat), reqData, reqStrobe))
+              installedLine := replaceCpuBeat(completedLine, reqBeat,
+                mergeWrite(cpuLineBeat(completedLine, reqBeat), reqData, reqStrobe))
             }
             array.io.dataWriteEnable := true.B
             array.io.dataWriteWay := victimWay
@@ -513,11 +570,11 @@ class CacheController(
                 responseCode := AxiLiteResp.OKAY
                 state := sRespondWrite
               } else {
-                beginWriteThrough(replaceBeat(completedLine, reqBeat,
-                  mergeWrite(lineBeat(completedLine, reqBeat), reqData, reqStrobe)), victimWay)
+                beginWriteThrough(replaceCpuBeat(completedLine, reqBeat,
+                  mergeWrite(cpuLineBeat(completedLine, reqBeat), reqData, reqStrobe)), victimWay)
               }
             }.otherwise {
-              responseData := lineBeat(completedLine, reqBeat)
+              responseData := cpuLineBeat(completedLine, reqBeat)
               responseCode := AxiLiteResp.OKAY
               state := sRespondRead
             }

@@ -1,9 +1,12 @@
-if {$argc != 10} {
-  puts stderr "usage: package-xo.tcl PROJECT PART TOP SOURCE_MANIFEST XO XLEN SYNTH_JOBS PLATFORM_CLOCK_MHZ CORE_CLOCK_MHZ RUNTIME_TRACE"
+if {$argc != 11} {
+  puts stderr "usage: package-xo.tcl PROJECT PART TOP SOURCE_MANIFEST XO XLEN AXI_DATA_WIDTH SYNTH_JOBS PLATFORM_CLOCK_MHZ CORE_CLOCK_MHZ RUNTIME_TRACE"
   exit 2
 }
-lassign $argv project_dir part top source_manifest xo xlen synth_jobs platform_clock_mhz core_clock_mhz runtime_trace
+lassign $argv project_dir part top source_manifest xo xlen axi_data_width synth_jobs platform_clock_mhz core_clock_mhz runtime_trace
 if {$runtime_trace ni {0 1}} { error "RUNTIME_TRACE must be 0 or 1" }
+if {$axi_data_width < $xlen || ($axi_data_width & ($axi_data_width - 1)) != 0} {
+  error "U55C AXI data width must be a power of two no narrower than XLEN, got $axi_data_width"
+}
 if {$platform_clock_mhz != 300} { error "U55C platform DATA_CLK must be 300 MHz, got $platform_clock_mhz" }
 if {$core_clock_mhz ni {100 125 150 200 250 300}} {
   error "U55C core clock must be one of 100, 125, 150, 200, 250, 300 MHz, got $core_clock_mhz"
@@ -52,6 +55,7 @@ foreach source [dict get $sources rtl] {
     close $source_file
     set wrapper_file [open $packaged_wrapper_source w]
     puts $wrapper_file "`define NPC_FPGA_XLEN $xlen"
+    puts $wrapper_file "`define NPC_FPGA_AXI_DATA_WIDTH $axi_data_width"
     puts $wrapper_file "`define NPC_FPGA_PLATFORM_CLOCK_MHZ $platform_clock_mhz"
     puts $wrapper_file "`define NPC_FPGA_CORE_CLOCK_MHZ $core_clock_mhz"
     if {$runtime_trace == 1} { puts $wrapper_file "`define NPC_FPGA_CLOCKED_CORE 1" }
@@ -66,7 +70,7 @@ foreach source [dict get $sources rtl] {
 }
 if {!$packaged_wrapper} { error "synthesis manifest has no U55C kernel wrapper" }
 add_files -norecurse $packaging_rtl
-set_property verilog_define "NPC_FPGA_XLEN=$xlen" [current_fileset]
+set_property verilog_define [list "NPC_FPGA_XLEN=$xlen" "NPC_FPGA_AXI_DATA_WIDTH=$axi_data_width"] [current_fileset]
 
 if {$runtime_trace == 1} {
   # Chisel 7.0.0-M2 cannot emit a memory attribute with this project's
@@ -140,7 +144,7 @@ puts $kernel_xml_file {<?xml version="1.0" encoding="UTF-8"?>}
 puts $kernel_xml_file {<root versionMajor="1" versionMinor="9">}
 puts $kernel_xml_file [format {  <kernel name="%s" language="ip_c" vlnv="user.org:RTLKernel:%s:1.0" attributes="" preferredWorkGroupSizeMultiple="0" workGroupSize="1" interrupt="true" hwControlProtocol="ap_ctrl_hs">} $top $top]
 puts $kernel_xml_file {    <ports>}
-puts $kernel_xml_file [format {      <port name="m_axi_gmem" mode="master" range="0xFFFFFFFFFFFFFFFF" dataWidth="%s" portType="addressable" base="0x0"/>} $xlen]
+puts $kernel_xml_file [format {      <port name="m_axi_gmem" mode="master" range="0xFFFFFFFFFFFFFFFF" dataWidth="%s" portType="addressable" base="0x0"/>} $axi_data_width]
 if {$runtime_trace == 1} {
   puts $kernel_xml_file {      <port name="m_axi_trace" mode="master" range="0xFFFFFFFFFFFFFFFF" dataWidth="256" portType="addressable" base="0x0"/>}
 }

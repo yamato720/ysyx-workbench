@@ -69,6 +69,9 @@ awk -F= '
     if (!seen["PROFILE_FORMAT"] || !seen["CAPABILITY"] || !seen["XLEN"] || !seen["NEMU_PRESET"] || !seen["NEMU_CACHE_HTML"] ||
         !seen["INTEGER_EXECUTE_STAGES"] || !seen["SERIAL_EXECUTE_STAGES"] || !seen["REGISTER_INITIAL_FETCH_REQUEST"] ||
         !seen["SEPARATE_SERIAL_INTEGER_ALU"] || !seen["SERIAL_EXECUTE_RESULT_FORWARDING"] ||
+        !seen["DPI_MEMORY_TIMING_ENABLED"] || !seen["DPI_MEMORY_READ_RESPONSE_MIN_CYCLES"] ||
+        !seen["DPI_MEMORY_READ_RESPONSE_MAX_CYCLES"] || !seen["DPI_MEMORY_WRITE_RESPONSE_MIN_CYCLES"] ||
+        !seen["DPI_MEMORY_WRITE_RESPONSE_MAX_CYCLES"] || !seen["DPI_MEMORY_TIMING_SEED"] ||
         (scope == "fpga" && (!seen["FPGA_PLATFORM_CLOCK_MHZ"] || !seen["FPGA_DIVIDER_NON_BLOCKING"] || !seen["FPGA_RUNTIME_SDB"] || !seen["FPGA_RUNTIME_TRACE"] ||
           !seen["FPGA_TRACE_HBM_BANK"] || !seen["FPGA_TRACE_BUFFER_BYTES"] || !seen["FPGA_TRACE_MAX_RECORDS"] ||
           !seen["FPGA_TRACE_CACHE_RECORDS"] || !seen["FPGA_TRACE_FORMAT"] ||

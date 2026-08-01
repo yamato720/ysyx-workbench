@@ -19,6 +19,10 @@ Chisel；rv-core 保留 ISA 译码与操作码映射，ysyxSoC 保留 Diplomacy 
 make -C npc config-list
 make -C npc build config=SimulationConfig
 make -C npc build config=CacheSimulationConfig
+make -C npc build config=HbmJitterCacheSimulationConfig
+make -C npc build config=HbmJitterL2CacheSimulationConfig
+make -C npc build config=HbmJitterCacheVcdSimulationConfig
+make -C npc build config=PipelinedTwoCycleWideL2SimulationConfig
 make -C npc build config=U55cYsyxSocFpgaConfig
 make -C npc rebuild config=U55cYsyxSocFpgaConfig
 make -C npc resume-post-link config=U55cRv64CacheNpc150MHzPerformanceMonitorFpgaConfig
@@ -41,6 +45,7 @@ CPU 测试的正式运行入口位于 `am-kernels/tests/cpu-tests`：
 make -C am-kernels/tests/cpu-tests run ALL=add config=SimulationConfig
 make -C am-kernels/tests/cpu-tests run-bat ALL="add div" config=YsyxSimulationConfig
 make -C am-kernels/tests/cpu-tests run-bat ALL="add div fence fence-i" config=CacheSimulationConfig
+make -C am-kernels/tests/cpu-tests run-bat ALL="add div if-else" config=HbmJitterCacheSimulationConfig
 make -C am-kernels/tests/cpu-tests run ALL=add version=1
 make -C am-kernels/tests/cpu-tests run-bat ALL="add div" \
   version=1,2 jobs=2
@@ -70,17 +75,21 @@ make -C am-kernels/tests/cpu-tests run-bat ALL="forwarding matrix-mul fpu" \
 
 缓存必须由独立终端显式启用；`SimulationConfig`、`YsyxSimulationConfig` 以及普通 U55C/ZCU102
 终端仍保持原来的无缓存 RTL 和外部端口。公开缓存终端为 `CacheSimulationConfig`、
+`HbmJitterCacheSimulationConfig`、`HbmJitterCacheVcdSimulationConfig`、
+`PipelinedTwoCycleWideL2SimulationConfig`、
 `CacheYsyxSimulationConfig`、`U55cCacheNpcFpgaConfig`、`U55cRv64CacheNpc300MHzFpgaConfig` 和
 `U55cCacheYsyxSocFpgaConfig`。`U55cRv64CacheNpc{150,300}MHzPerformanceMonitorFpgaConfig` 是
-缓存版 U55C batch-only 性能监测终端。
+缓存版 U55C batch-only 性能监测终端；宽 HBM 的 L1 基线与 L1+L2 终端分别为
+`U55cRv64Hbm512CacheNpc150MHzPerformanceMonitorFpgaConfig` 和
+`U55cRv64Hbm512L2CacheNpc150MHzPerformanceMonitorFpgaConfig`。
 
 教学预设固定为 4 KiB、16-byte line、2-way Tree-PLRU 的 I$/D$，D$ 使用 write-back 与
 write-allocate，顺序 instruction buffer 为 4 项。`CacheGeometry` 自动从容量、line 和映射方式推导
 set、way、tag/index/offset；替换、分配、写策略和 `Auto`/`Registers`/`Uram` 存储风格可由
 `npc/base/CacheConfigs.scala` 的片段覆盖。`Uram` 只允许 FPGA 构造。
 
-I$/D$ 位于前后端与 `NpcMemoryFabric` 之间，只缓存主存范围；MMIO 保持单拍 AXI-Lite 旁路。line refill
-和 dirty writeback 逐个 XLEN beat 完成，不改变 AXI4/HBM 物理接口。基础 ISA 的任意 `FENCE`
+I$/D$ 位于前后端与 `NpcMemoryFabric` 之间，只缓存主存范围；MMIO 保持单拍 AXI-Lite 旁路。教学预设的
+line refill 和 dirty writeback 逐个 XLEN beat 完成，不改变 AXI4/HBM 物理接口。基础 ISA 的任意 `FENCE`
 pred/succ 组合按保守完整屏障执行：等待旧事务、drain D$ 后才放行后续指令，但不失效 I$。`FENCE.I`
 会在同样的 D$ drain 后 invalidate I$，并丢弃 instruction buffer 与未完成取指中的年轻内容。FPGA
 `mtestexit` 同样先等待 D$ drain；mailbox 在复位核心前锁存 I$/D$ 配置和统计，供性能页读取该次运行的
@@ -89,6 +98,52 @@ pred/succ 组合按保守完整屏障执行：等待旧事务、drain D$ 后才�
 
 缓存会改变硬件 ABI。首次 FPGA 构造使用 `build`；已有同名缓存 FPGA 构造必须执行例如
 `make -C npc rebuild config=U55cCacheNpcFpgaConfig`，`host-build` 不能把旧 xclbin 变成缓存硬件。
+
+`U55cRv64Hbm512CacheNpc150MHzPerformanceMonitorFpgaConfig` 是独立的宽 HBM ABI：CPU 与
+MMIO 仍使用 RV64 的 64-bit Lite 请求，但 I$/D$ 均为 4 KiB、64-byte line、2-way Tree-PLRU，
+`m_axi_gmem` 为 512 bit。一次 line refill 或 D$ dirty writeback 恰好是一笔完整的 512-bit AXI
+访问；它不能与既有 16-byte cache xclbin 互换，必须单独 `rebuild`。
+
+`U55cRv64Hbm512L2CacheNpc150MHzPerformanceMonitorFpgaConfig` 在这个宽 L1 ABI 之后增加
+一个统一的 256 KiB、64-byte line、8-way Tree-PLRU L2，采用 write-back + write-allocate。拓扑是
+`I$/D$ -> NpcMemoryFabric arbiter -> unified L2 -> 512-bit AXI4-Full -> HBM`；MMIO 在进入仲裁器前
+已经由 host-MMIO slave 消费，所以不会进入 L2。它保留 AXI4-Full 作为下游可寻址内存协议，不能使用
+AXI-Stream：后者没有 load/store 所需的地址、独立读响应与错误语义。FENCE、FENCE.I 和 `mtestexit`
+drain 的顺序均为 D$ -> L2 -> HBM。该 L2 终端是新的 FPGA ABI，必须单独执行
+`make -C npc rebuild config=U55cRv64Hbm512L2CacheNpc150MHzPerformanceMonitorFpgaConfig`。
+
+第一版的 v13 mailbox/cache HTML 保持原有 I$/D$ 寄存器布局；L2 统计已在核心 debug bundle 中导出，
+但尚未扩展到运行时 mailbox 页面。
+
+`HbmJitterCacheSimulationConfig` 是本地 L1-only 的宽 HBM 对比端点：它使用与 150 MHz 宽 L1
+FPGA 核一致的 RV64 流水配置、4 KiB/2-way/64-byte 的 I$/D$，并将一个 512-bit cache-line
+transaction 的主存响应固定为可复现的 73--81 cycles 抖动（seed=`0x13579bdf`）。它不包含 L2，
+MMIO 不加延迟；其 `performance.html`、`instructions.html`、`pipeline.html` 与 `cache.html` 会反映
+由 L1 miss 引起的实际 RTL 停顿。该端点是校准后的功能时序模型，尚不模拟 U55C 的异步 FIFO、HBM
+bank/queue 竞争或多请求仲裁，因此不能宣称逐条指令 cycle-identical；应以 FPGA 实测的 miss 分布继续
+调整这个 73--81 区间。
+
+`HbmJitterL2CacheSimulationConfig` 在相同 CPU、64-byte L1、512-bit DPI 和 73--81 cycle 主存模型上
+增加统一 256 KiB、8-way、64-byte、Tree-PLRU、write-back/write-allocate L2。它使用本地统一
+IF/LSU 主存端口，因此可以直接和上面的 L1-only 端点做周期、CPI/IPC 及 L2 hit/miss 对比。
+
+`PipelinedTwoCycleWideL2SimulationConfig` 是独立的本地 RV64IM 两拍缓存端点：I$/D$ 均为
+4 KiB/64-byte/2-way，统一 L2 为 256 KiB/64-byte/8-way，主存端口为 512-bit DPI。缓存命中在
+请求握手后的第 N+2 拍按序返回，流水填满后每拍可处理一笔；模式冻结四项 request/response/fetch/memory
+FIFO 深度为 4，instruction buffer 为 8 项。L1 miss、MMIO、dirty writeback、FENCE、FENCE.I 和外部
+drain 会先关闭入口并排空流水/队列，再以 D$ -> L2 -> I$ 的顺序完成维护，因此不承诺固定两拍延迟。
+该 Config 只使用本地 NEMU/Verilator DPI Fabric，不改变 FPGA、SoC 或外部 AXI ABI。
+
+`HbmJitterCacheVcdSimulationConfig` 保持这套 L1-only 宽 HBM DPI 硬件配置，但将本地 Verilator
+ABI 显式构造成支持 VCD 的版本。它必须完整 `build` 或 `rebuild`，不能只执行 `host-build`，因为
+`--trace`、`verilated_vcd_c.o` 和 `npc_start_trace`/`npc_stop_trace` 都属于冻结的仿真 ABI。运行时在
+SDB 中执行 `start`、若干 `si`、`stop`；文件会写到该运行目录的 `wave-001.vcd`，例如：
+
+```bash
+printf 'start\nsi 40\nstop\nc\n' | \
+  make -C am-kernels/tests/cpu-tests run ALL=add \
+  config=HbmJitterCacheVcdSimulationConfig
+```
 
 ## 构造策略
 

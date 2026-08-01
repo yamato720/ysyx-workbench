@@ -14,7 +14,10 @@ typedef struct {
   uint64_t sequence;
   uint64_t pc;
   uint64_t commit_cycle;
+  uint64_t stage_start[PIPELINE_HTML_STAGE_COUNT];
   uint64_t stage[PIPELINE_HTML_STAGE_COUNT];
+  PipelineHtmlMemoryTiming memory;
+  bool has_absolute_starts;
   uint32_t instruction;
   char disassembly[PIPELINE_HTML_DISASSEMBLY_SIZE];
 } PipelineHtmlRecord;
@@ -29,6 +32,7 @@ struct PipelineHtmlRecorder {
   size_t limit;
   uint64_t dropped;
   uint64_t saturated_records;
+  const char *memory_statistics_mode;
   bool finished;
   bool instructions_finished;
 };
@@ -87,6 +91,10 @@ PipelineHtmlRecorder *pipeline_html_create(
   recorder->output_path = duplicate_string(output_path);
   recorder->instructions_output_path = sibling_path(output_path, "instructions.html");
   recorder->label = duplicate_string(label == NULL || label[0] == '\0' ? "nemu" : label);
+  const char *statistics_mode = getenv("NEMU_MEMORY_STATISTICS_MODE");
+  recorder->memory_statistics_mode =
+      statistics_mode != NULL && strcmp(statistics_mode, "ServiceOnly") == 0
+          ? "ServiceOnly" : "Split";
   recorder->limit = limit;
   if (recorder->output_path == NULL || recorder->instructions_output_path == NULL || recorder->label == NULL) {
     pipeline_html_destroy(recorder);
@@ -107,14 +115,16 @@ static bool reserve_record(PipelineHtmlRecorder *recorder) {
   return true;
 }
 
-void pipeline_html_record(
+static void pipeline_html_record_internal(
     PipelineHtmlRecorder *recorder,
     uint64_t sequence,
     uint64_t pc,
     uint32_t instruction,
     const char *disassembly,
     uint64_t commit_cycle,
-    const uint64_t stage_cycles[PIPELINE_HTML_STAGE_COUNT]) {
+    const uint64_t stage_cycles[PIPELINE_HTML_STAGE_COUNT],
+    const uint64_t stage_starts[PIPELINE_HTML_STAGE_COUNT],
+    const PipelineHtmlMemoryTiming *memory) {
   if (recorder == NULL || recorder->finished) return;
   if (recorder->count >= recorder->limit || !reserve_record(recorder)) {
     recorder->dropped++;
@@ -126,9 +136,52 @@ void pipeline_html_record(
   record->pc = pc;
   record->instruction = instruction;
   record->commit_cycle = commit_cycle;
+  record->has_absolute_starts = stage_starts != NULL;
+  if (stage_starts != NULL)
+    memcpy(record->stage_start, stage_starts, sizeof(record->stage_start));
   memcpy(record->stage, stage_cycles, sizeof(record->stage));
+  record->memory = memory == NULL ? (PipelineHtmlMemoryTiming){0} : *memory;
   snprintf(record->disassembly, sizeof(record->disassembly), "%s",
            disassembly == NULL ? "" : disassembly);
+}
+
+void pipeline_html_record(
+    PipelineHtmlRecorder *recorder,
+    uint64_t sequence,
+    uint64_t pc,
+    uint32_t instruction,
+    const char *disassembly,
+    uint64_t commit_cycle,
+    const uint64_t stage_cycles[PIPELINE_HTML_STAGE_COUNT]) {
+  pipeline_html_record_internal(recorder, sequence, pc, instruction, disassembly,
+                                commit_cycle, stage_cycles, NULL, NULL);
+}
+
+void pipeline_html_record_with_starts(
+    PipelineHtmlRecorder *recorder,
+    uint64_t sequence,
+    uint64_t pc,
+    uint32_t instruction,
+    const char *disassembly,
+    uint64_t commit_cycle,
+    const uint64_t stage_cycles[PIPELINE_HTML_STAGE_COUNT],
+    const uint64_t stage_starts[PIPELINE_HTML_STAGE_COUNT]) {
+  pipeline_html_record_internal(recorder, sequence, pc, instruction, disassembly,
+                                commit_cycle, stage_cycles, stage_starts, NULL);
+}
+
+void pipeline_html_record_with_starts_and_memory(
+    PipelineHtmlRecorder *recorder,
+    uint64_t sequence,
+    uint64_t pc,
+    uint32_t instruction,
+    const char *disassembly,
+    uint64_t commit_cycle,
+    const uint64_t stage_cycles[PIPELINE_HTML_STAGE_COUNT],
+    const uint64_t stage_starts[PIPELINE_HTML_STAGE_COUNT],
+    const PipelineHtmlMemoryTiming *memory) {
+  pipeline_html_record_internal(recorder, sequence, pc, instruction, disassembly,
+                                commit_cycle, stage_cycles, stage_starts, memory);
 }
 
 static void write_json_string(FILE *output, const char *value) {
@@ -153,6 +206,13 @@ static void write_json_string(FILE *output, const char *value) {
   fputc('"', output);
 }
 
+static size_t absolute_record_count(const PipelineHtmlRecorder *recorder) {
+  size_t count = 0;
+  for (size_t index = 0; index < recorder->count; index++)
+    count += recorder->records[index].has_absolute_starts ? 1 : 0;
+  return count;
+}
+
 static int write_document(
     FILE *output,
     const PipelineHtmlRecorder *recorder,
@@ -163,7 +223,7 @@ static int write_document(
       "<title>NEMU 流水线时间线</title><style>"
       ":root{color-scheme:light;--bg:#f6f7f9;--ink:#17202a;--muted:#65717e;--line:#d7dce2;"
       "--col-seq:64px;--col-pc:150px;--col-inst:112px;--col-asm:290px;--timeline-width:640px;"
-      "--if:#16697a;--id:#8f5d18;--ex:#8c2f39;--mem:#386641;--wb:#5a3d8a}*{box-sizing:border-box}"
+      "--if:#16697a;--id:#8f5d18;--ex:#8c2f39;--mem:#386641;--wb:#5a3d8a;--wait:#7a8794;--queue:#b25d19}*{box-sizing:border-box}"
       "body{height:100vh;margin:0;overflow:hidden;display:flex;flex-direction:column;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,sans-serif}"
       "header{padding:20px 24px 14px;background:#fff;border-bottom:1px solid var(--line)}.titlebar{display:flex;justify-content:space-between;gap:12px;align-items:center}h1{font-size:22px;margin:0 0 6px}.home{color:#155f78;text-decoration:none;border:1px solid #82919f;border-radius:4px;padding:6px 9px;white-space:nowrap}"
       ".summary,.legend,.controls{display:flex;gap:14px;flex-wrap:wrap;align-items:center}.summary{color:var(--muted)}"
@@ -183,36 +243,59 @@ static int write_document(
       ".head>div:nth-child(3),.row>.meta:nth-child(3){left:calc(var(--col-seq) + var(--col-pc))}"
       ".head>div:nth-child(4),.row>.meta:nth-child(4){left:calc(var(--col-seq) + var(--col-pc) + var(--col-inst));box-shadow:5px 0 7px -6px #59636e}"
       ".timeline{position:relative;min-height:37px;background-image:linear-gradient(to right,rgba(70,80,90,.12) 1px,transparent 1px);background-size:var(--cell) 100%}"
-      ".stage{position:absolute;top:5px;height:27px;color:#fff;padding:4px 5px;overflow:hidden;white-space:nowrap;font-size:12px;background:var(--c)}"
+      ".stage{position:absolute;top:5px;height:27px;color:#fff;padding:4px 5px;overflow:hidden;white-space:nowrap;font-size:12px;background:var(--c);cursor:pointer;user-select:none}"
+      ".stage.wait,.stage.queue,.stage[aria-label^=\"QUEUE\"]{border:1px dashed rgba(255,255,255,.7);padding:3px 4px}.stage.wait{background:var(--wait)}.stage.queue,.stage[aria-label^=\"QUEUE\"]{background:var(--queue)}"
+      ".stage:hover,.stage:focus-visible{filter:brightness(1.12);outline:2px solid #1b4f62;outline-offset:-1px;z-index:2}"
       ".axis{color:var(--muted);font-size:12px}.footer{padding:12px 24px;display:flex;gap:12px;align-items:center}.empty{padding:30px;color:var(--muted)}"
+      ".modal[hidden]{display:none}.modal{position:fixed;inset:0;z-index:20;display:flex;align-items:center;justify-content:center;padding:20px;background:rgba(23,32,42,.42)}"
+      ".modal-card{width:min(680px,calc(100vw - 32px));max-height:calc(100vh - 40px);overflow:auto;background:#fff;border:1px solid var(--line);border-radius:6px;box-shadow:0 18px 48px rgba(23,32,42,.28)}"
+      ".modal-header{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:14px 16px;border-bottom:1px solid var(--line);background:#f8fafb}.modal-header h2{margin:0;font-size:17px}.modal-close{padding:5px 9px;border:1px solid #9aa4af;border-radius:4px;background:#fff;color:var(--ink);cursor:pointer}.modal-close:hover,.modal-close:focus-visible{background:#eef4f6;outline:2px solid #1b4f62;outline-offset:1px}.modal-body{padding:14px 16px}.detail-table{width:100%;border-collapse:collapse;table-layout:fixed}.detail-table th,.detail-table td{padding:7px 8px;border-bottom:1px solid #e7ebef;text-align:left;vertical-align:top;overflow-wrap:anywhere}.detail-table th{width:135px;color:var(--muted);font-weight:600;background:#f8fafb}.detail-table td{color:var(--ink)}.detail-heading{margin:16px 0 8px;font-size:14px}"
       "@media(max-width:700px){:root{--col-seq:48px;--col-pc:120px;--col-inst:96px;--col-asm:220px}header,.legend,.controls,.footer{padding-left:12px;padding-right:12px}.controls input[type=search]{min-width:100%;width:100%}}"
       "@media(max-width:520px){:root{--col-seq:38px;--col-pc:92px;--col-inst:82px;--col-asm:150px}.head>div,.meta{padding-left:5px;padding-right:5px}}"
       "</style></head><body><header><div class=\"titlebar\"><h1>NEMU 已提交指令流水时间线</h1><a class=\"home\" href=\"performance.html\">返回性能主页</a></div><div class=\"summary\" id=\"summary\"></div><div class=\"warning\" id=\"warning\" hidden></div></header>"
-      "<div class=\"legend\"><span class=\"key\" style=\"--c:var(--if)\">IF</span><span class=\"key\" style=\"--c:var(--id)\">ID</span><span class=\"key\" style=\"--c:var(--ex)\">EX</span><span class=\"key\" style=\"--c:var(--mem)\">MEM</span><span class=\"key\" style=\"--c:var(--wb)\">WB</span></div>"
+      "<div class=\"legend\"><span class=\"key\" style=\"--c:var(--if)\">IF</span><span class=\"key\" style=\"--c:var(--id)\">ID</span><span class=\"key\" style=\"--c:var(--ex)\">EX</span><span class=\"key\" style=\"--c:var(--mem)\">MEM</span><span class=\"key\" style=\"--c:var(--wb)\">WB</span><span class=\"key\" style=\"--c:var(--wait)\">WAIT</span><span class=\"key\" style=\"--c:var(--queue)\">QUEUE</span></div>"
       "<div class=\"controls\"><input id=\"search\" type=\"search\" placeholder=\"搜索 PC、机器码或反汇编\"><label>每页 <select id=\"pageSize\"><option>50</option><option selected>100</option><option>250</option><option>500</option></select></label><label>周期宽度 <input id=\"zoom\" type=\"range\" min=\"4\" max=\"28\" value=\"14\"></label></div>"
+      "<div class=\"modal\" id=\"detailModal\" hidden role=\"dialog\" aria-modal=\"true\" aria-labelledby=\"detailTitle\"><div class=\"modal-card\"><div class=\"modal-header\"><h2 id=\"detailTitle\">周期详情</h2><button class=\"modal-close\" id=\"detailClose\" type=\"button\">关闭</button></div><div class=\"modal-body\" id=\"detailBody\"></div></div></div>"
       "<div class=\"viewport\"><div class=\"head\"><div>#</div><div>PC</div><div>机器码</div><div>反汇编</div><div class=\"axis\">周期时间线</div></div><div id=\"rows\"></div></div><div class=\"hscroll\" id=\"hscroll\" role=\"scrollbar\" aria-label=\"时间线横向滚动\" aria-orientation=\"horizontal\" tabindex=\"0\"><div class=\"hscroll-thumb\" id=\"hscrollThumb\"></div></div>"
       "<div class=\"footer\"><button id=\"prev\">上一页</button><span id=\"page\"></span><button id=\"next\">下一页</button></div><script>const trace=";
   fputs(prefix, output);
   fputs("{\"label\":", output);
   write_json_string(output, recorder->label);
+  fputs(",\"memory_statistics_mode\":", output);
+  write_json_string(output, recorder->memory_statistics_mode);
+  const size_t absolute_count = absolute_record_count(recorder);
   fprintf(output,
-          ",\"captured\":%zu,\"dropped\":%" PRIu64 ",\"saturated\":%" PRIu64
+          ",\"captured\":%zu,\"absolute_records\":%zu,\"dropped\":%" PRIu64 ",\"saturated\":%" PRIu64
           ",\"stalls\":[%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 "]"
           ",\"records\":[",
-          recorder->count, recorder->dropped, recorder->saturated_records,
+          recorder->count, absolute_count, recorder->dropped, recorder->saturated_records,
           stalls[0], stalls[1], stalls[2], stalls[3], stalls[4]);
 
   for (size_t index = 0; index < recorder->count; index++) {
     const PipelineHtmlRecord *record = &recorder->records[index];
     PipelineHtmlInterval intervals[PIPELINE_HTML_STAGE_COUNT];
-    pipeline_html_compute_intervals(record->commit_cycle, record->stage, intervals);
+    if (record->has_absolute_starts) {
+      for (size_t stage = 0; stage < PIPELINE_HTML_STAGE_COUNT; stage++) {
+        intervals[stage].start = record->stage_start[stage];
+        if (record->stage[stage] == 0) {
+          intervals[stage].end = record->stage_start[stage];
+        } else if (UINT64_MAX - record->stage_start[stage] < record->stage[stage] - 1) {
+          intervals[stage].end = UINT64_MAX;
+        } else {
+          intervals[stage].end = record->stage_start[stage] + record->stage[stage] - 1;
+        }
+      }
+    } else {
+      pipeline_html_compute_intervals(record->commit_cycle, record->stage, intervals);
+    }
     if (index != 0) fputc(',', output);
     fprintf(output,
             "{\"n\":%" PRIu64 ",\"pc\":\"0x%08" PRIx32
             "\",\"inst\":\"0x%08" PRIx32 "\",\"asm\":",
             record->sequence, (uint32_t)record->pc, record->instruction);
     write_json_string(output, record->disassembly);
-    fprintf(output, ",\"commit\":%" PRIu64 ",\"d\":[", record->commit_cycle);
+    fprintf(output, ",\"commit\":%" PRIu64 ",\"absolute\":%s,\"d\":[",
+            record->commit_cycle, record->has_absolute_starts ? "true" : "false");
     for (size_t stage = 0; stage < PIPELINE_HTML_STAGE_COUNT; stage++) {
       fprintf(output, "%s%" PRIu64, stage == 0 ? "" : ",", record->stage[stage]);
     }
@@ -220,21 +303,38 @@ static int write_document(
     for (size_t stage = 0; stage < PIPELINE_HTML_STAGE_COUNT; stage++) {
       fprintf(output, "%s%" PRIu64, stage == 0 ? "" : ",", intervals[stage].start);
     }
-    fputs("]}", output);
+    fputs("],\"m\":", output);
+    if (record->memory.valid) {
+      fprintf(output,
+              "{\"queueStart\":%" PRIu64 ",\"serviceStart\":%" PRIu64
+              ",\"queue\":%" PRIu64 ",\"service\":%" PRIu64 "}",
+              record->memory.queue_start_cycle,
+              record->memory.service_start_cycle,
+              record->memory.queue_cycles,
+              record->memory.service_cycles);
+    } else {
+      fputs("null", output);
+    }
+    fputs("}", output);
   }
 
   static const char *suffix =
       "]};const names=['IF','ID','EX','MEM','WB'];const colors=['var(--if)','var(--id)','var(--ex)','var(--mem)','var(--wb)'];"
-      "let page=0,filtered=trace.records;const viewport=document.querySelector('.viewport'),hscroll=document.querySelector('#hscroll'),hscrollThumb=document.querySelector('#hscrollThumb'),rows=document.querySelector('#rows'),search=document.querySelector('#search'),size=document.querySelector('#pageSize'),zoom=document.querySelector('#zoom');"
-      "const total=trace.captured+trace.dropped;document.querySelector('#summary').textContent=`${trace.label} · 提交 ${total.toLocaleString()} 条 · 记录 ${trace.captured.toLocaleString()} 条 · 背压周期 IF/ID/EX/MEM=${trace.stalls.slice(0,4).join('/')} · flush=${trace.stalls[4]}`;"
+      "let page=0,filtered=trace.records;const viewport=document.querySelector('.viewport'),hscroll=document.querySelector('#hscroll'),hscrollThumb=document.querySelector('#hscrollThumb'),rows=document.querySelector('#rows'),search=document.querySelector('#search'),size=document.querySelector('#pageSize'),zoom=document.querySelector('#zoom'),detailModal=document.querySelector('#detailModal'),detailTitle=document.querySelector('#detailTitle'),detailBody=document.querySelector('#detailBody'),detailClose=document.querySelector('#detailClose');"
+      "const total=trace.captured+trace.dropped;document.querySelector('#summary').textContent=`${trace.label} · 提交 ${total.toLocaleString()} 条 · 记录 ${trace.captured.toLocaleString()} 条 · 阶段起点 ${trace.absolute_records.toLocaleString()} 条使用硬件时间戳 · MEM 统计=${trace.memory_statistics_mode} · 背压周期 IF/ID/EX/MEM=${trace.stalls.slice(0,4).join('/')} · flush=${trace.stalls[4]}`;"
       "if(trace.dropped||trace.saturated){const w=document.querySelector('#warning');w.hidden=false;w.textContent=`${trace.dropped?`后续 ${trace.dropped.toLocaleString()} 条提交未写入时间线。`:''}${trace.saturated?` ${trace.saturated.toLocaleString()} 条记录的阶段驻留达到 65535，显示值为下界。`:''}`}"
+      "function timelineBlocks(record){const blocks=[];let previousEnd=null,previousName='开始',memory=record.m;for(let i=0;i<record.d.length;i++){const duration=record.d[i];if(!duration)continue;const start=record.s[i],end=start+duration-1;if(i===3&&memory&&memory.queue>0&&trace.memory_statistics_mode!=='ServiceOnly'){const queueStart=Math.max(memory.queueStart,previousEnd===null?memory.queueStart:previousEnd),queueEnd=start-1;if(queueEnd>=queueStart){blocks.push({kind:'queue',name:'QUEUE',start:queueStart,end:queueEnd,duration:queueEnd-queueStart+1,from:previousName,to:'MEM'});previousEnd=start;previousName='QUEUE';}}if(previousEnd!==null&&start>previousEnd){blocks.push({kind:'wait',name:'WAIT',start:previousEnd,end:start-1,duration:start-previousEnd,from:previousName,to:names[i]});}blocks.push({kind:'stage',name:names[i],stage:i,start,end,duration});previousEnd=start+duration;previousName=names[i];}if(previousEnd!==null&&record.commit>=previousEnd){blocks.push({kind:'wait',name:'WAIT',start:previousEnd,end:record.commit,duration:record.commit-previousEnd+1,from:previousName,to:'COMMIT'});}return blocks}"
+      "function addDetailRow(table,label,value){const tr=document.createElement('tr'),th=document.createElement('th'),td=document.createElement('td');th.textContent=label;td.textContent=value;tr.appendChild(th);tr.appendChild(td);table.appendChild(tr)}"
+      "let lastFocusedBlock=null;function closeDetail(){detailModal.hidden=true;if(lastFocusedBlock!==null){lastFocusedBlock.focus();lastFocusedBlock=null;}}"
+      "function openDetail(record,block,target){lastFocusedBlock=target;detailTitle.textContent=block.name+' 周期详情 · #'+record.n;detailBody.textContent='';const table=document.createElement('table');table.className='detail-table';const blockType=block.kind==='queue'?'访存排队':block.kind==='wait'?'等待 '+block.from+' → '+block.to:'流水阶段 '+block.name;addDetailRow(table,'指令','#'+record.n+' · '+record.pc);addDetailRow(table,'机器码',record.inst);addDetailRow(table,'反汇编',record.asm);addDetailRow(table,'块类型',blockType);addDetailRow(table,'块周期',block.start+'–'+block.end);addDetailRow(table,'块驻留',block.duration+' 周期');addDetailRow(table,'提交周期',String(record.commit));addDetailRow(table,'指令跨度',record.s[0]+'–'+record.commit+'（'+(record.commit-record.s[0]+1)+' 周期）');detailBody.appendChild(table);if(record.m){const heading=document.createElement('h3');heading.className='detail-heading';heading.textContent='访存统计';detailBody.appendChild(heading);const memory=document.createElement('table');memory.className='detail-table';if(trace.memory_statistics_mode!=='ServiceOnly'){addDetailRow(memory,'排队起点',String(record.m.queueStart));addDetailRow(memory,'排队周期',record.m.queue+' 周期');}addDetailRow(memory,'请求握手',String(record.m.serviceStart));addDetailRow(memory,'下游完成',String(record.m.serviceStart+record.m.service));addDetailRow(memory,'MEM service',record.m.service+' 周期');detailBody.appendChild(memory);}const stageHeading=document.createElement('h3');stageHeading.className='detail-heading';stageHeading.textContent='该指令各阶段';detailBody.appendChild(stageHeading);const stages=document.createElement('table');stages.className='detail-table';for(let i=0;i<names.length;i++){const range=record.d[i]?record.s[i]+'–'+(record.s[i]+record.d[i]-1):'未经过';addDetailRow(stages,names[i],record.d[i]?range+'（'+record.d[i]+' 周期）':range)}detailBody.appendChild(stages);detailModal.hidden=false;detailClose.focus()}"
       "function render(){const count=+size.value,pages=Math.max(1,Math.ceil(filtered.length/count));page=Math.min(page,pages-1);const part=filtered.slice(page*count,(page+1)*count);rows.textContent='';"
-      "if(!part.length){viewport.style.setProperty('--timeline-width','640px');rows.innerHTML='<div class=\"empty\">没有匹配的已提交指令。</div>';}else{const min=Math.min(...part.map(r=>r.s[0])),max=Math.max(...part.map(r=>r.commit));const cell=+zoom.value,timelineWidth=Math.max(640,(max-min+1)*cell);viewport.style.setProperty('--timeline-width',timelineWidth+'px');"
-      "for(const r of part){const row=document.createElement('div');row.className='row';for(const value of [r.n,r.pc,r.inst,r.asm]){const m=document.createElement('div');m.className='meta';m.textContent=value;m.title=String(value);row.appendChild(m);}"
+      "if(!part.length){viewport.style.setProperty('--timeline-width','640px');rows.innerHTML='<div class=\"empty\">没有匹配的已提交指令。</div>';}else{const prepared=part.map(record=>({record,blocks:timelineBlocks(record)})),min=Math.min(...part.map(r=>r.s[0])),max=Math.max(...prepared.flatMap(item=>item.blocks.map(block=>block.end)));const cell=+zoom.value,timelineWidth=Math.max(640,(max-min+1)*cell);viewport.style.setProperty('--timeline-width',timelineWidth+'px');"
+      "for(const item of prepared){const r=item.record,row=document.createElement('div');row.className='row';for(const value of [r.n,r.pc,r.inst,r.asm]){const m=document.createElement('div');m.className='meta';m.textContent=value;m.setAttribute('aria-label',String(value));row.appendChild(m);}"
       "const line=document.createElement('div');line.className='timeline';line.style.setProperty('--cell',cell+'px');"
-      "r.d.forEach((duration,i)=>{if(!duration)return;const b=document.createElement('div');b.className='stage';b.style.setProperty('--c',colors[i]);b.style.left=((r.s[i]-min)*cell)+'px';b.style.width=Math.max(2,duration*cell)+'px';b.textContent=names[i];const end=r.s[i]+duration-1;b.title=`${names[i]}：周期 ${r.s[i]}–${end}，驻留 ${duration} 周期；提交周期 ${r.commit}`;line.appendChild(b)});row.appendChild(line);rows.appendChild(row);}}"
+      "item.blocks.forEach(block=>{const b=document.createElement('div');b.className=block.kind==='wait'?'stage wait':block.kind==='queue'?'stage queue':'stage';b.style.setProperty('--c',block.kind==='wait'?'var(--wait)':block.kind==='queue'?'var(--queue)':colors[block.stage]);b.style.left=((block.start-min)*cell)+'px';b.style.width=Math.max(2,block.duration*cell)+'px';b.textContent=block.duration>=3?block.name:'';b.setAttribute('role','button');b.tabIndex=0;b.setAttribute('aria-label',`${block.name}：周期 ${block.start}–${block.end}，驻留 ${block.duration} 周期`);b.addEventListener('click',()=>openDetail(r,block,b));b.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();openDetail(r,block,b)}});line.appendChild(b)});row.appendChild(line);rows.appendChild(row);}}"
       "document.querySelector('#page').textContent=`第 ${page+1}/${pages} 页，共 ${filtered.length.toLocaleString()} 条`;document.querySelector('#prev').disabled=page===0;document.querySelector('#next').disabled=page>=pages-1;requestAnimationFrame(syncHorizontalScrollbar);}"
       "function filter(){const q=search.value.trim().toLowerCase();filtered=q?trace.records.filter(r=>r.pc.toLowerCase().includes(q)||r.inst.toLowerCase().includes(q)||r.asm.toLowerCase().includes(q)):trace.records;page=0;render()}"
+      "detailClose.addEventListener('click',closeDetail);detailModal.addEventListener('click',event=>{if(event.target===detailModal)closeDetail()});document.addEventListener('keydown',event=>{if(event.key==='Escape'&&!detailModal.hidden)closeDetail()});"
       "function horizontalScrollMax(){return Math.max(0,viewport.scrollWidth-viewport.offsetWidth)}function syncHorizontalScrollbar(){const max=horizontalScrollMax(),width=hscroll.clientWidth,thumbWidth=max?Math.max(40,width*viewport.offsetWidth/viewport.scrollWidth):width,travel=Math.max(0,width-thumbWidth);hscroll.hidden=max===0;hscrollThumb.style.width=thumbWidth+'px';hscrollThumb.style.transform=`translateX(${max?viewport.scrollLeft/max*travel:0}px)`;hscroll.setAttribute('aria-valuemin','0');hscroll.setAttribute('aria-valuemax',String(max));hscroll.setAttribute('aria-valuenow',String(Math.round(viewport.scrollLeft)));}"
       "let drag=null;hscrollThumb.addEventListener('pointerdown',event=>{event.preventDefault();drag={x:event.clientX,left:viewport.scrollLeft};hscrollThumb.setPointerCapture(event.pointerId)});hscrollThumb.addEventListener('pointermove',event=>{if(!drag)return;const max=horizontalScrollMax(),travel=hscroll.clientWidth-hscrollThumb.offsetWidth;viewport.scrollLeft=drag.left+(event.clientX-drag.x)*max/Math.max(1,travel)});hscrollThumb.addEventListener('pointerup',event=>{drag=null;hscrollThumb.releasePointerCapture(event.pointerId)});"
       "hscroll.addEventListener('pointerdown',event=>{if(event.target!==hscroll)return;const rect=hscroll.getBoundingClientRect(),max=horizontalScrollMax(),travel=rect.width-hscrollThumb.offsetWidth;viewport.scrollLeft=((event.clientX-rect.left-hscrollThumb.offsetWidth/2)/Math.max(1,travel))*max});hscroll.addEventListener('keydown',event=>{const max=horizontalScrollMax(),step=Math.max(40,viewport.offsetWidth*.8);if(event.key==='ArrowLeft')viewport.scrollLeft-=40;else if(event.key==='ArrowRight')viewport.scrollLeft+=40;else if(event.key==='PageUp')viewport.scrollLeft-=step;else if(event.key==='PageDown')viewport.scrollLeft+=step;else if(event.key==='Home')viewport.scrollLeft=0;else if(event.key==='End')viewport.scrollLeft=max;else return;event.preventDefault()});"
@@ -254,18 +354,33 @@ static int write_instruction_document(FILE *output, const PipelineHtmlRecorder *
   fputs(prefix, output);
   fputs("{\"label\":", output);
   write_json_string(output, recorder->label);
-  fprintf(output, ",\"captured\":%zu,\"dropped\":%" PRIu64 ",\"saturated\":%" PRIu64 ",\"records\":[",
-          recorder->count, recorder->dropped, recorder->saturated_records);
+  const size_t absolute_count = absolute_record_count(recorder);
+  fprintf(output, ",\"captured\":%zu,\"absolute_records\":%zu,\"dropped\":%" PRIu64 ",\"saturated\":%" PRIu64 ",\"records\":[",
+          recorder->count, absolute_count, recorder->dropped, recorder->saturated_records);
   for (size_t index = 0; index < recorder->count; index++) {
     const PipelineHtmlRecord *record = &recorder->records[index];
     PipelineHtmlInterval intervals[PIPELINE_HTML_STAGE_COUNT];
-    pipeline_html_compute_intervals(record->commit_cycle, record->stage, intervals);
+    if (record->has_absolute_starts) {
+      for (size_t stage = 0; stage < PIPELINE_HTML_STAGE_COUNT; stage++) {
+        intervals[stage].start = record->stage_start[stage];
+        if (record->stage[stage] == 0) {
+          intervals[stage].end = record->stage_start[stage];
+        } else if (UINT64_MAX - record->stage_start[stage] < record->stage[stage] - 1) {
+          intervals[stage].end = UINT64_MAX;
+        } else {
+          intervals[stage].end = record->stage_start[stage] + record->stage[stage] - 1;
+        }
+      }
+    } else {
+      pipeline_html_compute_intervals(record->commit_cycle, record->stage, intervals);
+    }
     if (index != 0) fputc(',', output);
     fprintf(output, "{\"n\":%" PRIu64 ",\"pc\":\"0x%08" PRIx32
                     "\",\"inst\":\"0x%08" PRIx32 "\",\"asm\":",
             record->sequence, (uint32_t)record->pc, record->instruction);
     write_json_string(output, record->disassembly);
-    fprintf(output, ",\"commit\":%" PRIu64 ",\"d\":[", record->commit_cycle);
+    fprintf(output, ",\"commit\":%" PRIu64 ",\"absolute\":%s,\"d\":[",
+            record->commit_cycle, record->has_absolute_starts ? "true" : "false");
     for (size_t stage = 0; stage < PIPELINE_HTML_STAGE_COUNT; stage++) {
       fprintf(output, "%s%" PRIu64, stage == 0 ? "" : ",", record->stage[stage]);
     }
@@ -276,7 +391,7 @@ static int write_instruction_document(FILE *output, const PipelineHtmlRecorder *
     fputs("]}", output);
   }
   static const char *suffix =
-      "]};let page=0,filtered=trace.records;const rows=document.querySelector('#rows'),search=document.querySelector('#search'),size=document.querySelector('#pageSize');const total=trace.captured+trace.dropped;document.querySelector('#summary').textContent=`${trace.label} · 提交 ${total.toLocaleString()} 条 · 逐条记录 ${trace.captured.toLocaleString()} 条`;if(trace.dropped||trace.saturated){const warning=document.querySelector('#warning');warning.hidden=false;warning.textContent=`${trace.dropped?`后续 ${trace.dropped.toLocaleString()} 条提交仅计入汇总。`:''}${trace.saturated?` ${trace.saturated.toLocaleString()} 条记录的 65535 阶段值为下界。`:''}`}function render(){const count=+size.value,pages=Math.max(1,Math.ceil(filtered.length/count));page=Math.min(page,pages-1);rows.textContent='';for(const r of filtered.slice(page*count,(page+1)*count)){const tr=document.createElement('tr'),values=[r.n,r.pc,r.inst,r.asm,r.commit,...r.d,r.d.reduce((a,b)=>a+b,0)];values.forEach((value,index)=>{const td=document.createElement('td');td.textContent=value;if(index>=5&&index<=9){const stage=index-5,end=r.s[stage]+r.d[stage]-1;td.title=`周期 ${r.s[stage]}–${end}`}tr.appendChild(td)});rows.appendChild(tr)}if(!rows.children.length){const td=document.createElement('td');td.colSpan=11;td.className='empty';td.textContent='没有匹配的已提交指令。';const tr=document.createElement('tr');tr.appendChild(td);rows.appendChild(tr)}document.querySelector('#page').textContent=`第 ${page+1}/${pages} 页，共 ${filtered.length.toLocaleString()} 条`;document.querySelector('#prev').disabled=page===0;document.querySelector('#next').disabled=page>=pages-1}function filter(){const query=search.value.trim().toLowerCase();filtered=query?trace.records.filter(r=>String(r.n).includes(query)||r.pc.toLowerCase().includes(query)||r.inst.toLowerCase().includes(query)||r.asm.toLowerCase().includes(query)):trace.records;page=0;render()}search.addEventListener('input',filter);size.addEventListener('change',()=>{page=0;render()});document.querySelector('#prev').onclick=()=>{page--;render()};document.querySelector('#next').onclick=()=>{page++;render()};render();</script></main></body></html>";
+      "]};let page=0,filtered=trace.records;const rows=document.querySelector('#rows'),search=document.querySelector('#search'),size=document.querySelector('#pageSize');const total=trace.captured+trace.dropped;document.querySelector('#summary').textContent=`${trace.label} · 提交 ${total.toLocaleString()} 条 · 逐条记录 ${trace.captured.toLocaleString()} 条 · 阶段起点 ${trace.absolute_records.toLocaleString()} 条使用硬件时间戳`;if(trace.dropped||trace.saturated){const warning=document.querySelector('#warning');warning.hidden=false;warning.textContent=`${trace.dropped?`后续 ${trace.dropped.toLocaleString()} 条提交仅计入汇总。`:''}${trace.saturated?` ${trace.saturated.toLocaleString()} 条记录的 65535 阶段值为下界。`:''}`}function render(){const count=+size.value,pages=Math.max(1,Math.ceil(filtered.length/count));page=Math.min(page,pages-1);rows.textContent='';for(const r of filtered.slice(page*count,(page+1)*count)){const tr=document.createElement('tr'),values=[r.n,r.pc,r.inst,r.asm,r.commit,...r.d,r.d.reduce((a,b)=>a+b,0)];values.forEach((value,index)=>{const td=document.createElement('td');td.textContent=value;if(index>=5&&index<=9){const stage=index-5,end=r.s[stage]+r.d[stage]-1;td.title=`周期 ${r.s[stage]}–${end}`}tr.appendChild(td)});rows.appendChild(tr)}if(!rows.children.length){const td=document.createElement('td');td.colSpan=11;td.className='empty';td.textContent='没有匹配的已提交指令。';const tr=document.createElement('tr');tr.appendChild(td);rows.appendChild(tr)}document.querySelector('#page').textContent=`第 ${page+1}/${pages} 页，共 ${filtered.length.toLocaleString()} 条`;document.querySelector('#prev').disabled=page===0;document.querySelector('#next').disabled=page>=pages-1}function filter(){const query=search.value.trim().toLowerCase();filtered=query?trace.records.filter(r=>String(r.n).includes(query)||r.pc.toLowerCase().includes(query)||r.inst.toLowerCase().includes(query)||r.asm.toLowerCase().includes(query)):trace.records;page=0;render()}search.addEventListener('input',filter);size.addEventListener('change',()=>{page=0;render()});document.querySelector('#prev').onclick=()=>{page--;render()};document.querySelector('#next').onclick=()=>{page++;render()};render();</script></main></body></html>";
   fputs(suffix, output);
   return ferror(output) ? -1 : 0;
 }
@@ -378,6 +493,36 @@ void npc_pipeline_html_record(
   if (global_recorder == NULL) npc_pipeline_html_init();
   pipeline_html_record(global_recorder, sequence, pc, instruction,
                        disassembly, commit_cycle, stage_cycles);
+}
+
+void npc_pipeline_html_record_absolute(
+    uint64_t sequence,
+    uint64_t pc,
+    uint32_t instruction,
+    const char *disassembly,
+    uint64_t commit_cycle,
+    const uint64_t stage_cycles[PIPELINE_HTML_STAGE_COUNT],
+    const uint64_t stage_starts[PIPELINE_HTML_STAGE_COUNT]) {
+  if (global_recorder == NULL) npc_pipeline_html_init();
+  pipeline_html_record_with_starts(global_recorder, sequence, pc, instruction,
+                                   disassembly, commit_cycle, stage_cycles,
+                                   stage_starts);
+}
+
+void npc_pipeline_html_record_absolute_with_memory(
+    uint64_t sequence,
+    uint64_t pc,
+    uint32_t instruction,
+    const char *disassembly,
+    uint64_t commit_cycle,
+    const uint64_t stage_cycles[PIPELINE_HTML_STAGE_COUNT],
+    const uint64_t stage_starts[PIPELINE_HTML_STAGE_COUNT],
+    const PipelineHtmlMemoryTiming *memory) {
+  if (global_recorder == NULL) npc_pipeline_html_init();
+  pipeline_html_record_with_starts_and_memory(global_recorder, sequence, pc,
+                                              instruction, disassembly,
+                                              commit_cycle, stage_cycles,
+                                              stage_starts, memory);
 }
 
 void npc_pipeline_html_record_hardware(

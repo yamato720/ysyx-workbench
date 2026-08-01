@@ -64,6 +64,7 @@ class CacheControlBehaviorTest extends AnyFlatSpec {
       dut.io.backendBusy.poke(false)
       dut.io.externalDrainRequest.poke(false)
       dut.io.dcacheFlushDone.poke(false)
+      dut.io.l2FlushDone.poke(false)
       dut.io.icacheInvalidateDone.poke(false)
       dut.reset.poke(true)
       dut.clock.step(2)
@@ -131,6 +132,7 @@ class CacheControlBehaviorTest extends AnyFlatSpec {
       dut.io.backendBusy.poke(true)
       dut.io.externalDrainRequest.poke(false)
       dut.io.dcacheFlushDone.poke(false)
+      dut.io.l2FlushDone.poke(false)
       dut.io.icacheInvalidateDone.poke(false)
       dut.reset.poke(true)
       dut.clock.step(2)
@@ -145,6 +147,40 @@ class CacheControlBehaviorTest extends AnyFlatSpec {
       dut.io.dispatchPermit.expect(true.B)
       dut.io.dcacheFlush.expect(false.B)
       dut.io.icacheInvalidate.expect(false.B)
+    }
+  }
+
+  it should "drain D$ before the shared L2 for fences and external maintenance" in {
+    simulate(new CacheMaintenanceController(
+      hasInstructionCache = true, hasDataCache = true, hasUnifiedL2 = true)) { dut =>
+      dut.io.fencePending.poke(false)
+      dut.io.fenceInvalidatesInstruction.poke(false)
+      dut.io.fenceAccepted.poke(false)
+      dut.io.backendBusy.poke(false)
+      dut.io.externalDrainRequest.poke(false)
+      dut.io.dcacheFlushDone.poke(false)
+      dut.io.l2FlushDone.poke(false)
+      dut.io.icacheInvalidateDone.poke(false)
+      dut.reset.poke(true)
+      dut.clock.step(2)
+      dut.reset.poke(false)
+
+      dut.io.externalDrainRequest.poke(true)
+      dut.clock.step(2)
+      dut.io.dcacheFlush.expect(true.B)
+      dut.io.l2Flush.expect(false.B)
+      dut.io.dcacheFlushDone.poke(true)
+      dut.clock.step()
+      dut.io.dcacheFlushDone.poke(false)
+      dut.io.l2Flush.expect(true.B)
+      dut.io.externalDrained.expect(false.B)
+      dut.io.l2FlushDone.poke(true)
+      dut.clock.step()
+      dut.io.l2FlushDone.poke(false)
+      dut.io.externalDrained.expect(true.B)
+      dut.io.externalDrainRequest.poke(false)
+      dut.clock.step()
+      dut.io.dispatchPermit.expect(true.B)
     }
   }
 
@@ -182,6 +218,31 @@ class CacheControlBehaviorTest extends AnyFlatSpec {
       dut.io.out.bits.pc.expect(0x100.U)
 
       dut.io.out.ready.poke(true)
+      dut.clock.step()
+      dut.io.out.valid.expect(false.B)
+    }
+  }
+
+  it should "dispatch a newly fetched instruction in the same cycle when flow-through is enabled" in {
+    simulate(new InstructionBuffer(entries = 4, ISAConfig(xlen = 32), flowThrough = true)) { dut =>
+      dut.io.flush.poke(false)
+      dut.io.dropYounger.poke(false)
+      dut.io.out.ready.poke(true)
+      dut.io.in.bits.pc.poke(0x200)
+      dut.io.in.bits.instruction.poke(0x13)
+      dut.io.in.bits.perfFetchStartCycle.poke(4)
+      dut.io.in.bits.perfFetchCycles.poke(3)
+      dut.io.in.bits.perfDecodeStartCycle.poke(7)
+      dut.io.in.valid.poke(true)
+      dut.reset.poke(true)
+      dut.clock.step(2)
+      dut.reset.poke(false)
+
+      dut.io.in.ready.expect(true.B)
+      dut.io.out.valid.expect(true.B)
+      dut.io.out.bits.pc.expect(0x200.U)
+      dut.io.out.bits.perfFetchCycles.expect(3.U)
+      dut.io.in.valid.poke(false)
       dut.clock.step()
       dut.io.out.valid.expect(false.B)
     }

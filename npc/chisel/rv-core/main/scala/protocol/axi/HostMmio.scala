@@ -5,7 +5,8 @@ import chisel3.util._
 
 /** 外部内存平台中供 AM 串口使用的最小可综合 MMIO，从属实现不绑定任何具体板卡。 */
 class AxiLiteHostMmioSlave(addrWidth: Int, dataWidth: Int) extends Module {
-  require(dataWidth == 32 || dataWidth == 64)
+  require(dataWidth >= 32 && (dataWidth & (dataWidth - 1)) == 0,
+    s"host MMIO data width must be a power of two and at least 32, got $dataWidth")
   private val byteLanes = dataWidth / 8
   private val laneBits = log2Ceil(byteLanes)
 

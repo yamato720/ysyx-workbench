@@ -438,39 +438,85 @@ class AxiLiteArbiter2(addrWidth: Int = 32, dataWidth: Int = 64) extends Module {
 //  十、AXI4-Lite DPI RAM 从设备（AxiLiteDpiRamSlave）
 // ============================================================================
 
-/** AXI4-Lite DPI 物理内存从设备。
-  * 每笔事务直接映射为一个已对齐的 XLEN beat，DPI 端严格验证 4/8 字节范围。
+/** AXI4-Lite DPI 物理主存 slave。
+  *
+  * 稳定的 DPI ABI 保持 32/64 bit。更宽的 cache-memory 事务会拆分为并行 64-bit lane，
+  * 因此 512-bit line refill 仍是一笔 AXI-Lite 响应和八次同周期 DPI 访问，而非八次
+  * 串行 cache miss。`timing` 只延迟 AXI 响应；backing memory 在请求接收时采样或更新。
   */
-class AxiLiteDpiRamSlave(addrWidth: Int = 32, dataWidth: Int = 64) extends Module {
-  require(dataWidth == 32 || dataWidth == 64, s"DPI RAM only supports 32/64-bit words, got $dataWidth")
+class AxiLiteDpiRamSlave(
+  addrWidth: Int = 32,
+  dataWidth: Int = 64,
+  timing: npc.DpiMemoryTimingConfig = npc.DpiMemoryTimingConfig.Immediate
+) extends Module {
+  require(dataWidth == 32 || (dataWidth >= 64 && dataWidth % 64 == 0),
+    s"DPI RAM supports 32-bit or a whole number of 64-bit lanes, got $dataWidth")
 
   val io = IO(new Bundle {
     val axi = Flipped(new AxiLiteMasterIO(addrWidth, dataWidth))
   })
 
-  val dpiMem = Module(new DpiMemory(dataWidth))
-  dpiMem.io.clk := clock
-  dpiMem.io.rst := reset.asBool
+  private val dpiLaneDataWidth = if (dataWidth == 32) 32 else 64
+  private val dpiLaneBytes = dpiLaneDataWidth / 8
+  private val dpiLaneCount = dataWidth / dpiLaneDataWidth
+  private val maxResponseCycles = Seq(
+    timing.maxReadResponseCycles,
+    timing.maxWriteResponseCycles
+  ).max
+  private val delayCounterWidth = math.max(1, log2Ceil(maxResponseCycles))
 
-  val sIdle :: sRResp :: sWResp :: Nil = Enum(3)
+  val dpiMemories = Seq.tabulate(dpiLaneCount) { _ =>
+    val memory = Module(new DpiMemory(dpiLaneDataWidth))
+    memory.io.clk := clock
+    memory.io.rst := reset.asBool
+    memory
+  }
+  val readData = if (dpiLaneCount == 1) dpiMemories.head.io.dout else Cat(dpiMemories.reverse.map(_.io.dout))
+
+  val sIdle :: sRWait :: sRResp :: sWWait :: sWResp :: Nil = Enum(5)
   val state = RegInit(sIdle)
   val awAddr = RegInit(0.U(addrWidth.W))
   val awDone = RegInit(false.B)
   val wData = RegInit(0.U(dataWidth.W))
   val wStrb = RegInit(0.U((dataWidth / 8).W))
   val wDone = RegInit(false.B)
+  val delayCounter = RegInit(0.U(delayCounterWidth.W))
+  val randomState = RegInit(timing.randomSeed.U(32.W))
 
-  dpiMem.io.ren := false.B
-  dpiMem.io.wen := false.B
-  dpiMem.io.addr := 0.U
-  dpiMem.io.din := 0.U
-  dpiMem.io.wstrb := 0.U
+  private def nextRandom(value: UInt): UInt =
+    Cat(value(30, 0), value(31) ^ value(21) ^ value(1) ^ value(0))
+
+  private def responseDelay(minimum: Int, maximum: Int): UInt = {
+    if (!timing.enabled) 1.U(delayCounterWidth.W)
+    else if (minimum == maximum) minimum.U(delayCounterWidth.W)
+    else {
+      val span = maximum - minimum + 1
+      ((randomState % span.U(32.W)) + minimum.U)(delayCounterWidth - 1, 0)
+    }
+  }
+
+  private def enterResponse(delay: UInt, waiting: UInt, response: UInt): Unit = {
+    when(delay === 1.U) {
+      state := response
+    }.otherwise {
+      delayCounter := delay - 1.U
+      state := waiting
+    }
+  }
+
+  dpiMemories.zipWithIndex.foreach { case (memory, lane) =>
+    memory.io.ren := false.B
+    memory.io.wen := false.B
+    memory.io.addr := 0.U
+    memory.io.din := 0.U
+    memory.io.wstrb := 0.U
+  }
 
   io.axi.ar.ready := false.B
   io.axi.aw.ready := false.B
   io.axi.w.ready := false.B
   io.axi.r.valid := false.B
-  io.axi.r.bits.data := dpiMem.io.dout
+  io.axi.r.bits.data := readData
   io.axi.r.bits.resp := AxiLiteResp.OKAY
   io.axi.b.valid := false.B
   io.axi.b.bits.resp := AxiLiteResp.OKAY
@@ -479,9 +525,13 @@ class AxiLiteDpiRamSlave(addrWidth: Int = 32, dataWidth: Int = 64) extends Modul
     is(sIdle) {
       io.axi.ar.ready := true.B
       when(io.axi.ar.fire) {
-        dpiMem.io.ren := true.B
-        dpiMem.io.addr := io.axi.ar.bits.addr
-        state := sRResp
+        dpiMemories.zipWithIndex.foreach { case (memory, lane) =>
+          memory.io.ren := true.B
+          memory.io.addr := io.axi.ar.bits.addr + (lane * dpiLaneBytes).U(addrWidth.W)
+        }
+        enterResponse(responseDelay(timing.minReadResponseCycles, timing.maxReadResponseCycles),
+          sRWait, sRResp)
+        when(timing.enabled.B) { randomState := nextRandom(randomState) }
       }.otherwise {
         io.axi.aw.ready := !awDone
         io.axi.w.ready := !wDone
@@ -490,19 +540,34 @@ class AxiLiteDpiRamSlave(addrWidth: Int = 32, dataWidth: Int = 64) extends Modul
         val awComplete = awDone || io.axi.aw.fire
         val wComplete = wDone || io.axi.w.fire
         when(awComplete && wComplete) {
-          dpiMem.io.wen := true.B
-          dpiMem.io.addr := Mux(io.axi.aw.fire, io.axi.aw.bits.addr, awAddr)
-          dpiMem.io.din := Mux(io.axi.w.fire, io.axi.w.bits.data, wData)
-          dpiMem.io.wstrb := Mux(io.axi.w.fire, io.axi.w.bits.strb, wStrb)
+          val writeAddress = Mux(io.axi.aw.fire, io.axi.aw.bits.addr, awAddr)
+          val writeData = Mux(io.axi.w.fire, io.axi.w.bits.data, wData)
+          val writeStrobe = Mux(io.axi.w.fire, io.axi.w.bits.strb, wStrb)
+          dpiMemories.zipWithIndex.foreach { case (memory, lane) =>
+            memory.io.wen := true.B
+            memory.io.addr := writeAddress + (lane * dpiLaneBytes).U(addrWidth.W)
+            memory.io.din := writeData((lane + 1) * dpiLaneDataWidth - 1, lane * dpiLaneDataWidth)
+            memory.io.wstrb := writeStrobe((lane + 1) * dpiLaneBytes - 1, lane * dpiLaneBytes)
+          }
           awDone := false.B
           wDone := false.B
-          state := sWResp
+          enterResponse(responseDelay(timing.minWriteResponseCycles, timing.maxWriteResponseCycles),
+            sWWait, sWResp)
+          when(timing.enabled.B) { randomState := nextRandom(randomState) }
         }
       }
+    }
+    is(sRWait) {
+      when(delayCounter === 0.U) { state := sRResp }
+        .otherwise { delayCounter := delayCounter - 1.U }
     }
     is(sRResp) {
       io.axi.r.valid := true.B
       when(io.axi.r.fire) { state := sIdle }
+    }
+    is(sWWait) {
+      when(delayCounter === 0.U) { state := sWResp }
+        .otherwise { delayCounter := delayCounter - 1.U }
     }
     is(sWResp) {
       io.axi.b.valid := true.B
@@ -518,20 +583,30 @@ class AxiLiteDpiRamSlave(addrWidth: Int = 32, dataWidth: Int = 64) extends Modul
 
 /** AXI4-Lite DPI MMIO 从设备。
   * 保留原始地址和真实长度，完整总线字及字节掩码原样交给 DPI，避免读取相邻设备寄存器。
+  * 宽 cache-memory fabric 会收窄为一个 32/64-bit DPI lane；这条路径不使用
+  * main-memory 的 timing model。
   */
 class AxiLiteDpiMmioSlave(addrWidth: Int = 32, dataWidth: Int = 64) extends Module {
-  require(dataWidth == 32 || dataWidth == 64, s"DPI MMIO only supports 32/64-bit words, got $dataWidth")
+  require(dataWidth == 32 || (dataWidth >= 64 && dataWidth % 64 == 0),
+    s"DPI MMIO supports 32-bit or a whole number of 64-bit lanes, got $dataWidth")
 
   val io = IO(new Bundle {
     val axi = Flipped(new AxiLiteMasterIO(addrWidth, dataWidth))
   })
 
-  val mmioCore = Module(new DpiMmio(dataWidth))
+  private val dpiDataWidth = if (dataWidth == 32) 32 else 64
+  private val dpiBytes = dpiDataWidth / 8
+  private val busBytes = dataWidth / 8
+  private val busByteBits = log2Ceil(busBytes)
+  private val dpiByteBits = log2Ceil(dpiBytes)
+
+  val mmioCore = Module(new DpiMmio(dpiDataWidth))
   mmioCore.io.clk := clock
   mmioCore.io.rst := reset.asBool
 
   val sIdle :: sRResp :: sWResp :: Nil = Enum(3)
   val state = RegInit(sIdle)
+  val readAddr = RegInit(0.U(addrWidth.W))
   val awAddr = RegInit(0.U(addrWidth.W))
   val awDone = RegInit(false.B)
   val wData = RegInit(0.U(dataWidth.W))
@@ -544,6 +619,28 @@ class AxiLiteDpiMmioSlave(addrWidth: Int = 32, dataWidth: Int = 64) extends Modu
   def strbToLen(strb: UInt): UInt = MuxLookup(PopCount(strb), 1.U(5.W))(Seq(
     1.U -> 1.U, 2.U -> 2.U, 4.U -> 4.U, 8.U -> 8.U
   ))
+
+  // cache 在宽 beat 的 word-aligned 位置提供 XLEN word，访问仍使用原始 XLEN byte lane。
+  // DPI ABI 以原始未对齐设备地址校验 WSTRB，因而必须保留这些 lane。
+  private def wordBitShift(address: UInt): UInt =
+    if (dataWidth == dpiDataWidth) 0.U
+    else address(busByteBits - 1, dpiByteBits) << log2Ceil(dpiDataWidth)
+
+  private def wordByteShift(address: UInt): UInt =
+    if (dataWidth == dpiDataWidth) 0.U
+    else address(busByteBits - 1, dpiByteBits) << dpiByteBits
+
+  private def dpiLane(data: UInt, address: UInt): UInt =
+    if (dataWidth == dpiDataWidth) data
+    else (data >> wordBitShift(address))(dpiDataWidth - 1, 0)
+
+  private def dpiStrobe(strobe: UInt, address: UInt): UInt =
+    if (dataWidth == dpiDataWidth) strobe
+    else (strobe >> wordByteShift(address))(dpiBytes - 1, 0)
+
+  private def placeReadData(data: UInt, address: UInt): UInt =
+    if (dataWidth == dpiDataWidth) data
+    else (Cat(0.U((dataWidth - dpiDataWidth).W), data) << wordBitShift(address))(dataWidth - 1, 0)
 
   mmioCore.io.re := false.B
   mmioCore.io.we := false.B
@@ -568,6 +665,7 @@ class AxiLiteDpiMmioSlave(addrWidth: Int = 32, dataWidth: Int = 64) extends Modu
         mmioCore.io.re := true.B
         mmioCore.io.addr := io.axi.ar.bits.addr
         mmioCore.io.len := sizeToLen(io.axi.ar.bits.size)
+        readAddr := io.axi.ar.bits.addr
         state := sRResp
       }.otherwise {
         io.axi.aw.ready := !awDone
@@ -577,11 +675,14 @@ class AxiLiteDpiMmioSlave(addrWidth: Int = 32, dataWidth: Int = 64) extends Modu
         val awComplete = awDone || io.axi.aw.fire
         val wComplete = wDone || io.axi.w.fire
         when(awComplete && wComplete) {
+          val writeAddress = Mux(io.axi.aw.fire, io.axi.aw.bits.addr, awAddr)
+          val writeData = Mux(io.axi.w.fire, io.axi.w.bits.data, wData)
+          val writeStrobe = Mux(io.axi.w.fire, io.axi.w.bits.strb, wStrb)
           mmioCore.io.we := true.B
-          mmioCore.io.addr := Mux(io.axi.aw.fire, io.axi.aw.bits.addr, awAddr)
-          mmioCore.io.din := Mux(io.axi.w.fire, io.axi.w.bits.data, wData)
-          mmioCore.io.strb := Mux(io.axi.w.fire, io.axi.w.bits.strb, wStrb)
-          mmioCore.io.len := strbToLen(Mux(io.axi.w.fire, io.axi.w.bits.strb, wStrb))
+          mmioCore.io.addr := writeAddress
+          mmioCore.io.din := dpiLane(writeData, writeAddress)
+          mmioCore.io.strb := dpiStrobe(writeStrobe, writeAddress)
+          mmioCore.io.len := strbToLen(dpiStrobe(writeStrobe, writeAddress))
           awDone := false.B
           wDone := false.B
           state := sWResp
@@ -590,7 +691,7 @@ class AxiLiteDpiMmioSlave(addrWidth: Int = 32, dataWidth: Int = 64) extends Modu
     }
     is(sRResp) {
       io.axi.r.valid := true.B
-      io.axi.r.bits.data := mmioCore.io.dout
+      io.axi.r.bits.data := placeReadData(mmioCore.io.dout, readAddr)
       when(io.axi.r.fire) { state := sIdle }
     }
     is(sWResp) {

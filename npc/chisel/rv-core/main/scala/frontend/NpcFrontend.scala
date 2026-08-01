@@ -30,10 +30,15 @@ class NpcFrontend(config: NpcConfig) extends Module {
     val debug = Output(new NpcFrontendDebugBundle(cfg))
   })
 
+  val pipelinedFetch = config.cache.accessMode == CacheAccessMode.PipelinedTwoCycle
   val fetchBufferIn = Wire(Decoupled(new FetchDecodePayload(cfg)))
   val fetchBufferOut = Wire(Decoupled(new FetchDecodePayload(cfg)))
   if (config.cache.instructionBuffer.enabled) {
-    val instructionBuffer = Module(new InstructionBuffer(config.cache.instructionBuffer.entries, cfg))
+    val instructionBuffer = Module(new InstructionBuffer(
+      config.cache.instructionBuffer.entries,
+      cfg,
+      flowThrough = pipelinedFetch
+    ))
     instructionBuffer.io.flush := io.redirectValid
     instructionBuffer.io.dropYounger := io.fenceHold
     instructionBuffer.io.in <> fetchBufferIn
@@ -45,40 +50,64 @@ class NpcFrontend(config: NpcConfig) extends Module {
     fetchBufferOut <> fetchDecodeReg.io.out
   }
   val programCounter = Module(new ProgramCounter(cfg.xlen, config.memory.resetVector))
-  val instructionFetchUnit = Module(new IFetchAXIAdapter(
-    axiConfig.addrWidth,
-    axiConfig.dataWidth,
-    config.pipeline.registerInitialFetchRequest
-  ))
   val decodeUnit = Module(new NpcDecodeUnit(cfg))
 
   val cycleCounter = if (debugEnabled) Some(RegInit(0.U(64.W))) else None
   cycleCounter.foreach(counter => counter := counter + 1.U)
   val performanceCycle = cycleCounter.getOrElse(0.U(64.W))
-  val fetchStartCycle = if (debugEnabled) Some(RegInit(0.U(64.W))) else None
 
+  val fetchInstruction = WireDefault(0x00000013.U(32.W))
+  val fetchResponsePc = WireDefault(programCounter.io.pc(31, 0))
+  val fetchResponseIssueCycle = WireDefault(performanceCycle)
+  val fetchResponseValid = WireDefault(false.B)
+  val fetchBusy = WireDefault(false.B)
+  val fetchFault = WireDefault(0.U.asTypeOf(new MemoryFault(axiConfig.addrWidth)))
+  val fetchFlush = io.redirectValid || io.fenceHold
+  val fetchRestartPc = Mux(io.redirectValid, io.redirectTarget(31, 0), fetchBufferOut.bits.pc + 4.U)
   val pcWriteEnable = WireDefault(false.B)
   programCounter.io.nextPc := Mux(io.redirectValid, io.redirectTarget,
-    Mux(io.fenceHold, fetchBufferOut.bits.pc + 4.U, programCounter.io.pcPlus4))
+    Mux(io.fenceHold, fetchBufferOut.bits.pc + 4.U,
+      Mux(pipelinedFetch.B, fetchBufferIn.bits.pc + 4.U, programCounter.io.pcPlus4)))
   programCounter.io.writeEnable := pcWriteEnable
-  instructionFetchUnit.io.pc := programCounter.io.pc(31, 0)
-  instructionFetchUnit.io.flush := io.redirectValid || io.fenceHold
-  instructionFetchUnit.io.axi <> io.axi
-  io.memoryFault := instructionFetchUnit.io.fault
 
-  fetchBufferIn.valid := instructionFetchUnit.io.responseValid && !io.redirectValid && !io.fenceHold
-  fetchBufferIn.bits.pc := programCounter.io.pc
-  fetchBufferIn.bits.instruction := instructionFetchUnit.io.inst
-  fetchBufferIn.bits.perfFetchCycles := (
-    if (debugEnabled) performanceCycle - fetchStartCycle.get else 0.U(64.W)
-  )
+  fetchBufferIn.valid := fetchResponseValid && !fetchFlush
+  fetchBufferIn.bits.pc := Mux(pipelinedFetch.B, fetchResponsePc, programCounter.io.pc)
+  fetchBufferIn.bits.instruction := fetchInstruction
+  fetchBufferIn.bits.perfFetchStartCycle := fetchResponseIssueCycle
+  fetchBufferIn.bits.perfFetchCycles := performanceCycle - fetchResponseIssueCycle
   fetchBufferIn.bits.perfDecodeStartCycle := performanceCycle
-  instructionFetchUnit.io.responseReady := fetchBufferIn.ready && !io.redirectValid && !io.fenceHold
+  if (pipelinedFetch) {
+    val instructionFetchUnit = Module(new PipelinedIFetchAXIAdapter(
+      axiConfig.addrWidth, axiConfig.dataWidth, config.cache.pipelinedQueues.fetchDepth))
+    instructionFetchUnit.io.pc := programCounter.io.pc(31, 0)
+    instructionFetchUnit.io.restartPc := fetchRestartPc
+    instructionFetchUnit.io.performanceCycle := performanceCycle
+    instructionFetchUnit.io.flush := fetchFlush
+    instructionFetchUnit.io.responseReady := fetchBufferIn.ready && !fetchFlush
+    instructionFetchUnit.io.axi <> io.axi
+    fetchInstruction := instructionFetchUnit.io.inst
+    fetchResponsePc := instructionFetchUnit.io.responsePc
+    fetchResponseIssueCycle := instructionFetchUnit.io.responseIssueCycle
+    fetchResponseValid := instructionFetchUnit.io.responseValid
+    fetchBusy := instructionFetchUnit.io.busy
+    fetchFault := instructionFetchUnit.io.fault
+  } else {
+    val instructionFetchUnit = Module(new IFetchAXIAdapter(
+      axiConfig.addrWidth, axiConfig.dataWidth, config.pipeline.registerInitialFetchRequest))
+    instructionFetchUnit.io.pc := programCounter.io.pc(31, 0)
+    instructionFetchUnit.io.performanceCycle := performanceCycle
+    instructionFetchUnit.io.flush := fetchFlush
+    instructionFetchUnit.io.responseReady := fetchBufferIn.ready && !fetchFlush
+    instructionFetchUnit.io.axi <> io.axi
+    fetchInstruction := instructionFetchUnit.io.inst
+    fetchResponseValid := instructionFetchUnit.io.responseValid
+    fetchBusy := instructionFetchUnit.io.busy
+    fetchFault := instructionFetchUnit.io.fault
+    fetchResponseIssueCycle := instructionFetchUnit.io.responseIssueCycle
+  }
+  io.memoryFault := fetchFault
 
   pcWriteEnable := io.redirectValid || io.fenceHold || fetchBufferIn.fire
-  fetchStartCycle.foreach { start =>
-    when(pcWriteEnable) { start := performanceCycle }
-  }
 
   val instruction = fetchBufferOut.bits.instruction
   val decodeSignals = decodeUnit.io.signals
@@ -89,8 +118,10 @@ class NpcFrontend(config: NpcConfig) extends Module {
   io.interruptPc := Mux(fetchBufferOut.valid, fetchBufferOut.bits.pc, programCounter.io.pc)
   io.dispatch.bits.pc := fetchBufferOut.bits.pc
   io.dispatch.bits.instruction := instruction
+  io.dispatch.bits.perfFetchStartCycle := fetchBufferOut.bits.perfFetchStartCycle
   io.dispatch.bits.perfFetchCycles := fetchBufferOut.bits.perfFetchCycles
-  io.dispatch.bits.perfDecodeStartCycle := fetchBufferOut.bits.perfDecodeStartCycle
+  // 以 dispatch 握手作为 ID 的真实起点，避免 instruction buffer 的等待被错误画成 ID。
+  io.dispatch.bits.perfDecodeStartCycle := performanceCycle
   io.dispatch.bits.immediate := RiscvImmediateGenerator(instruction, cfg.xlen)
   io.dispatch.bits.rd := instruction(11, 7)
   io.dispatch.bits.rs1 := instruction(19, 15)
@@ -126,7 +157,7 @@ class NpcFrontend(config: NpcConfig) extends Module {
 
   val fetchAxiWaitCycles = RegInit(0.U(64.W))
   val redirectFlushCount = RegInit(0.U(64.W))
-  when(instructionFetchUnit.io.busy) { fetchAxiWaitCycles := fetchAxiWaitCycles + 1.U }
+  when(fetchBusy) { fetchAxiWaitCycles := fetchAxiWaitCycles + 1.U }
   when(io.redirectValid) { redirectFlushCount := redirectFlushCount + 1.U }
 
   io.debug.pcWriteEnable := pcWriteEnable
@@ -134,13 +165,13 @@ class NpcFrontend(config: NpcConfig) extends Module {
   io.debug.currentPc := programCounter.io.pc
   io.debug.nextArchitecturalPc := Mux(fetchBufferOut.valid,
     fetchBufferOut.bits.pc, programCounter.io.pc)
-  io.debug.frontendInstruction := Mux(fetchBufferOut.valid, instruction, instructionFetchUnit.io.inst)
+  io.debug.frontendInstruction := Mux(fetchBufferOut.valid, instruction, fetchInstruction)
   io.debug.decodeImmediate := RiscvImmediateGenerator(instruction, cfg.xlen)
   io.debug.decodeOpcode := instruction(6, 0)
   io.debug.decodeFunct3 := instruction(14, 12)
   io.debug.decodeFunct7 := instruction(31, 25)
   io.debug.fetchAxiWaitCycles := fetchAxiWaitCycles
   io.debug.redirectFlushCount := redirectFlushCount
-  io.debug.fetchBusy := instructionFetchUnit.io.busy
+  io.debug.fetchBusy := fetchBusy
   io.debug.dispatchBackpressured := fetchBufferOut.valid && !fetchBufferOut.ready
 }

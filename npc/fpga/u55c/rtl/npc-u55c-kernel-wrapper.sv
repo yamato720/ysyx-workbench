@@ -1,6 +1,9 @@
 `ifndef NPC_FPGA_XLEN
 `define NPC_FPGA_XLEN 32
 `endif
+`ifndef NPC_FPGA_AXI_DATA_WIDTH
+`define NPC_FPGA_AXI_DATA_WIDTH `NPC_FPGA_XLEN
+`endif
 
 `ifndef NPC_FPGA_PLATFORM_CLOCK_MHZ
 `define NPC_FPGA_PLATFORM_CLOCK_MHZ 300
@@ -30,8 +33,8 @@ module NpcFpgaKernel #(
   output wire [3:0]                   m_axi_gmem_awqos,
   output wire                         m_axi_gmem_wvalid,
   input  wire                         m_axi_gmem_wready,
-  output wire [`NPC_FPGA_XLEN-1:0]   m_axi_gmem_wdata,
-  output wire [`NPC_FPGA_XLEN/8-1:0] m_axi_gmem_wstrb,
+  output wire [`NPC_FPGA_AXI_DATA_WIDTH-1:0]   m_axi_gmem_wdata,
+  output wire [`NPC_FPGA_AXI_DATA_WIDTH/8-1:0] m_axi_gmem_wstrb,
   output wire                         m_axi_gmem_wlast,
   input  wire                         m_axi_gmem_bvalid,
   output wire                         m_axi_gmem_bready,
@@ -51,7 +54,7 @@ module NpcFpgaKernel #(
   input  wire                         m_axi_gmem_rvalid,
   output wire                         m_axi_gmem_rready,
   input  wire [3:0]                   m_axi_gmem_rid,
-  input  wire [`NPC_FPGA_XLEN-1:0]   m_axi_gmem_rdata,
+  input  wire [`NPC_FPGA_AXI_DATA_WIDTH-1:0]   m_axi_gmem_rdata,
   input  wire [1:0]                   m_axi_gmem_rresp,
   input  wire                         m_axi_gmem_rlast,
 
@@ -257,8 +260,8 @@ module npc_u55c_clocked_top #(
   output wire [3:0] io_master_aw_bits_cache, output wire [2:0] io_master_aw_bits_prot,
   output wire [3:0] io_master_aw_bits_qos,
   input wire io_master_w_ready, output wire io_master_w_valid,
-  output wire [`NPC_FPGA_XLEN-1:0] io_master_w_bits_data,
-  output wire [`NPC_FPGA_XLEN/8-1:0] io_master_w_bits_strb, output wire io_master_w_bits_last,
+  output wire [`NPC_FPGA_AXI_DATA_WIDTH-1:0] io_master_w_bits_data,
+  output wire [`NPC_FPGA_AXI_DATA_WIDTH/8-1:0] io_master_w_bits_strb, output wire io_master_w_bits_last,
   output wire io_master_b_ready, input wire io_master_b_valid,
   input wire [3:0] io_master_b_bits_id, input wire [1:0] io_master_b_bits_resp,
   input wire io_master_ar_ready, output wire io_master_ar_valid,
@@ -268,7 +271,7 @@ module npc_u55c_clocked_top #(
   output wire [3:0] io_master_ar_bits_cache, output wire [2:0] io_master_ar_bits_prot,
   output wire [3:0] io_master_ar_bits_qos,
   output wire io_master_r_ready, input wire io_master_r_valid,
-  input wire [3:0] io_master_r_bits_id, input wire [`NPC_FPGA_XLEN-1:0] io_master_r_bits_data,
+  input wire [3:0] io_master_r_bits_id, input wire [`NPC_FPGA_AXI_DATA_WIDTH-1:0] io_master_r_bits_data,
   input wire [1:0] io_master_r_bits_resp, input wire io_master_r_bits_last,
 `ifdef NPC_FPGA_RUNTIME_TRACE
   input wire io_trace_aw_ready, output wire io_trace_aw_valid,
@@ -339,27 +342,27 @@ module npc_u55c_clocked_top #(
   wire core_aw_ready, core_aw_valid; wire [3:0] core_aw_id; wire [31:0] core_aw_addr;
   wire [7:0] core_aw_len; wire [2:0] core_aw_size; wire [1:0] core_aw_burst; wire core_aw_lock;
   wire [3:0] core_aw_cache; wire [2:0] core_aw_prot; wire [3:0] core_aw_qos;
-  wire core_w_ready, core_w_valid; wire [`NPC_FPGA_XLEN-1:0] core_w_data;
-  wire [`NPC_FPGA_XLEN/8-1:0] core_w_strb; wire core_w_last;
+  wire core_w_ready, core_w_valid; wire [`NPC_FPGA_AXI_DATA_WIDTH-1:0] core_w_data;
+  wire [`NPC_FPGA_AXI_DATA_WIDTH/8-1:0] core_w_strb; wire core_w_last;
   wire core_b_ready, core_b_valid; wire [3:0] core_b_id; wire [1:0] core_b_resp;
   wire core_ar_ready, core_ar_valid; wire [3:0] core_ar_id; wire [31:0] core_ar_addr;
   wire [7:0] core_ar_len; wire [2:0] core_ar_size; wire [1:0] core_ar_burst; wire core_ar_lock;
   wire [3:0] core_ar_cache; wire [2:0] core_ar_prot; wire [3:0] core_ar_qos;
-  wire core_r_ready, core_r_valid; wire [3:0] core_r_id; wire [`NPC_FPGA_XLEN-1:0] core_r_data;
+  wire core_r_ready, core_r_valid; wire [3:0] core_r_id; wire [`NPC_FPGA_AXI_DATA_WIDTH-1:0] core_r_data;
   wire [1:0] core_r_resp; wire core_r_last;
   wire [63:0] core_aw_host_addr = core_memory_host_base + {32'b0, core_aw_addr - GUEST_MEMORY_BASE};
   wire [63:0] core_ar_host_addr = core_memory_host_base + {32'b0, core_ar_addr - GUEST_MEMORY_BASE};
 
   wire [95:0] aw_dout, ar_dout; wire aw_full, aw_empty, ar_full, ar_empty;
-  wire [`NPC_FPGA_XLEN + `NPC_FPGA_XLEN/8:0] w_dout; wire w_full, w_empty;
+  wire [`NPC_FPGA_AXI_DATA_WIDTH + `NPC_FPGA_AXI_DATA_WIDTH/8:0] w_dout; wire w_full, w_empty;
   wire [15:0] b_dout; wire b_full, b_empty;
-  wire [`NPC_FPGA_XLEN + 6:0] r_dout; wire r_full, r_empty;
+  wire [`NPC_FPGA_AXI_DATA_WIDTH + 6:0] r_dout; wire r_full, r_empty;
   npc_u55c_async_fifo #(.WIDTH(96)) aw_fifo (.wr_clk(core_clock), .rd_clk(clock), .rst(fifo_reset),
     .din({3'b0, core_aw_id, core_aw_host_addr, core_aw_len, core_aw_size, core_aw_burst, core_aw_lock, core_aw_cache, core_aw_prot, core_aw_qos}),
     .wr_en(core_aw_valid), .full(aw_full), .dout(aw_dout), .rd_en(io_master_aw_ready && !aw_empty), .empty(aw_empty));
   assign core_aw_ready = !aw_full; assign io_master_aw_valid = !aw_empty;
   assign {io_master_aw_bits_id, io_master_aw_bits_addr, io_master_aw_bits_len, io_master_aw_bits_size, io_master_aw_bits_burst, io_master_aw_bits_lock, io_master_aw_bits_cache, io_master_aw_bits_prot, io_master_aw_bits_qos} = aw_dout[92:0];
-  npc_u55c_async_fifo #(.WIDTH(`NPC_FPGA_XLEN + `NPC_FPGA_XLEN/8 + 1)) w_fifo (.wr_clk(core_clock), .rd_clk(clock), .rst(fifo_reset),
+  npc_u55c_async_fifo #(.WIDTH(`NPC_FPGA_AXI_DATA_WIDTH + `NPC_FPGA_AXI_DATA_WIDTH/8 + 1)) w_fifo (.wr_clk(core_clock), .rd_clk(clock), .rst(fifo_reset),
     .din({core_w_data, core_w_strb, core_w_last}), .wr_en(core_w_valid), .full(w_full), .dout(w_dout), .rd_en(io_master_w_ready && !w_empty), .empty(w_empty));
   assign core_w_ready = !w_full; assign io_master_w_valid = !w_empty;
   assign {io_master_w_bits_data, io_master_w_bits_strb, io_master_w_bits_last} = w_dout;
@@ -371,7 +374,7 @@ module npc_u55c_clocked_top #(
     .wr_en(core_ar_valid), .full(ar_full), .dout(ar_dout), .rd_en(io_master_ar_ready && !ar_empty), .empty(ar_empty));
   assign core_ar_ready = !ar_full; assign io_master_ar_valid = !ar_empty;
   assign {io_master_ar_bits_id, io_master_ar_bits_addr, io_master_ar_bits_len, io_master_ar_bits_size, io_master_ar_bits_burst, io_master_ar_bits_lock, io_master_ar_bits_cache, io_master_ar_bits_prot, io_master_ar_bits_qos} = ar_dout[92:0];
-  npc_u55c_async_fifo #(.WIDTH(`NPC_FPGA_XLEN + 7)) r_fifo (.wr_clk(clock), .rd_clk(core_clock), .rst(fifo_reset),
+  npc_u55c_async_fifo #(.WIDTH(`NPC_FPGA_AXI_DATA_WIDTH + 7)) r_fifo (.wr_clk(clock), .rd_clk(core_clock), .rst(fifo_reset),
     .din({io_master_r_bits_id, io_master_r_bits_data, io_master_r_bits_resp, io_master_r_bits_last}), .wr_en(io_master_r_valid), .full(r_full), .dout(r_dout), .rd_en(core_r_ready && !r_empty), .empty(r_empty));
   assign io_master_r_ready = !r_full; assign core_r_valid = !r_empty;
   assign {core_r_id, core_r_data, core_r_resp, core_r_last} = r_dout;

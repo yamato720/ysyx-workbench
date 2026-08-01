@@ -89,7 +89,10 @@ package npc
   * 教学预设为 I$/D$ 各 4 KiB、16-byte line、2-way、Tree-PLRU；D$ 使用
   * write-back + write-allocate，顺序取指缓冲为 4 entries。缓存容量、line、路数和
   * instruction-buffer entries 必须为 2 的幂，line 还须为 AXI 数据字节数的整数倍。
-  * 缓存只覆盖 main-memory 窗口，MMIO 始终旁路；启用缓存会同时启用 Zifencei：
+  * `WithWideHbmCacheConfig` 是 U55C 的独立预设：I$/D$ 各 4 KiB、64-byte line、2-way，
+  * 与 `new WithExternalAxiConfig(externalDataWidth = 512)` 组合后，一条 cache line 对应一个
+  * 512-bit HBM AXI beat。缓存只覆盖 main-memory 窗口，MMIO 始终以 CPU 宽度访问并在控制器
+  * 中做 lane 适配；启用缓存会同时启用 Zifencei：
   * FENCE 会 drain D$，FENCE.I 则会再失效 I$。
   */
 
@@ -97,6 +100,52 @@ package npc
 class CacheSimulationCoreConfig extends ConfigBundle(
   new WithTeachingCacheConfig ++
     new SimulationCoreConfig
+)
+
+/**
+  * U55C 宽 L1 基线的本地功能时序对照构造。
+  *
+  * I$/D$ 通过本地 512-bit DPI cache-memory port 使用 64-byte line。每次完整 line
+  * 主存访问的响应延迟固定落在 73--81 cycle，因此一次 line refill 是一个延迟事务，
+  * 而不是八次串行的 64-bit 读。本构造有意只包含 L1，不模拟可选共享 L2 或 HBM bank/queue
+  * 竞争。
+  */
+class HbmJitterCacheSimulationCoreConfig extends ConfigBundle(
+  new WithDpiMemoryTimingConfig(DpiMemoryTimingConfig.HbmJitter73To81) ++
+    new WithLocalDpiCacheMemoryWidthConfig(512) ++
+    new WithWideHbmCacheConfig ++
+    new Rv64IMZicsrConfig ++
+    new PipelineDualFwdTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecutePerformConfig ++
+    new WithTopDebugConfig ++
+    new WithFpgaMainMemoryConfig ++
+    new BaseConfig
+)
+
+/** 启用共享 256 KiB HBM 风格 L2 的本地功能时序对照构造。 */
+class HbmJitterL2CacheSimulationCoreConfig extends ConfigBundle(
+  new WithDpiMemoryTimingConfig(DpiMemoryTimingConfig.HbmJitter73To81) ++
+    new WithLocalDpiCacheMemoryWidthConfig(512) ++
+    new WithWideHbmL2CacheConfig ++
+    new Rv64IMZicsrConfig ++
+    new PipelineDualFwdTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecutePerformConfig ++
+    new WithTopDebugConfig ++
+    new WithFpgaMainMemoryConfig ++
+    new BaseConfig
+)
+
+/**
+  * 本地两拍 L1/L2 仿真：64-byte L1/L2 line 与 512-bit DPI 主存端口一一对应。
+  * 命中经过 S0/S1 后在握手两拍后返回；miss、MMIO 和维护仍以按序阻塞方式完成。
+  */
+class PipelinedTwoCycleWideL2SimulationCoreConfig extends ConfigBundle(
+  new WithDpiMemoryTimingConfig(DpiMemoryTimingConfig.Immediate) ++
+    new WithLocalDpiCacheMemoryWidthConfig(512) ++
+    new WithPipelinedTwoCycleWideHbmL2CacheConfig ++
+    new Rv64IMZicsrConfig ++
+    new PipelineDualFwdTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecutePerformConfig ++
+    new WithTopDebugConfig ++
+    new WithFpgaMainMemoryConfig ++
+    new BaseConfig
 )
 
 /** ysyxSoC 使用的缓存版 RV32 外部 AXI 核心。 */
@@ -124,6 +173,38 @@ class CacheRv64PipelineDualForwardingTwoStageIntegerExecuteRegisteredFetchSepara
       new Rv64IMZicsrConfig ++
       new PipelineDualFwdTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecutePerformConfig ++
       new WithExternalAxiConfig ++
+      new WithDispatchControlConfig ++
+      new WithTopDebugConfig ++
+      new WithFpgaMainMemoryConfig ++
+      new BaseConfig
+  )
+
+/** RV64 U55C HBM 核心：64-byte cache line 与 512-bit 外部 AXI master。 */
+class WideHbmCacheRv64PipelineDualForwardingTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecuteFpgaConfig
+  extends ConstructionConfig(
+    new WithWideHbmCacheConfig ++
+      new Rv64IMZicsrConfig ++
+      new PipelineDualFwdTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecutePerformConfig ++
+      new WithExternalAxiConfig(externalDataWidth = 512) ++
+      new WithDispatchControlConfig ++
+      new WithTopDebugConfig ++
+      new WithFpgaMainMemoryConfig ++
+      new BaseConfig
+  )
+
+/** RV64 U55C HBM 核心：在 64-byte L1 line 之后增加共享 L2。
+  *
+  * `WithWideHbmL2CacheConfig` 在 Fabric 的 I$/D$ arbiter 之后、AXI4-Full 之前增加
+  * 一个 256 KiB、8-way Tree-PLRU、write-back、write-allocate L2。因此它只观察
+  * main-memory 流量，host MMIO slave 位于其外。FENCE/FENCE.I 和 FPGA 完成 drain
+  * 都先 flush D$，再 flush 此 L2，之后核心才可以继续或复位。
+  */
+class WideHbmL2CacheRv64PipelineDualForwardingTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecuteFpgaConfig
+  extends ConstructionConfig(
+    new WithWideHbmL2CacheConfig ++
+      new Rv64IMZicsrConfig ++
+      new PipelineDualFwdTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecutePerformConfig ++
+      new WithExternalAxiConfig(externalDataWidth = 512) ++
       new WithDispatchControlConfig ++
       new WithTopDebugConfig ++
       new WithFpgaMainMemoryConfig ++

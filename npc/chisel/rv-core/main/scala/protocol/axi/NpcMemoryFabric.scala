@@ -2,7 +2,7 @@ package npc.protocol
 
 import chisel3._
 import chisel3.util._
-import npc.{NpcConfig, AxiConfig}
+import npc.{AxiConfig, CacheStatistics, NpcConfig, UnifiedL2Cache}
 
 /**
   * NPC 的内存职责边界。
@@ -14,28 +14,33 @@ import npc.{NpcConfig, AxiConfig}
 class NpcMemoryFabric(config: NpcConfig) extends Module {
   private val axiConfig: AxiConfig = config.axi
   private val memoryConfig = config.memory
+  private val memoryDataWidth = config.memoryDataWidth
 
   val io = IO(new Bundle {
-    val instruction = Flipped(new AxiLiteMasterIO(axiConfig.addrWidth, axiConfig.dataWidth))
-    val data = Flipped(new AxiLiteMasterIO(axiConfig.addrWidth, axiConfig.dataWidth))
-    val master = new Axi4FullMasterIO(axiConfig.addrWidth, axiConfig.dataWidth, axiConfig.idWidth)
+    val instruction = Flipped(new AxiLiteMasterIO(axiConfig.addrWidth, memoryDataWidth))
+    val data = Flipped(new AxiLiteMasterIO(axiConfig.addrWidth, memoryDataWidth))
+    val master = new Axi4FullMasterIO(axiConfig.addrWidth, memoryDataWidth, axiConfig.idWidth)
     val putch = if (axiConfig.useExternalMaster) Some(Decoupled(UInt(8.W))) else None
+    val l2Flush = Input(Bool())
+    val l2FlushDone = Output(Bool())
+    val l2Drained = Output(Bool())
+    val l2Statistics = Output(new CacheStatistics)
   })
 
   if (axiConfig.useExternalMaster) {
-    val liteArbiter = Module(new AxiLiteArbiter2(axiConfig.addrWidth, axiConfig.dataWidth))
+    val liteArbiter = Module(new AxiLiteArbiter2(axiConfig.addrWidth, memoryDataWidth))
     val dataCrossbar = Module(new AxiLiteCrossbar(
       axiConfig.addrWidth,
-      axiConfig.dataWidth,
+      memoryDataWidth,
       Seq(
         AxiLiteSlaveRange(memoryConfig.mainMemoryBase, memoryConfig.mainMemorySize),
         AxiLiteSlaveRange(memoryConfig.mmioBase, memoryConfig.mmioSize)
       )
     ))
-    val mmio = Module(new AxiLiteHostMmioSlave(axiConfig.addrWidth, axiConfig.dataWidth))
+    val mmio = Module(new AxiLiteHostMmioSlave(axiConfig.addrWidth, memoryDataWidth))
     val axiBridge = Module(new AxiLiteToAxi4Full(
       axiConfig.addrWidth,
-      axiConfig.dataWidth,
+      memoryDataWidth,
       axiConfig.idWidth,
       axiConfig.transactionId
     ))
@@ -45,25 +50,99 @@ class NpcMemoryFabric(config: NpcConfig) extends Module {
     liteArbiter.io.clients(1) <> dataCrossbar.io.slaves(0)
     mmio.io.axi <> dataCrossbar.io.slaves(1)
     io.putch.get <> mmio.io.putch
-    axiBridge.io.lite <> liteArbiter.io.master
+    if (config.cache.l2cache.enabled) {
+      val l2 = Module(new UnifiedL2Cache(config))
+      l2.io.cpu <> liteArbiter.io.master
+      axiBridge.io.lite <> l2.io.memory
+      l2.io.flush := io.l2Flush
+      io.l2FlushDone := l2.io.flushDone
+      io.l2Drained := l2.io.drained
+      io.l2Statistics := l2.io.statistics
+    } else {
+      axiBridge.io.lite <> liteArbiter.io.master
+      io.l2FlushDone := true.B
+      io.l2Drained := true.B
+      io.l2Statistics := 0.U.asTypeOf(new CacheStatistics)
+    }
     io.master <> axiBridge.io.axi
   } else {
-    val instructionMemory = Module(new AxiLiteDpiRamSlave(axiConfig.addrWidth, axiConfig.dataWidth))
-    val dataMemory = Module(new AxiLiteDpiRamSlave(axiConfig.addrWidth, axiConfig.dataWidth))
-    val mmioSlave = Module(new AxiLiteDpiMmioSlave(axiConfig.addrWidth, axiConfig.dataWidth))
-    val dataCrossbar = Module(new AxiLiteCrossbar(
-      axiConfig.addrWidth,
-      axiConfig.dataWidth,
-      Seq(
-        AxiLiteSlaveRange(memoryConfig.mainMemoryBase, memoryConfig.mainMemorySize),
-        AxiLiteSlaveRange(memoryConfig.mmioBase, memoryConfig.mmioSize)
-      )
-    ))
+    // 本地主存 timing 只属于 DPI RAM；MMIO 保持即时路径，不能被误当成 HBM 延迟。
+    // 有 L2 的普通本地模式保留历史阻塞拓扑；两拍模式使用独立的路由 FIFO Fabric。
+    val mmioSlave = Module(new AxiLiteDpiMmioSlave(axiConfig.addrWidth, memoryDataWidth))
+    if (config.cache.l2cache.enabled) {
+      if (config.cache.accessMode == npc.CacheAccessMode.PipelinedTwoCycle) {
+        val depth = config.cache.pipelinedQueues.memoryDepth
+        val liteArbiter = Module(new PipelinedAxiLiteArbiter2(axiConfig.addrWidth, memoryDataWidth, depth))
+        val dataCrossbar = Module(new PipelinedAxiLiteCrossbar(
+          axiConfig.addrWidth,
+          memoryDataWidth,
+          Seq(
+            AxiLiteSlaveRange(memoryConfig.mainMemoryBase, memoryConfig.mainMemorySize),
+            AxiLiteSlaveRange(memoryConfig.mmioBase, memoryConfig.mmioSize)
+          ),
+          depth
+        ))
+        val l2 = Module(new UnifiedL2Cache(config))
+        val mainMemory = Module(new PipelinedAxiLiteDpiRamSlave(
+          axiConfig.addrWidth, memoryDataWidth, depth, memoryConfig.dpiTiming))
 
-    io.instruction <> instructionMemory.io.axi
-    io.data <> dataCrossbar.io.master
-    dataCrossbar.io.slaves(0) <> dataMemory.io.axi
-    dataCrossbar.io.slaves(1) <> mmioSlave.io.axi
+        liteArbiter.io.clients(0) <> io.instruction
+        dataCrossbar.io.master <> io.data
+        liteArbiter.io.clients(1) <> dataCrossbar.io.slaves(0)
+        mmioSlave.io.axi <> dataCrossbar.io.slaves(1)
+        l2.io.cpu <> liteArbiter.io.master
+        mainMemory.io.axi <> l2.io.memory
+        l2.io.flush := io.l2Flush
+        io.l2FlushDone := l2.io.flushDone
+        io.l2Drained := l2.io.drained
+        io.l2Statistics := l2.io.statistics
+      } else {
+        val liteArbiter = Module(new AxiLiteArbiter2(axiConfig.addrWidth, memoryDataWidth))
+        val dataCrossbar = Module(new AxiLiteCrossbar(
+          axiConfig.addrWidth,
+          memoryDataWidth,
+          Seq(
+            AxiLiteSlaveRange(memoryConfig.mainMemoryBase, memoryConfig.mainMemorySize),
+            AxiLiteSlaveRange(memoryConfig.mmioBase, memoryConfig.mmioSize)
+          )
+        ))
+        val l2 = Module(new UnifiedL2Cache(config))
+        val mainMemory = Module(new AxiLiteDpiRamSlave(
+          axiConfig.addrWidth, memoryDataWidth, memoryConfig.dpiTiming))
+
+        liteArbiter.io.clients(0) <> io.instruction
+        dataCrossbar.io.master <> io.data
+        liteArbiter.io.clients(1) <> dataCrossbar.io.slaves(0)
+        mmioSlave.io.axi <> dataCrossbar.io.slaves(1)
+        l2.io.cpu <> liteArbiter.io.master
+        mainMemory.io.axi <> l2.io.memory
+        l2.io.flush := io.l2Flush
+        io.l2FlushDone := l2.io.flushDone
+        io.l2Drained := l2.io.drained
+        io.l2Statistics := l2.io.statistics
+      }
+    } else {
+      val instructionMemory = Module(new AxiLiteDpiRamSlave(
+        axiConfig.addrWidth, memoryDataWidth, memoryConfig.dpiTiming))
+      val dataMemory = Module(new AxiLiteDpiRamSlave(
+        axiConfig.addrWidth, memoryDataWidth, memoryConfig.dpiTiming))
+      val dataCrossbar = Module(new AxiLiteCrossbar(
+        axiConfig.addrWidth,
+        memoryDataWidth,
+        Seq(
+          AxiLiteSlaveRange(memoryConfig.mainMemoryBase, memoryConfig.mainMemorySize),
+          AxiLiteSlaveRange(memoryConfig.mmioBase, memoryConfig.mmioSize)
+        )
+      ))
+
+      io.instruction <> instructionMemory.io.axi
+      io.data <> dataCrossbar.io.master
+      dataCrossbar.io.slaves(0) <> dataMemory.io.axi
+      dataCrossbar.io.slaves(1) <> mmioSlave.io.axi
+      io.l2FlushDone := true.B
+      io.l2Drained := true.B
+      io.l2Statistics := 0.U.asTypeOf(new CacheStatistics)
+    }
 
     io.master.aw.valid := false.B
     io.master.aw.bits.id := 0.U

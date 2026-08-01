@@ -7,7 +7,7 @@
 
 #define PERFORMANCE_HTML_STAGE_COUNT 5
 #define PERFORMANCE_HTML_STALL_COUNT 5
-#define PERFORMANCE_HTML_CACHE_COUNT 2
+#define PERFORMANCE_HTML_CACHE_COUNT 3
 #define PERFORMANCE_HTML_CACHE_COUNTER_COUNT 5
 
 typedef enum {
@@ -21,11 +21,13 @@ typedef struct {
   const char *name;
   uint64_t count;
   uint64_t stage_total[PERFORMANCE_HTML_STAGE_COUNT];
+  uint64_t memory_queue_total;
   uint64_t max_total;
   bool detailed;
   uint64_t last_pc;
   uint32_t last_instruction;
   uint64_t last_stage[PERFORMANCE_HTML_STAGE_COUNT];
+  uint64_t last_memory_queue;
 } PerformanceHtmlTimingRow;
 
 typedef struct {
@@ -45,6 +47,7 @@ typedef struct {
 typedef struct {
   const char *label;
   const char *mode;
+  const char *memory_statistics_mode;
   const char *outcome_text;
   PerformanceHtmlOutcome outcome;
   double clock_mhz;
@@ -72,6 +75,7 @@ typedef struct {
   uint64_t last_commits_before;
   uint64_t last_commits_after;
   uint64_t last_stage[PERFORMANCE_HTML_STAGE_COUNT];
+  uint64_t last_memory_queue;
   const PerformanceHtmlTimingRow *timing_rows;
   size_t timing_row_count;
   size_t aggregate_row;

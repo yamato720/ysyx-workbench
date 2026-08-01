@@ -30,7 +30,7 @@ phase_log_tool="$npc_root/scripts/phase-log.sh"
 artifact_tool="$npc_root/fpga/common/scripts/artifact-manifest.sh"
 mkdir -p "$root/.profiles" "$root/.failed" "$root/.hosts" "$root/.locks"
 catalog_ready=${NPC_CONFIG_CATALOG_READY:-0}
-profile_format=21
+profile_format=22
 profile_inputs_fingerprint_cache=''
 [[ $catalog_ready == 0 || $catalog_ready == 1 ]] || { echo "NPC_CONFIG_CATALOG_READY 只能是 0 或 1" >&2; exit 2; }
 
@@ -74,7 +74,7 @@ normalize_scope() {
 # 历史 NEMU 配置类只用于迁移；新 profile 记录 companion object 中的稳定 preset。
 canonical_nemu_preset() {
   case "$1" in
-    LocalBase|LocalPerformance|LocalPipelineTrace|U55cBase|U55cPerformanceMonitor|Zcu102Base|Custom|none) printf '%s\n' "$1" ;;
+    LocalBase|LocalPerformance|LocalPipelineTrace|LocalVcdTrace|U55cBase|U55cPerformanceMonitor|Zcu102Base|Custom|none) printf '%s\n' "$1" ;;
     U55cRuntimeTrace) printf '%s\n' U55cBase ;;
     npc.nemu.DpiConfig|npc.nemu.LocalVerilatorConfig) printf '%s\n' LocalBase ;;
     npc.nemu.LocalVerilatorPerformanceConfig) printf '%s\n' LocalPerformance ;;
@@ -154,7 +154,7 @@ migrate_config_names_locked() {
 
 migrate_profile_mode() {
   local file=$1 capability scope board replacement normalized_scope temporary inferred_preset host_backend host_devices
-  local saved_host_config saved_preset preset pipeline_html performance_html cache_html integer_execute_stages serial_execute_stages register_initial_fetch_request separate_serial_integer_alu serial_execute_result_forwarding divider_non_blocking needs_divider_non_blocking runtime_sdb trace_enabled trace_bank trace_buffer trace_max trace_cache trace_format trace_record_bytes trace_data_width trace_burst_records
+  local saved_host_config saved_preset preset pipeline_html performance_html cache_html memory_statistics_mode integer_execute_stages serial_execute_stages register_initial_fetch_request separate_serial_integer_alu serial_execute_result_forwarding divider_non_blocking needs_divider_non_blocking runtime_sdb trace_enabled trace_bank trace_buffer trace_max trace_cache trace_format trace_record_bytes trace_data_width trace_burst_records dpi_timing_enabled dpi_read_min dpi_read_max dpi_write_min dpi_write_max dpi_timing_seed
   [[ -f $file ]] || return 0
   capability=$(value "$file" CAPABILITY)
   scope=$(value "$file" SCOPE)
@@ -178,6 +178,12 @@ migrate_profile_mode() {
   pipeline_html=$(value "$file" NEMU_PIPELINE_HTML)
   performance_html=$(value "$file" NEMU_PERFORMANCE_HTML)
   cache_html=$(value "$file" NEMU_CACHE_HTML)
+  memory_statistics_mode=$(value "$file" NEMU_MEMORY_STATISTICS_MODE)
+  [[ -n $memory_statistics_mode ]] || memory_statistics_mode=Split
+  case "$memory_statistics_mode" in
+    Split|ServiceOnly) ;;
+    *) echo "保存 profile 的 NEMU_MEMORY_STATISTICS_MODE 非法：$file（$memory_statistics_mode）" >&2; exit 1 ;;
+  esac
   integer_execute_stages=$(value "$file" INTEGER_EXECUTE_STAGES)
   [[ -n $integer_execute_stages ]] || integer_execute_stages=1
   [[ $integer_execute_stages == 1 || $integer_execute_stages == 2 ]] || {
@@ -219,6 +225,24 @@ migrate_profile_mode() {
   runtime_sdb=1
   trace_enabled=0; trace_bank=0; trace_buffer=0; trace_max=0; trace_cache=0
   trace_format=0; trace_record_bytes=0; trace_data_width=0; trace_burst_records=0
+  # 保留已经冻结的 timing model；只有缺少这些字段的历史 profile 才补即时响应默认值。
+  dpi_timing_enabled=$(value "$file" DPI_MEMORY_TIMING_ENABLED); [[ -n $dpi_timing_enabled ]] || dpi_timing_enabled=0
+  dpi_read_min=$(value "$file" DPI_MEMORY_READ_RESPONSE_MIN_CYCLES); [[ -n $dpi_read_min ]] || dpi_read_min=1
+  dpi_read_max=$(value "$file" DPI_MEMORY_READ_RESPONSE_MAX_CYCLES); [[ -n $dpi_read_max ]] || dpi_read_max=1
+  dpi_write_min=$(value "$file" DPI_MEMORY_WRITE_RESPONSE_MIN_CYCLES); [[ -n $dpi_write_min ]] || dpi_write_min=1
+  dpi_write_max=$(value "$file" DPI_MEMORY_WRITE_RESPONSE_MAX_CYCLES); [[ -n $dpi_write_max ]] || dpi_write_max=1
+  dpi_timing_seed=$(value "$file" DPI_MEMORY_TIMING_SEED); [[ -n $dpi_timing_seed ]] || dpi_timing_seed=1
+  [[ $dpi_timing_enabled == 0 || $dpi_timing_enabled == 1 ]] || {
+    echo "保存 profile 的 DPI_MEMORY_TIMING_ENABLED 非法：$file（$dpi_timing_enabled）" >&2; exit 1
+  }
+  [[ $dpi_read_min =~ ^[1-9][0-9]*$ && $dpi_read_max =~ ^[1-9][0-9]*$ &&
+    $dpi_write_min =~ ^[1-9][0-9]*$ && $dpi_write_max =~ ^[1-9][0-9]*$ &&
+    $dpi_timing_seed =~ ^[1-9][0-9]*$ ]] || {
+    echo "保存 profile 的 DPI memory timing 数值非法：$file" >&2; exit 1
+  }
+  (( dpi_read_min <= dpi_read_max && dpi_write_min <= dpi_write_max )) || {
+    echo "保存 profile 的 DPI memory timing 范围非法：$file" >&2; exit 1
+  }
   case "$(value "$file" PROTOCOL_ABI)" in
     npc-fpga-runtime-v12)
       trace_enabled=1; trace_bank=1; trace_buffer=16777216; trace_max=200000; trace_cache=4096
@@ -236,11 +260,18 @@ migrate_profile_mode() {
   [[ $cache_html == 0 || $cache_html == 1 ]] || cache_html=0
   [[ $replacement != "$capability" || $normalized_scope != "$scope" ||
     $(value "$file" PROFILE_FORMAT) != "$profile_format" || -z $(value "$file" NEMU_PERFORMANCE_HTML) || -z $(value "$file" NEMU_CACHE_HTML) ||
+    -z $(value "$file" NEMU_MEMORY_STATISTICS_MODE) ||
     -z $saved_preset || -n $saved_host_config || -z $(value "$file" INTEGER_EXECUTE_STAGES) ||
     -z $(value "$file" SERIAL_EXECUTE_STAGES) ||
     -z $(value "$file" REGISTER_INITIAL_FETCH_REQUEST) ||
     -z $(value "$file" SEPARATE_SERIAL_INTEGER_ALU) ||
     -z $(value "$file" SERIAL_EXECUTE_RESULT_FORWARDING) ||
+    -z $(value "$file" DPI_MEMORY_TIMING_ENABLED) ||
+    -z $(value "$file" DPI_MEMORY_READ_RESPONSE_MIN_CYCLES) ||
+    -z $(value "$file" DPI_MEMORY_READ_RESPONSE_MAX_CYCLES) ||
+    -z $(value "$file" DPI_MEMORY_WRITE_RESPONSE_MIN_CYCLES) ||
+    -z $(value "$file" DPI_MEMORY_WRITE_RESPONSE_MAX_CYCLES) ||
+    -z $(value "$file" DPI_MEMORY_TIMING_SEED) ||
     -z $(value "$file" FPGA_RUNTIME_SDB) || -z $(value "$file" FPGA_RUNTIME_TRACE) || -z $(value "$file" FPGA_TRACE_HBM_BANK) ||
     -z $(value "$file" FPGA_TRACE_BUFFER_BYTES) || -z $(value "$file" FPGA_TRACE_MAX_RECORDS) ||
     -z $(value "$file" FPGA_TRACE_CACHE_RECORDS) || -z $(value "$file" FPGA_TRACE_FORMAT) ||
@@ -253,7 +284,8 @@ migrate_profile_mode() {
   if [[ -n $saved_preset || -n $saved_host_config ]]; then
     temporary=$(mktemp "$file.profile-migration.XXXXXX")
     awk -v capability="$replacement" -v scope="$normalized_scope" \
-      -v profile_format="$profile_format" -v performance_html="$performance_html" -v cache_html="$cache_html" -v preset="$preset" \
+      -v profile_format="$profile_format" -v performance_html="$performance_html" -v cache_html="$cache_html" \
+      -v memory_statistics_mode="$memory_statistics_mode" -v preset="$preset" \
       -v integer_execute_stages="$integer_execute_stages" \
       -v serial_execute_stages="$serial_execute_stages" \
       -v register_initial_fetch_request="$register_initial_fetch_request" \
@@ -263,7 +295,9 @@ migrate_profile_mode() {
       -v trace_enabled="$trace_enabled" -v trace_bank="$trace_bank" -v trace_buffer="$trace_buffer" \
       -v trace_max="$trace_max" -v trace_cache="$trace_cache" -v trace_format="$trace_format" \
       -v trace_record_bytes="$trace_record_bytes" -v trace_data_width="$trace_data_width" \
-      -v trace_burst_records="$trace_burst_records" '
+      -v trace_burst_records="$trace_burst_records" \
+      -v dpi_timing_enabled="$dpi_timing_enabled" -v dpi_read_min="$dpi_read_min" -v dpi_read_max="$dpi_read_max" \
+      -v dpi_write_min="$dpi_write_min" -v dpi_write_max="$dpi_write_max" -v dpi_timing_seed="$dpi_timing_seed" '
       /^PROFILE_FORMAT=/ { print "PROFILE_FORMAT=" profile_format; next }
       /^CAPABILITY=/ { print "CAPABILITY=" capability; next }
       /^SCOPE=/ { print "SCOPE=" scope; next }
@@ -271,11 +305,18 @@ migrate_profile_mode() {
       /^NEMU_PRESET=/ { if (!preset_seen++) print "NEMU_PRESET=" preset; next }
       /^NEMU_PERFORMANCE_HTML=/ { next }
       /^NEMU_CACHE_HTML=/ { next }
+      /^NEMU_MEMORY_STATISTICS_MODE=/ { if (!memory_statistics_mode_seen++) print "NEMU_MEMORY_STATISTICS_MODE=" memory_statistics_mode; next }
       /^INTEGER_EXECUTE_STAGES=/ { if (!integer_execute_stages_seen++) print "INTEGER_EXECUTE_STAGES=" integer_execute_stages; next }
       /^SERIAL_EXECUTE_STAGES=/ { if (!serial_execute_stages_seen++) print "SERIAL_EXECUTE_STAGES=" serial_execute_stages; next }
       /^REGISTER_INITIAL_FETCH_REQUEST=/ { if (!register_initial_fetch_request_seen++) print "REGISTER_INITIAL_FETCH_REQUEST=" register_initial_fetch_request; next }
       /^SEPARATE_SERIAL_INTEGER_ALU=/ { if (!separate_serial_integer_alu_seen++) print "SEPARATE_SERIAL_INTEGER_ALU=" separate_serial_integer_alu; next }
       /^SERIAL_EXECUTE_RESULT_FORWARDING=/ { if (!serial_execute_result_forwarding_seen++) print "SERIAL_EXECUTE_RESULT_FORWARDING=" serial_execute_result_forwarding; next }
+      /^DPI_MEMORY_TIMING_ENABLED=/ { if (!dpi_timing_enabled_seen++) print "DPI_MEMORY_TIMING_ENABLED=" dpi_timing_enabled; next }
+      /^DPI_MEMORY_READ_RESPONSE_MIN_CYCLES=/ { if (!dpi_read_min_seen++) print "DPI_MEMORY_READ_RESPONSE_MIN_CYCLES=" dpi_read_min; next }
+      /^DPI_MEMORY_READ_RESPONSE_MAX_CYCLES=/ { if (!dpi_read_max_seen++) print "DPI_MEMORY_READ_RESPONSE_MAX_CYCLES=" dpi_read_max; next }
+      /^DPI_MEMORY_WRITE_RESPONSE_MIN_CYCLES=/ { if (!dpi_write_min_seen++) print "DPI_MEMORY_WRITE_RESPONSE_MIN_CYCLES=" dpi_write_min; next }
+      /^DPI_MEMORY_WRITE_RESPONSE_MAX_CYCLES=/ { if (!dpi_write_max_seen++) print "DPI_MEMORY_WRITE_RESPONSE_MAX_CYCLES=" dpi_write_max; next }
+      /^DPI_MEMORY_TIMING_SEED=/ { if (!dpi_timing_seed_seen++) print "DPI_MEMORY_TIMING_SEED=" dpi_timing_seed; next }
       /^FPGA_DIVIDER_NON_BLOCKING=/ { if (needs_divider_non_blocking && !divider_non_blocking_seen++) print "FPGA_DIVIDER_NON_BLOCKING=" divider_non_blocking; next }
       /^FPGA_RUNTIME_SDB=/ { if (!runtime_sdb_seen++) print "FPGA_RUNTIME_SDB=" runtime_sdb; next }
       /^FPGA_RUNTIME_TRACE=/ { if (!trace_enabled_seen++) print "FPGA_RUNTIME_TRACE=" trace_enabled; next }
@@ -290,11 +331,18 @@ migrate_profile_mode() {
       { print }
       END {
         if (!preset_seen) print "NEMU_PRESET=" preset
+        if (!memory_statistics_mode_seen) print "NEMU_MEMORY_STATISTICS_MODE=" memory_statistics_mode
         if (!integer_execute_stages_seen) print "INTEGER_EXECUTE_STAGES=" integer_execute_stages
         if (!serial_execute_stages_seen) print "SERIAL_EXECUTE_STAGES=" serial_execute_stages
         if (!register_initial_fetch_request_seen) print "REGISTER_INITIAL_FETCH_REQUEST=" register_initial_fetch_request
         if (!separate_serial_integer_alu_seen) print "SEPARATE_SERIAL_INTEGER_ALU=" separate_serial_integer_alu
         if (!serial_execute_result_forwarding_seen) print "SERIAL_EXECUTE_RESULT_FORWARDING=" serial_execute_result_forwarding
+        if (!dpi_timing_enabled_seen) print "DPI_MEMORY_TIMING_ENABLED=" dpi_timing_enabled
+        if (!dpi_read_min_seen) print "DPI_MEMORY_READ_RESPONSE_MIN_CYCLES=" dpi_read_min
+        if (!dpi_read_max_seen) print "DPI_MEMORY_READ_RESPONSE_MAX_CYCLES=" dpi_read_max
+        if (!dpi_write_min_seen) print "DPI_MEMORY_WRITE_RESPONSE_MIN_CYCLES=" dpi_write_min
+        if (!dpi_write_max_seen) print "DPI_MEMORY_WRITE_RESPONSE_MAX_CYCLES=" dpi_write_max
+        if (!dpi_timing_seed_seen) print "DPI_MEMORY_TIMING_SEED=" dpi_timing_seed
         if (needs_divider_non_blocking && !divider_non_blocking_seen) print "FPGA_DIVIDER_NON_BLOCKING=" divider_non_blocking
         if (!runtime_sdb_seen) print "FPGA_RUNTIME_SDB=" runtime_sdb
         if (!trace_enabled_seen) print "FPGA_RUNTIME_TRACE=" trace_enabled
@@ -315,7 +363,7 @@ migrate_profile_mode() {
   fi
 
   temporary=$(mktemp "$file.profile-migration.XXXXXX")
-  awk -v capability="$replacement" -v scope="$normalized_scope" -v profile_format="$profile_format" '
+  awk -v capability="$replacement" -v scope="$normalized_scope" -v profile_format="$profile_format" -v memory_statistics_mode="$memory_statistics_mode" '
     /^PROFILE_FORMAT=/ { print "PROFILE_FORMAT=" profile_format; next }
     /^CAPABILITY=/ { print "CAPABILITY=" capability; next }
     /^SCOPE=/ { print "SCOPE=" scope; next }
@@ -324,6 +372,12 @@ migrate_profile_mode() {
     /^REGISTER_INITIAL_FETCH_REQUEST=/ { next }
     /^SEPARATE_SERIAL_INTEGER_ALU=/ { next }
     /^SERIAL_EXECUTE_RESULT_FORWARDING=/ { next }
+    /^DPI_MEMORY_TIMING_ENABLED=/ { next }
+    /^DPI_MEMORY_READ_RESPONSE_MIN_CYCLES=/ { next }
+    /^DPI_MEMORY_READ_RESPONSE_MAX_CYCLES=/ { next }
+    /^DPI_MEMORY_WRITE_RESPONSE_MIN_CYCLES=/ { next }
+    /^DPI_MEMORY_WRITE_RESPONSE_MAX_CYCLES=/ { next }
+    /^DPI_MEMORY_TIMING_SEED=/ { next }
     /^FPGA_DIVIDER_NON_BLOCKING=/ { next }
     /^FPGA_RUNTIME_SDB=/ { next }
     /^FPGA_RUNTIME_TRACE=/ { next }
@@ -336,6 +390,7 @@ migrate_profile_mode() {
     /^FPGA_TRACE_DATA_WIDTH=/ { next }
     /^FPGA_TRACE_BURST_RECORDS=/ { next }
     /^NEMU_(CONFIG_FQCN|PRESET|BACKEND|TRACE|WATCHPOINT|VCD|PERFORMANCE_HTML|CACHE_HTML|PIPELINE_HTML|NPC_DIFFTEST|DEVICES|OPTIMIZATION|DEBUG|LTO|ASAN)=/ { next }
+    /^NEMU_MEMORY_STATISTICS_MODE=/ { next }
     { print }
   ' "$file" > "$temporary"
   {
@@ -353,11 +408,18 @@ migrate_profile_mode() {
     echo 'NEMU_DEBUG=0'
     echo 'NEMU_LTO=0'
     echo 'NEMU_ASAN=0'
+    echo "NEMU_MEMORY_STATISTICS_MODE=$memory_statistics_mode"
     echo "INTEGER_EXECUTE_STAGES=$integer_execute_stages"
     echo "SERIAL_EXECUTE_STAGES=$serial_execute_stages"
     echo "REGISTER_INITIAL_FETCH_REQUEST=$register_initial_fetch_request"
     echo "SEPARATE_SERIAL_INTEGER_ALU=$separate_serial_integer_alu"
     echo "SERIAL_EXECUTE_RESULT_FORWARDING=$serial_execute_result_forwarding"
+    echo "DPI_MEMORY_TIMING_ENABLED=$dpi_timing_enabled"
+    echo "DPI_MEMORY_READ_RESPONSE_MIN_CYCLES=$dpi_read_min"
+    echo "DPI_MEMORY_READ_RESPONSE_MAX_CYCLES=$dpi_read_max"
+    echo "DPI_MEMORY_WRITE_RESPONSE_MIN_CYCLES=$dpi_write_min"
+    echo "DPI_MEMORY_WRITE_RESPONSE_MAX_CYCLES=$dpi_write_max"
+    echo "DPI_MEMORY_TIMING_SEED=$dpi_timing_seed"
     if [[ $needs_divider_non_blocking == 1 ]]; then echo "FPGA_DIVIDER_NON_BLOCKING=$divider_non_blocking"; fi
     echo "FPGA_RUNTIME_SDB=$runtime_sdb"
     echo "FPGA_RUNTIME_TRACE=$trace_enabled"
@@ -398,7 +460,7 @@ migrate_construction_mode() {
 }
 
 migrate_host_metadata() {
-  local construction=$1 host current preset canonical format pipeline_html performance_html cache_html core_clock temporary
+  local construction=$1 host current preset canonical format pipeline_html performance_html cache_html memory_statistics_mode core_clock temporary
   host="$(dirname "$construction")/abi/nemu/host.env"
   [[ -f $host ]] || return 0
   current=$(value "$host" NEMU_CONFIG_FQCN)
@@ -411,26 +473,36 @@ migrate_host_metadata() {
   pipeline_html=$(value "$host" NEMU_PIPELINE_HTML)
   performance_html=$(value "$host" NEMU_PERFORMANCE_HTML)
   cache_html=$(value "$host" NEMU_CACHE_HTML)
+  memory_statistics_mode=$(value "$host" NEMU_MEMORY_STATISTICS_MODE)
+  [[ -n $memory_statistics_mode ]] || memory_statistics_mode=Split
+  case "$memory_statistics_mode" in
+    Split|ServiceOnly) ;;
+    *) echo "保存 host 的 NEMU_MEMORY_STATISTICS_MODE 非法：$host（$memory_statistics_mode）" >&2; exit 1 ;;
+  esac
   core_clock=$(value "$host" CORE_CLOCK_MHZ)
   [[ $pipeline_html == 1 ]] && performance_html=1
   [[ $cache_html == 1 ]] && performance_html=1
   [[ $performance_html == 0 || $performance_html == 1 ]] || performance_html=0
   [[ $cache_html == 0 || $cache_html == 1 ]] || cache_html=0
   [[ -n $current || $canonical != "$preset" || $format != 7 || -z $pipeline_html || -z $core_clock ||
-    -z $(value "$host" NEMU_PERFORMANCE_HTML) || -z $(value "$host" NEMU_CACHE_HTML) ]] || return 0
+    -z $(value "$host" NEMU_PERFORMANCE_HTML) || -z $(value "$host" NEMU_CACHE_HTML) ||
+    -z $(value "$host" NEMU_MEMORY_STATISTICS_MODE) ]] || return 0
   temporary=$(mktemp "$host.config-migration.XXXXXX")
-  awk -v preset="$canonical" -v performance_html="$performance_html" -v cache_html="$cache_html" '
+  awk -v preset="$canonical" -v performance_html="$performance_html" -v cache_html="$cache_html" \
+    -v memory_statistics_mode="$memory_statistics_mode" '
     /^HOST_FORMAT=/ { print "HOST_FORMAT=7"; next }
     /^NEMU_CONFIG_FQCN=/ { next }
     /^NEMU_PRESET=/ { if (!preset_seen++) print "NEMU_PRESET=" preset; next }
     /^NEMU_PERFORMANCE_HTML=/ { next }
     /^NEMU_CACHE_HTML=/ { next }
+    /^NEMU_MEMORY_STATISTICS_MODE=/ { next }
     /^CORE_CLOCK_MHZ=/ { next }
     { print }
     END {
       if (!preset_seen) print "NEMU_PRESET=" preset
       print "NEMU_PERFORMANCE_HTML=" performance_html
       print "NEMU_CACHE_HTML=" cache_html
+      print "NEMU_MEMORY_STATISTICS_MODE=" memory_statistics_mode
       # v5 及以前的 host 固定以 300 MHz 编译；保留这个编译事实，使非 300 MHz
       # FPGA 构造被校验为需要 host-build，而不会把报告频率静默伪装成正确值。
       print "CORE_CLOCK_MHZ=300"
@@ -1076,7 +1148,7 @@ verify_assets() {
     }
     host="$directory/abi/nemu/host.env"
     if [[ -f $host ]]; then
-      for key in CONFIG_FQCN NEMU_PRESET NEMU_BACKEND NEMU_TRACE NEMU_WATCHPOINT NEMU_VCD NEMU_PERFORMANCE_HTML NEMU_CACHE_HTML NEMU_PIPELINE_HTML \
+      for key in CONFIG_FQCN NEMU_PRESET NEMU_BACKEND NEMU_TRACE NEMU_WATCHPOINT NEMU_VCD NEMU_PERFORMANCE_HTML NEMU_CACHE_HTML NEMU_PIPELINE_HTML NEMU_MEMORY_STATISTICS_MODE \
         NEMU_NPC_DIFFTEST NEMU_DEVICES NEMU_OPTIMIZATION NEMU_DEBUG NEMU_LTO NEMU_ASAN; do
         [[ $(value "$host" "$key") == $(value "$profile" "$key") ]] || {
           echo "构造 NEMU host 元数据与 profile 不匹配：$directory（$key）" >&2; return 1;
@@ -1650,7 +1722,7 @@ do_host_build_directory() {
     echo "完整日志目录：$failed_dir" >&2
     return 1
   fi
-  for key in CONFIG_FQCN NEMU_PRESET NEMU_BACKEND NEMU_TRACE NEMU_WATCHPOINT NEMU_VCD NEMU_PERFORMANCE_HTML NEMU_CACHE_HTML NEMU_PIPELINE_HTML \
+  for key in CONFIG_FQCN NEMU_PRESET NEMU_BACKEND NEMU_TRACE NEMU_WATCHPOINT NEMU_VCD NEMU_PERFORMANCE_HTML NEMU_CACHE_HTML NEMU_PIPELINE_HTML NEMU_MEMORY_STATISTICS_MODE \
     NEMU_NPC_DIFFTEST NEMU_DEVICES NEMU_OPTIMIZATION NEMU_DEBUG NEMU_LTO NEMU_ASAN; do
     [[ $(value "$host_stage/host.env" "$key") == $(value "$profile_stage" "$key") ]] || {
       rm -rf "$stage" "$host_stage"

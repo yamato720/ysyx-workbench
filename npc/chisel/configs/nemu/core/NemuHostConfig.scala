@@ -1,5 +1,24 @@
 package npc
 
+/** 性能报告中 MEM 阶段的统计口径。 */
+sealed trait MemoryStatisticsMode {
+  def name: String
+}
+
+object MemoryStatisticsMode {
+  /** 同时保留访存排队时间和真实服务时间。 */
+  case object Split extends MemoryStatisticsMode {
+    override val name: String = "Split"
+  }
+
+  /** 只把 D$/下游事务的实际服务时间作为 MEM 统计。 */
+  case object ServiceOnly extends MemoryStatisticsMode {
+    override val name: String = "ServiceOnly"
+  }
+
+  val values: Seq[MemoryStatisticsMode] = Seq(Split, ServiceOnly)
+}
+
 /** 由终端直接挂载的完整 NEMU host 配方。
   *
   * XLEN、F 扩展、NPC/SoC 模式、板卡地址和 mailbox ABI 仍来自硬件 profile，不能
@@ -18,7 +37,8 @@ final case class NemuHostConfig(
   optimization: String,
   debug: Boolean,
   lto: Boolean,
-  asan: Boolean
+  asan: Boolean,
+  memoryStatisticsMode: MemoryStatisticsMode = MemoryStatisticsMode.Split
 ) {
   require(Set("O0", "O1", "O2", "O3").contains(optimization),
     s"NEMU optimization must be O0/O1/O2/O3, got $optimization")
@@ -67,6 +87,12 @@ object NemuHostConfig {
     softwareDifftest = true
   )
 
+  /** 本地 Verilator 的交互式 VCD 与提交级流水记录配方。 */
+  val LocalVcdTrace: NemuHostConfig = LocalPipelineTrace.copy(
+    trace = true,
+    vcd = true
+  )
+
   /** U55C XRT host 的完整基础配方。 */
   val U55cBase: NemuHostConfig = NemuHostConfig(
     backend = NemuBackend.U55c,
@@ -113,6 +139,7 @@ object NemuHostConfig {
     Preset("LocalBase", LocalBase),
     Preset("LocalPerformance", LocalPerformance),
     Preset("LocalPipelineTrace", LocalPipelineTrace),
+    Preset("LocalVcdTrace", LocalVcdTrace),
     Preset("U55cBase", U55cBase),
     Preset("U55cPerformanceMonitor", U55cPerformanceMonitor),
     Preset("Zcu102Base", Zcu102Base)

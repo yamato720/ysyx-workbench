@@ -28,6 +28,8 @@ u55c_cache_npc="$work/u55c-cache-npc"
 u55c_performance_monitor="$work/u55c-performance-monitor"
 u55c_cache_performance_monitor="$work/u55c-cache-performance-monitor"
 u55c_cache_150mhz_performance_monitor="$work/u55c-cache-150mhz-performance-monitor"
+u55c_hbm512_cache_150mhz_performance_monitor="$work/u55c-hbm512-cache-150mhz-performance-monitor"
+u55c_hbm512_l2_cache_150mhz_performance_monitor="$work/u55c-hbm512-l2-cache-150mhz-performance-monitor"
 u55c_100mhz_performance_monitor="$work/u55c-100mhz-performance-monitor"
 elaborate Zcu102YsyxSocFpgaConfig "$zcu_soc"
 elaborate Zcu102NpcFpgaConfig "$zcu_npc"
@@ -37,6 +39,8 @@ elaborate U55cCacheNpcFpgaConfig "$u55c_cache_npc"
 elaborate U55cRv64Npc300MHzPerformanceMonitorFpgaConfig "$u55c_performance_monitor"
 elaborate U55cRv64CacheNpc300MHzPerformanceMonitorFpgaConfig "$u55c_cache_performance_monitor"
 elaborate U55cRv64CacheNpc150MHzPerformanceMonitorFpgaConfig "$u55c_cache_150mhz_performance_monitor"
+elaborate U55cRv64Hbm512CacheNpc150MHzPerformanceMonitorFpgaConfig "$u55c_hbm512_cache_150mhz_performance_monitor"
+elaborate U55cRv64Hbm512L2CacheNpc150MHzPerformanceMonitorFpgaConfig "$u55c_hbm512_l2_cache_150mhz_performance_monitor"
 elaborate U55cRv64Npc100MHzPerformanceMonitorFpgaConfig "$u55c_100mhz_performance_monitor"
 
 mapfile -d '' -t zcu_soc_rtl < <(find "$zcu_soc/rtl" -type f \( -name '*.v' -o -name '*.sv' \) -print0 | sort -z)
@@ -87,6 +91,29 @@ grep -qx 'FPGA_CLOCK_MHZ=150' "$u55c_cache_150mhz_performance_monitor/rtl/fpga-p
 grep -qx 'FPGA_PLATFORM_CLOCK_MHZ=300' "$u55c_cache_150mhz_performance_monitor/rtl/fpga-parameters.env"
 grep -qx 'ICACHE_ENABLED=1' "$u55c_cache_150mhz_performance_monitor/rtl/fpga-parameters.env"
 grep -qx 'DCACHE_ENABLED=1' "$u55c_cache_150mhz_performance_monitor/rtl/fpga-parameters.env"
+grep -qx 'NPC_AXI_MEMORY_DATA_WIDTH=512' "$u55c_hbm512_cache_150mhz_performance_monitor/rtl/fpga-parameters.env"
+grep -qx 'ICACHE_LINE_BYTES=64' "$u55c_hbm512_cache_150mhz_performance_monitor/rtl/fpga-parameters.env"
+grep -qx 'DCACHE_LINE_BYTES=64' "$u55c_hbm512_cache_150mhz_performance_monitor/rtl/fpga-parameters.env"
+grep -Eq '\[511:0\].*io_master_w_bits_data' "$u55c_hbm512_cache_150mhz_performance_monitor/rtl/NpcFpgaTop.sv" || {
+  echo '512-bit HBM cache RTL 的主写数据端口不是 512 位' >&2; exit 1;
+}
+grep -Eq '\[511:0\].*io_master_r_bits_data' "$u55c_hbm512_cache_150mhz_performance_monitor/rtl/NpcFpgaTop.sv" || {
+  echo '512-bit HBM cache RTL 的主读数据端口不是 512 位' >&2; exit 1;
+}
+grep -qx 'NPC_AXI_MEMORY_DATA_WIDTH=512' "$u55c_hbm512_l2_cache_150mhz_performance_monitor/rtl/fpga-parameters.env"
+grep -qx 'L2CACHE_ENABLED=1' "$u55c_hbm512_l2_cache_150mhz_performance_monitor/rtl/fpga-parameters.env"
+grep -qx 'L2CACHE_CAPACITY_BYTES=262144' "$u55c_hbm512_l2_cache_150mhz_performance_monitor/rtl/fpga-parameters.env"
+grep -qx 'L2CACHE_LINE_BYTES=64' "$u55c_hbm512_l2_cache_150mhz_performance_monitor/rtl/fpga-parameters.env"
+grep -qx 'L2CACHE_WAYS=8' "$u55c_hbm512_l2_cache_150mhz_performance_monitor/rtl/fpga-parameters.env"
+grep -Rqs '^module UnifiedL2Cache' "$u55c_hbm512_l2_cache_150mhz_performance_monitor/rtl" || {
+  echo 'L2 HBM cache RTL 缺少 UnifiedL2Cache' >&2; exit 1;
+}
+grep -Eq '\[511:0\].*io_master_w_bits_data' "$u55c_hbm512_l2_cache_150mhz_performance_monitor/rtl/NpcFpgaTop.sv" || {
+  echo '512-bit L2 HBM cache RTL 的主写数据端口不是 512 位' >&2; exit 1;
+}
+grep -Eq '\[511:0\].*io_master_r_bits_data' "$u55c_hbm512_l2_cache_150mhz_performance_monitor/rtl/NpcFpgaTop.sv" || {
+  echo '512-bit L2 HBM cache RTL 的主读数据端口不是 512 位' >&2; exit 1;
+}
 grep -qx 'FPGA_RUNTIME_SDB=1' "$u55c_rv64_npc/rtl/fpga-parameters.env"
 grep -qx 'ICACHE_ENABLED=1' "$u55c_cache_npc/rtl/fpga-parameters.env"
 grep -qx 'DCACHE_ENABLED=1' "$u55c_cache_npc/rtl/fpga-parameters.env"

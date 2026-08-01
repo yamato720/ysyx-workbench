@@ -67,6 +67,35 @@ object CacheStorage {
   case object Uram extends CacheStorage { override val name: String = "uram" }
 }
 
+/** 缓存前端的请求接受与命中响应时序。 */
+sealed trait CacheAccessMode { def name: String }
+object CacheAccessMode {
+  /** 保持历史单 MSHR、一次只接受一笔 CPU 请求的行为。 */
+  case object Blocking extends CacheAccessMode { override val name: String = "blocking" }
+  /** 命中请求经 S0 阵列读和 S1 比较后，在握手两拍后按序返回。 */
+  case object PipelinedTwoCycle extends CacheAccessMode {
+    override val name: String = "pipelined-two-cycle"
+  }
+}
+
+/** 两拍本地仿真冻结的 FIFO 深度。 */
+final case class PipelinedCacheQueueConfig(
+  requestDepth: Int = 1,
+  responseDepth: Int = 1,
+  fetchDepth: Int = 1,
+  memoryDepth: Int = 1
+) {
+  private val values = Seq(requestDepth, responseDepth, fetchDepth, memoryDepth)
+  require(values.forall(value => PowerOfTwo(value)),
+    s"cache queue depths must be positive powers of two, got ${values.mkString(",")}")
+}
+
+object PipelinedCacheQueueConfig {
+  val Blocking: PipelinedCacheQueueConfig = PipelinedCacheQueueConfig()
+  /** 本地两拍 Config 以四项固定的四深度队列冻结其可见 ABI。 */
+  val TwoCycleLocal: PipelinedCacheQueueConfig = PipelinedCacheQueueConfig(4, 4, 4, 4)
+}
+
 final case class CacheGeometry(
   capacityBytes: Int,
   lineBytes: Int,
@@ -119,6 +148,9 @@ final case class CacheConfig(
         s"TreePLRU requires a power-of-two way count, got ${geometry.ways}")
     }
   }
+
+  /** cache 可以使用比 CPU-side AXI-Lite port 更宽的 line-memory port。 */
+  def validateMemoryBus(dataWidth: Int): Unit = if (enabled) geometry.validateBus(dataWidth)
 }
 
 object CacheConfig {
@@ -133,15 +165,25 @@ final case class InstructionBufferConfig(enabled: Boolean = false, entries: Int 
 final case class CacheHierarchyConfig(
   icache: CacheConfig = CacheConfig.Disabled,
   dcache: CacheConfig = CacheConfig.Disabled,
-  instructionBuffer: InstructionBufferConfig = InstructionBufferConfig()
+  l2cache: CacheConfig = CacheConfig.Disabled,
+  instructionBuffer: InstructionBufferConfig = InstructionBufferConfig(),
+  accessMode: CacheAccessMode = CacheAccessMode.Blocking,
+  pipelinedQueues: PipelinedCacheQueueConfig = PipelinedCacheQueueConfig.Blocking
 ) {
-  def enabled: Boolean = icache.enabled || dcache.enabled
-  def usesUram: Boolean = Seq(icache, dcache).exists(cache => cache.enabled && cache.storage == CacheStorage.Uram)
+  def enabled: Boolean = icache.enabled || dcache.enabled || l2cache.enabled
+  def usesUram: Boolean = Seq(icache, dcache, l2cache).exists(cache =>
+    cache.enabled && cache.storage == CacheStorage.Uram)
 
   def validate(addressWidth: Int, dataWidth: Int, isa: ISAConfig): Unit = {
     icache.validate(addressWidth, dataWidth)
     dcache.validate(addressWidth, dataWidth)
+    l2cache.validate(addressWidth, dataWidth)
     require(!enabled || isa.Zifencei, "enabled caches require the RISC-V Zifencei extension")
+    require(!l2cache.enabled || (icache.enabled && dcache.enabled),
+      "a unified L2 cache requires both I$ and D$ to be enabled")
+    require(accessMode == CacheAccessMode.PipelinedTwoCycle ||
+      pipelinedQueues == PipelinedCacheQueueConfig.Blocking,
+      "blocking caches must retain single-entry queue defaults")
   }
 }
 
@@ -171,6 +213,52 @@ object CacheHierarchyConfig {
     ),
     instructionBuffer = InstructionBufferConfig(enabled = true, entries = 4)
   )
+
+  /** U55C HBM 预设：一个完整 512-bit memory beat 填充一条 64-byte cache line。 */
+  val WideHbm: CacheHierarchyConfig = CacheHierarchyConfig(
+    icache = CacheConfig(
+      enabled = true,
+      geometry = CacheGeometry(4096, 64, CacheMapping.SetAssociative(2)),
+      replacement = CacheReplacement.TreePLRU,
+      policy = CachePolicy(
+        readMiss = CacheReadMissPolicy.ReadAllocate,
+        write = CacheWritePolicy.WriteThrough,
+        writeMiss = CacheWriteMissPolicy.NoWriteAllocate
+      )
+    ),
+    dcache = CacheConfig(
+      enabled = true,
+      geometry = CacheGeometry(4096, 64, CacheMapping.SetAssociative(2)),
+      replacement = CacheReplacement.TreePLRU,
+      policy = CachePolicy(
+        readMiss = CacheReadMissPolicy.ReadAllocate,
+        write = CacheWritePolicy.WriteBack,
+        writeMiss = CacheWriteMissPolicy.WriteAllocate
+      )
+    ),
+    instructionBuffer = InstructionBufferConfig(enabled = true, entries = 4)
+  )
+
+  /** U55C HBM 层级：在 64-byte L1 line 之后增加共享 256 KiB L2。 */
+  val WideHbmWithL2: CacheHierarchyConfig = WideHbm.copy(
+    l2cache = CacheConfig(
+      enabled = true,
+      geometry = CacheGeometry(256 * 1024, 64, CacheMapping.SetAssociative(8)),
+      replacement = CacheReplacement.TreePLRU,
+      policy = CachePolicy(
+        readMiss = CacheReadMissPolicy.ReadAllocate,
+        write = CacheWritePolicy.WriteBack,
+        writeMiss = CacheWriteMissPolicy.WriteAllocate
+      )
+    )
+  )
+
+  /** 仅本地仿真的两拍 L1/L2 组合；L1 命中后固定两拍产生有序响应。 */
+  val PipelinedTwoCycleWideHbmWithL2: CacheHierarchyConfig = WideHbmWithL2.copy(
+    instructionBuffer = InstructionBufferConfig(enabled = true, entries = 8),
+    accessMode = CacheAccessMode.PipelinedTwoCycle,
+    pipelinedQueues = PipelinedCacheQueueConfig.TwoCycleLocal
+  )
 }
 
 /** 流水线旁路通路的开关。 */
@@ -196,13 +284,58 @@ case class PipelineConfig(
     s"serialExecuteStages must be 1, 2, or 3, got $serialExecuteStages")
 }
 
+/**
+  * 本地 DPI 主存响应时序。
+  *
+  * `min/max*ResponseCycles` 从 AXI-Lite 地址/写请求被接收到对应响应首次有效的周期计数。
+  * 禁用时保持历史单周期 DPI slave。伪随机序列由 RTL 生成，在固定 seed 下可重复，
+  * 从而使时序实验可复现。
+  */
+final case class DpiMemoryTimingConfig(
+  enabled: Boolean = false,
+  minReadResponseCycles: Int = 1,
+  maxReadResponseCycles: Int = 1,
+  minWriteResponseCycles: Int = 1,
+  maxWriteResponseCycles: Int = 1,
+  randomSeed: Int = 1
+) {
+  require(minReadResponseCycles >= 1,
+    s"DPI read response latency must be at least one cycle, got $minReadResponseCycles")
+  require(maxReadResponseCycles >= minReadResponseCycles,
+    s"DPI read response range is invalid: $minReadResponseCycles..$maxReadResponseCycles")
+  require(minWriteResponseCycles >= 1,
+    s"DPI write response latency must be at least one cycle, got $minWriteResponseCycles")
+  require(maxWriteResponseCycles >= minWriteResponseCycles,
+    s"DPI write response range is invalid: $minWriteResponseCycles..$maxWriteResponseCycles")
+  require(randomSeed > 0, "DPI timing randomSeed must be positive")
+}
+
+object DpiMemoryTimingConfig {
+  /** 历史本地 DPI RAM 行为。 */
+  val Immediate: DpiMemoryTimingConfig = DpiMemoryTimingConfig()
+
+  /**
+    * 用于 U55C 宽 L1 实验的校准功能 HBM/DDR 模型。
+    * 一笔 512-bit 本地事务表示一条完整的 64-byte cache line。
+    */
+  val HbmJitter73To81: DpiMemoryTimingConfig = DpiMemoryTimingConfig(
+    enabled = true,
+    minReadResponseCycles = 73,
+    maxReadResponseCycles = 81,
+    minWriteResponseCycles = 73,
+    maxWriteResponseCycles = 81,
+    randomSeed = 0x13579bdf
+  )
+}
+
 /** 主存与 MMIO 地址窗口，以及复位向量。 */
 case class MemoryConfig(
   resetVector: BigInt = BigInt("80000000", 16),
   mainMemoryBase: Long = 0x80000000L,
   mainMemorySize: Long = 0x10000000L,
   mmioBase: Long = 0xA0000000L,
-  mmioSize: Long = 0x02000000L
+  mmioSize: Long = 0x02000000L,
+  dpiTiming: DpiMemoryTimingConfig = DpiMemoryTimingConfig.Immediate
 )
 
 /** 顶层调试和派发控制接口的开关。 */
@@ -217,8 +350,29 @@ case class AxiConfig(
   dataWidth: Int = 64,
   idWidth: Int = 4,
   transactionId: Int = 0,
-  useExternalMaster: Boolean = false
-)
+  useExternalMaster: Boolean = false,
+  externalDataWidth: Int = 0
+) {
+  /** 零值保持历史的单宽度 AXI 契约。 */
+  def resolvedExternalDataWidth: Int = if (externalDataWidth == 0) dataWidth else externalDataWidth
+
+  /**
+    * 无缓存路径保持 CPU 宽度的 Lite fabric。缓存核心可为外部 AXI/HBM 或本地 DPI 选择
+    * 更宽的 cache-memory port，而 CPU 与 MMIO-side port 保持 XLEN 宽度。
+    */
+  def memoryDataWidth(cacheEnabled: Boolean): Int =
+    if (cacheEnabled && externalDataWidth != 0) resolvedExternalDataWidth else dataWidth
+
+  def validate(cacheEnabled: Boolean): Unit = {
+    require(dataWidth >= 32 && (dataWidth & (dataWidth - 1)) == 0,
+      s"CPU AXI data width must be a power of two and at least 32, got $dataWidth")
+    require(resolvedExternalDataWidth >= dataWidth &&
+      (resolvedExternalDataWidth & (resolvedExternalDataWidth - 1)) == 0,
+      s"external AXI data width must be a power of two no narrower than CPU AXI ($dataWidth), got $resolvedExternalDataWidth")
+    require(!useExternalMaster || cacheEnabled || resolvedExternalDataWidth == dataWidth,
+      "a wider external AXI master requires an enabled cache hierarchy")
+  }
+}
 
 /** 硬件模块最终消费的完整、无依赖 NPC 参数值。 */
 case class NpcConfig(
@@ -230,9 +384,18 @@ case class NpcConfig(
   debug: DebugConfig = DebugConfig(),
   cache: CacheHierarchyConfig = CacheHierarchyConfig.Disabled
 ) {
+  def memoryDataWidth: Int = axi.memoryDataWidth(cache.enabled)
+
   def validated: NpcConfig = {
     operators.routes.validate(isa)
+    axi.validate(cache.enabled)
     cache.validate(axi.addrWidth, axi.dataWidth, isa)
+    cache.icache.validateMemoryBus(memoryDataWidth)
+    cache.dcache.validateMemoryBus(memoryDataWidth)
+    cache.l2cache.validateMemoryBus(memoryDataWidth)
+    require(cache.accessMode != CacheAccessMode.PipelinedTwoCycle ||
+      (!axi.useExternalMaster && cache.icache.enabled && cache.dcache.enabled && cache.l2cache.enabled),
+      "PipelinedTwoCycle cache access is limited to the local complete L1/L2 DPI hierarchy")
     this
   }
 }

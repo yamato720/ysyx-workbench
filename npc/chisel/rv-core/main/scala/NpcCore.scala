@@ -22,6 +22,7 @@ class NpcCore(
   private val pipelineConfig = config.pipeline
   private val debugEnabled = config.debug.enableTopDebugIo
   private val axiConfig = config.axi
+  private val memoryDataWidth = config.memoryDataWidth
   private val cacheConfig = config.cache
 
   require(axiConfig.addrWidth == 32,
@@ -37,7 +38,7 @@ class NpcCore(
 
   val io = IO(new Bundle {
     val interrupt = Input(Bool())
-    val master = new Axi4FullMasterIO(axiConfig.addrWidth, axiConfig.dataWidth, axiConfig.idWidth)
+    val master = new Axi4FullMasterIO(axiConfig.addrWidth, memoryDataWidth, axiConfig.idWidth)
     val memoryFault = Output(new MemoryFault(axiConfig.addrWidth))
     val putch = if (axiConfig.useExternalMaster) Some(Decoupled(UInt(8.W))) else None
     val debug = if (debugEnabled) {
@@ -74,11 +75,23 @@ class NpcCore(
 
   val instructionCacheStatistics = WireDefault(0.U.asTypeOf(new CacheStatistics))
   val dataCacheStatistics = WireDefault(0.U.asTypeOf(new CacheStatistics))
+  val unifiedL2Statistics = WireDefault(0.U.asTypeOf(new CacheStatistics))
   val instructionInvalidate = WireDefault(false.B)
   val instructionInvalidateDone = WireDefault(true.B)
   val dataFlush = WireDefault(false.B)
   val dataFlushDone = WireDefault(true.B)
+  val l2Flush = WireDefault(false.B)
+  val l2FlushDone = WireDefault(true.B)
   val dataCacheDrained = WireDefault(true.B)
+  val l2Drained = WireDefault(true.B)
+  // FENCE.I 维护期间会主动关闭取指，不能仅凭前后端暂时空闲就让仿真器
+  // 将稳定的 PC 判定为程序结束；维护控制器重新放行 dispatch 前保持该标志。
+  val cacheMaintenanceBusy = WireDefault(false.B)
+
+  memoryFabric.io.l2Flush := l2Flush
+  l2FlushDone := memoryFabric.io.l2FlushDone
+  l2Drained := memoryFabric.io.l2Drained
+  unifiedL2Statistics := memoryFabric.io.l2Statistics
 
   if (cacheConfig.icache.enabled) {
     val instructionCache = Module(new InstructionCache(config))
@@ -105,21 +118,31 @@ class NpcCore(
 
   if (cacheConfig.enabled) {
     val maintenance = Module(new CacheMaintenanceController(
-      cacheConfig.icache.enabled, cacheConfig.dcache.enabled))
+      cacheConfig.icache.enabled, cacheConfig.dcache.enabled, cacheConfig.l2cache.enabled))
     maintenance.io.fencePending := cacheFencePending
     maintenance.io.fenceInvalidatesInstruction := fenceIPending
     maintenance.io.fenceAccepted := backend.io.dispatch.fire && cacheFencePending
     maintenance.io.backendBusy := backend.io.debug.coreBusy
     maintenance.io.externalDrainRequest := io.cacheMaintenance.map(_.drainRequest).getOrElse(false.B)
     maintenance.io.dcacheFlushDone := dataFlushDone
+    maintenance.io.l2FlushDone := l2FlushDone
     maintenance.io.icacheInvalidateDone := instructionInvalidateDone
     dataFlush := maintenance.io.dcacheFlush
+    l2Flush := maintenance.io.l2Flush
     instructionInvalidate := maintenance.io.icacheInvalidate
     maintenanceDispatchPermit := maintenance.io.dispatchPermit
-    // FENCE orders data visibility but leaves prefetched instructions intact.
-    // Only FENCE.I must discard those younger fetches before I$ invalidation.
-    fenceHold := fenceIPending && !maintenance.io.dispatchPermit
-    io.cacheMaintenance.foreach(_.drained := maintenance.io.externalDrained)
+    // FENCE 只保证数据可见性，保留已经预取的指令；只有 FENCE.I 在 I$ 失效前
+    // 丢弃这些年轻取指，避免之后执行旧指令字。流水模式打一拍后再关闭前端，
+    // 切断“当前派发的 FENCE.I -> fetchFlush -> 当前响应”的组合环；阻塞模式
+    // 保持原来的即时暂停时序。
+    val fenceHoldValue = if (cacheConfig.accessMode == CacheAccessMode.PipelinedTwoCycle) {
+      RegNext(fenceIPending && !maintenance.io.dispatchPermit, false.B)
+    } else {
+      fenceIPending && !maintenance.io.dispatchPermit
+    }
+    fenceHold := fenceHoldValue
+    cacheMaintenanceBusy := !maintenance.io.dispatchPermit
+    io.cacheMaintenance.foreach(_.drained := maintenance.io.externalDrained && dataCacheDrained && l2Drained)
   } else {
     io.cacheMaintenance.foreach(_.drained := true.B)
   }
@@ -146,18 +169,19 @@ class NpcCore(
     faultDpi.io.len := io.memoryFault.len
     faultDpi.io.reason := io.memoryFault.reason
   }
+  // Option.zip 只在两端口都存在时生成配对，foreach 解构该二元组后用 <> 完成 Chisel 连接。
   (io.putch zip memoryFabric.io.putch).foreach { case (external, event) => external <> event }
   if (debugEnabled) {
     val debug = io.debug.get
     debug.frontend := frontend.io.debug
     debug.backend := backend.io.debug
 
-    val coreBusy = debug.frontend.fetchBusy || debug.backend.coreBusy
+    val coreBusy = debug.frontend.fetchBusy || debug.backend.coreBusy || cacheMaintenanceBusy
     val knownBackpressure = debug.frontend.fetchBusy || debug.frontend.dispatchBackpressured ||
       debug.backend.idExBackpressured || debug.backend.integerExecuteBackpressured ||
       debug.backend.exMemBackpressured ||
       debug.backend.memoryWaitingForLsu || debug.backend.lsuTransactionActive ||
-      debug.backend.serialExecuteActive || backend.io.redirectValid
+      debug.backend.serialExecuteActive || backend.io.redirectValid || cacheMaintenanceBusy
     debug.backpressureReasons := Cat(
       coreBusy && !knownBackpressure,
       backend.io.redirectValid,
@@ -187,6 +211,7 @@ class NpcCore(
     debug.master.rData := io.master.r.bits.data
     debug.cache.instruction := instructionCacheStatistics
     debug.cache.data := dataCacheStatistics
-    debug.cache.drained := dataCacheDrained
+    debug.cache.unifiedL2 := unifiedL2Statistics
+    debug.cache.drained := dataCacheDrained && l2Drained
   }
 }

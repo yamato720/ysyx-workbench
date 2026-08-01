@@ -11,9 +11,10 @@ class NpcFpgaSystem(implicit parameters: Parameters) extends Module {
 
   private val width = config.isa.xlen
   private val axiConfig = config.axi
+  private val memoryDataWidth = config.memoryDataWidth
   private val performanceMonitor = FpgaConfigParameters.performanceMonitor
   private val runtimeSdb = FpgaConfigParameters.runtimeSdb
-  val io = IO(new FpgaSystemIO(axiConfig.addrWidth, axiConfig.dataWidth, axiConfig.idWidth,
+  val io = IO(new FpgaSystemIO(axiConfig.addrWidth, memoryDataWidth, axiConfig.idWidth,
     performanceMonitor.enabled, performanceMonitor.traceDataWidth))
 
   val mailbox = Module(new FpgaRuntimeMailbox(width, runtimeSdb.enabled, config.cache.dcache.enabled))
@@ -189,8 +190,9 @@ abstract class NpcFpgaShell(board: FpgaBoard)(implicit parameters: Parameters) e
   override def desiredName: String = "NpcFpgaTop"
 
   private val axiConfig = config.axi
+  private val memoryDataWidth = config.memoryDataWidth
   private val performanceMonitor = FpgaConfigParameters.performanceMonitor
-  val io = IO(new FpgaSystemIO(axiConfig.addrWidth, axiConfig.dataWidth, axiConfig.idWidth,
+  val io = IO(new FpgaSystemIO(axiConfig.addrWidth, memoryDataWidth, axiConfig.idWidth,
     performanceMonitor.enabled, performanceMonitor.traceDataWidth))
   private val system = Module(new NpcFpgaSystem)
   FpgaSystemIO.connect(io, system.io)

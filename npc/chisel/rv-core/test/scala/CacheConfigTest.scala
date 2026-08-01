@@ -48,6 +48,7 @@ class CacheConfigTest extends AnyFlatSpec {
   "NpcConfig" should "remain cache-disabled by default and expose the fixed teaching preset explicitly" in {
     val legacy = NpcConfig().validated
     assert(!legacy.cache.enabled)
+    assert(!legacy.cache.l2cache.enabled)
     assert(!legacy.isa.Zifencei)
 
     val cached = new CacheSimulationConfig().config
@@ -59,6 +60,70 @@ class CacheConfigTest extends AnyFlatSpec {
     assert(cached.cache.dcache.policy.writeMiss == CacheWriteMissPolicy.WriteAllocate)
     assert(cached.cache.instructionBuffer == InstructionBufferConfig(enabled = true, entries = 4))
     assert(cached.isa.Zifencei)
+  }
+
+  it should "derive the wide-HBM L2 geometry and reject it outside its physical-memory topology" in {
+    val hierarchy = CacheHierarchyConfig.WideHbmWithL2
+    assert(hierarchy.icache.geometry.lineBytes == 64)
+    assert(hierarchy.dcache.geometry.lineBytes == 64)
+    assert(hierarchy.l2cache.enabled)
+    assert(hierarchy.l2cache.geometry.capacityBytes == 256 * 1024)
+    assert(hierarchy.l2cache.geometry.lineBytes == 64)
+    assert(hierarchy.l2cache.geometry.ways == 8)
+    assert(hierarchy.l2cache.geometry.sets == 512)
+
+    val base = NpcConfig(
+      isa = ISAConfig(xlen = 64, Zicsr = true, Zifencei = true),
+      axi = AxiConfig(dataWidth = 64, useExternalMaster = true, externalDataWidth = 512),
+      cache = hierarchy
+    )
+    assert(base.validated.memoryDataWidth == 512)
+    assert(base.copy(axi = base.axi.copy(useExternalMaster = false)).validated.memoryDataWidth == 512)
+    assertThrows[IllegalArgumentException](base.copy(cache = hierarchy.copy(icache = CacheConfig.Disabled)).validated)
+
+    val localL2 = new HbmJitterL2CacheSimulationConfig().config
+    assert(localL2.cache.l2cache.enabled)
+    assert(!localL2.axi.useExternalMaster)
+    assert(localL2.memoryDataWidth == 512)
+  }
+
+  it should "freeze the local two-cycle access mode and its four queue depths" in {
+    val pipelined = new PipelinedTwoCycleWideL2SimulationConfig().config
+    assert(pipelined.cache.accessMode == CacheAccessMode.PipelinedTwoCycle)
+    assert(pipelined.cache.pipelinedQueues == PipelinedCacheQueueConfig.TwoCycleLocal)
+    assert(pipelined.cache.instructionBuffer == InstructionBufferConfig(enabled = true, entries = 8))
+    assert(pipelined.cache.icache.geometry.lineBytes == 64)
+    assert(pipelined.cache.l2cache.geometry.capacityBytes == 256 * 1024)
+    assert(pipelined.memoryDataWidth == 512)
+    assert(!pipelined.memory.dpiTiming.enabled)
+    assert(NpcConfig().validated.cache.accessMode == CacheAccessMode.Blocking)
+    assertThrows[IllegalArgumentException](pipelined.copy(
+      axi = pipelined.axi.copy(useExternalMaster = true)).validated)
+  }
+
+  "DPI timing configuration" should "preserve the immediate default and expose the deterministic wide-L1 model" in {
+    val immediate = NpcConfig().validated.memory.dpiTiming
+    assert(!immediate.enabled)
+    assert(immediate.minReadResponseCycles == 1)
+    assert(immediate.maxWriteResponseCycles == 1)
+
+    val hbm = new HbmJitterCacheSimulationConfig().config
+    assert(hbm.cache.enabled)
+    assert(!hbm.cache.l2cache.enabled)
+    assert(!hbm.axi.useExternalMaster)
+    assert(hbm.memoryDataWidth == 512)
+    assert(hbm.memory.dpiTiming == DpiMemoryTimingConfig.HbmJitter73To81)
+    assert(hbm.memory.dpiTiming.minReadResponseCycles == 73)
+    assert(hbm.memory.dpiTiming.maxReadResponseCycles == 81)
+    assert(hbm.memory.dpiTiming.minWriteResponseCycles == 73)
+    assert(hbm.memory.dpiTiming.maxWriteResponseCycles == 81)
+
+    val hbmVcd = new HbmJitterCacheVcdSimulationConfig().config
+    assert(hbmVcd == hbm)
+
+    assertThrows[IllegalArgumentException](DpiMemoryTimingConfig(minReadResponseCycles = 0))
+    assertThrows[IllegalArgumentException](DpiMemoryTimingConfig(minReadResponseCycles = 9, maxReadResponseCycles = 8))
+    assertThrows[IllegalArgumentException](DpiMemoryTimingConfig(randomSeed = 0))
   }
 
   it should "reject caches without Zifencei and record URAM as an FPGA-only storage choice" in {

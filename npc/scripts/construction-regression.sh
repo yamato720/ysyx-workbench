@@ -292,7 +292,7 @@ sed -i -e 's/^HOST_FORMAT=.*/HOST_FORMAT=4/' \
   -e '/^NEMU_CACHE_HTML=/d' \
   "$dpi/abi/nemu/host.env"
 "$manager" ensure "$npc_root" SimulationConfig 0 0
-[[ $(value "$dpi/profile.env" PROFILE_FORMAT) == 21 && $(value "$dpi/profile.env" CAPABILITY) == run &&
+[[ $(value "$dpi/profile.env" PROFILE_FORMAT) == 22 && $(value "$dpi/profile.env" CAPABILITY) == run &&
   $(value "$dpi/profile.env" INTEGER_EXECUTE_STAGES) == 1 &&
   $(value "$dpi/profile.env" SERIAL_EXECUTE_STAGES) == 1 &&
   $(value "$dpi/profile.env" REGISTER_INITIAL_FETCH_REQUEST) == 0 &&
@@ -478,7 +478,7 @@ fi
 "$manager" rebuild "$npc_root" U55cYsyxSocFpgaConfig
 sed -i -e 's/^PROFILE_FORMAT=.*/PROFILE_FORMAT=3/' -e 's/^SCOPE=fpga$/SCOPE=fpga-soc/' "$u55c/profile.env"
 "$manager" ensure "$npc_root" U55cYsyxSocFpgaConfig 0 0
-[[ $(value "$u55c/profile.env" PROFILE_FORMAT) == 21 && $(value "$u55c/profile.env" SCOPE) == fpga &&
+[[ $(value "$u55c/profile.env" PROFILE_FORMAT) == 22 && $(value "$u55c/profile.env" SCOPE) == fpga &&
   $(value "$u55c/profile.env" INTEGER_EXECUTE_STAGES) == 1 &&
   $(value "$u55c/profile.env" SERIAL_EXECUTE_STAGES) == 1 &&
   $(value "$u55c/profile.env" REGISTER_INITIAL_FETCH_REQUEST) == 0 &&

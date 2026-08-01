@@ -31,6 +31,7 @@ class NemuHostConfigTest extends AnyFlatSpec {
     assert(!NemuHostConfig.LocalBase.debug)
     assert(!NemuHostConfig.LocalBase.lto)
     assert(!NemuHostConfig.LocalBase.asan)
+    assert(NemuHostConfig.LocalBase.memoryStatisticsMode == MemoryStatisticsMode.Split)
 
     assert(NemuHostConfig.LocalPerformance.performanceHtml)
     assert(!NemuHostConfig.LocalPerformance.cacheHtml)
@@ -39,6 +40,10 @@ class NemuHostConfigTest extends AnyFlatSpec {
     assert(NemuHostConfig.LocalPipelineTrace.cacheHtml)
     assert(NemuHostConfig.LocalPipelineTrace.pipelineHtml)
     assert(NemuHostConfig.LocalPipelineTrace.softwareDifftest)
+    assert(NemuHostConfig.LocalVcdTrace.trace)
+    assert(NemuHostConfig.LocalVcdTrace.vcd)
+    assert(NemuHostConfig.LocalVcdTrace.pipelineHtml)
+    assert(NemuHostConfig.LocalVcdTrace.softwareDifftest)
     assert(NemuHostConfig.U55cBase.backend == NemuBackend.U55c)
     assert(!NemuHostConfig.U55cBase.performanceHtml)
     assert(!NemuHostConfig.U55cBase.cacheHtml)
@@ -58,6 +63,9 @@ class NemuHostConfigTest extends AnyFlatSpec {
     )
     assert(debug.vcd && debug.debug && debug.optimization == "O0")
     assert(NemuHostConfig.presetName(debug) == "Custom")
+    val serviceOnly = NemuHostConfig.LocalBase.copy(memoryStatisticsMode = MemoryStatisticsMode.ServiceOnly)
+    assert(serviceOnly.memoryStatisticsMode == MemoryStatisticsMode.ServiceOnly)
+    assert(NemuHostConfig.presetName(serviceOnly) == "Custom")
 
     assertThrows[IllegalArgumentException](NemuHostConfig.LocalBase.copy(vcd = true))
     assertThrows[IllegalArgumentException](NemuHostConfig.U55cBase.copy(vcd = true, trace = true))
@@ -107,11 +115,13 @@ class NemuHostConfigTest extends AnyFlatSpec {
       "LocalBase",
       "LocalPerformance",
       "LocalPipelineTrace",
+      "LocalVcdTrace",
       "U55cBase",
       "U55cPerformanceMonitor",
       "Zcu102Base"
     ))
-    assert(NemuHostConfig.registeredPresets.map(_.config).distinct.size == 6)
+    assert(NemuHostConfig.registeredPresets.map(_.config).distinct.size == 7)
     assert(NemuHostConfig.presetName(NemuHostConfig.LocalPipelineTrace) == "LocalPipelineTrace")
+    assert(NemuHostConfig.presetName(NemuHostConfig.LocalVcdTrace) == "LocalVcdTrace")
   }
 }

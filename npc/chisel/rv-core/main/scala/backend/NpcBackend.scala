@@ -89,14 +89,38 @@ class NpcBackend(
   val csrExecution = Module(new CsrExecution(cfg))
   val csrFile = Module(new CsrFile(cfg))
   val machineExternalInterruptPending = csrFile.io.machineExternalInterruptPending
-  val loadStoreUnit = Module(new LSUAXIAdapter(
+  private val pipelinedMemory = config.cache.accessMode == CacheAccessMode.PipelinedTwoCycle
+  private val outstandingLoadDepth = 4
+  val pipelinedMemoryStage = if (pipelinedMemory) Some(Module(new PipelinedMemoryStage(
+    axiConfig.addrWidth,
+    axiConfig.dataWidth,
+    config.memory.mainMemoryBase,
+    config.memory.mainMemorySize,
+    config.cache.pipelinedQueues.memoryDepth,
+    cfg = cfg
+  ))) else None
+  val loadStoreUnit = if (!pipelinedMemory) Some(Module(new LSUAXIAdapter(
     axiConfig.addrWidth,
     axiConfig.dataWidth,
     config.memory.mainMemoryBase,
     config.memory.mainMemorySize
-  ))
-  loadStoreUnit.io.axi <> io.axi
-  io.memoryFault := loadStoreUnit.io.fault
+  ))) else None
+  loadStoreUnit.foreach(_.io.axi <> io.axi)
+  pipelinedMemoryStage.foreach(_.io.axi <> io.axi)
+  val memoryStageBusy = WireDefault(false.B)
+  val memoryStageRdata = WireDefault(0.U(cfg.xlen.W))
+  val memoryStageFault = WireDefault(0.U.asTypeOf(new MemoryFault(axiConfig.addrWidth)))
+  loadStoreUnit.foreach { lsu =>
+    memoryStageBusy := lsu.io.busy
+    memoryStageRdata := lsu.io.rdata
+    memoryStageFault := lsu.io.fault
+  }
+  pipelinedMemoryStage.foreach { stage =>
+    memoryStageBusy := stage.io.busy
+    memoryStageRdata := stage.io.response.bits.loadData
+    memoryStageFault := stage.io.fault
+  }
+  io.memoryFault := memoryStageFault
 
   val dispatch = io.dispatch.bits
   registerFile.io.rs1 := dispatch.rs1
@@ -119,6 +143,22 @@ class NpcBackend(
   val memoryIdle :: memoryWait :: Nil = Enum(2)
   val memoryState = RegInit(memoryIdle)
   val memoryRequestReg = Reg(new ExecuteMemoryPayload(cfg))
+  // 流水 MEM 的四项 load 结果尚未提交时，记录其 rd；只有对应结果进入 WB 后
+  // 才允许依赖者读取寄存器文件，独立指令仍可继续进入访存队列。
+  val pipelinedLoadScoreboardValid = RegInit(VecInit(Seq.fill(4)(false.B)))
+  val pipelinedLoadScoreboardRd = RegInit(VecInit(Seq.fill(4)(0.U(5.W))))
+  val pipelinedLoadScoreboardCount = RegInit(0.U(3.W))
+  val pipelinedLoadAllocate = WireDefault(false.B)
+  val pipelinedLoadAllocateRd = WireDefault(0.U(5.W))
+  val pipelinedLoadCommit = WireDefault(false.B)
+  // 流水 MEM 的 order FIFO 也会暂存普通 ALU/JAL 写回项。它们离开 EX/MEM 后
+  // 仍未进入 WB，必须和 load 一样阻挡同 rd 的年轻指令，避免读到寄存器旧值。
+  val pipelinedMemoryWriteScoreboardValid = RegInit(VecInit(Seq.fill(outstandingLoadDepth)(false.B)))
+  val pipelinedMemoryWriteScoreboardRd = RegInit(VecInit(Seq.fill(outstandingLoadDepth)(0.U(5.W))))
+  val pipelinedMemoryWriteScoreboardCount = RegInit(0.U(3.W))
+  val pipelinedMemoryWriteAllocate = WireDefault(false.B)
+  val pipelinedMemoryWriteAllocateRd = WireDefault(0.U(5.W))
+  val pipelinedMemoryWriteComplete = WireDefault(false.B)
 
   val executeInput = decodeExecuteReg.io.out.bits
   integerExecuteReg.io.flush := frontendRedirectValid
@@ -150,7 +190,7 @@ class NpcBackend(
   val serialOlderInstructionsDrained = olderInstructionsDrained && !serialControlStagePending &&
     !serialResultStagePending &&
     !executeMemoryReg.io.out.valid && memoryState === memoryIdle &&
-    !memoryWritebackReg.io.out.valid && !loadStoreUnit.io.busy
+    !memoryWritebackReg.io.out.valid && !memoryStageBusy
   // 算术请求只会在全部旧指令排空后发射。响应路径由 arithmeticResponseReg 截断，
   // 因而 endpoint 的完成 valid 不会反压到 ID/EX 的完整载荷。
   val arithmeticUnitReady = Mux(
@@ -177,8 +217,13 @@ class NpcBackend(
     executeMemoryReg.io.out.bits.csrReadData, executeMemoryReg.io.out.bits.aluResult)
   val serialExecuteResultForwardData = Mux(serialExecuteResultReg.io.out.bits.csrReadWritebackEnable,
     serialExecuteResultReg.io.out.bits.csrReadData, serialExecuteResultReg.io.out.bits.aluResult)
-  val memoryResponseAvailable = memoryState === memoryWait && !loadStoreUnit.io.busy &&
-    memoryWritebackReg.io.in.ready
+  val pipelinedMemoryResponseAvailable = pipelinedMemoryStage.map(stage =>
+    stage.io.response.valid && stage.io.response.bits.writebackFromMemory).getOrElse(false.B)
+  val memoryResponseAvailable = if (pipelinedMemory) {
+    pipelinedMemoryResponseAvailable && memoryWritebackReg.io.in.ready
+  } else {
+    memoryState === memoryWait && !memoryStageBusy && memoryWritebackReg.io.in.ready
+  }
 
   val forwardingUnit = Module(new ForwardingUnit(cfg.xlen))
   forwardingUnit.io.enableIdForwarding := pipelineConfig.forwarding.enableIdForwarding.B
@@ -213,7 +258,7 @@ class NpcBackend(
     executeState =/= executeIdle,
     serialResultStagePending,
     executeMemoryReg.io.out.valid,
-    memoryState === memoryWait,
+    memoryState === memoryWait && !pipelinedMemory.B,
     memoryWritebackReg.io.out.valid
   )
   val producerWritesRd = Seq(
@@ -279,7 +324,7 @@ class NpcBackend(
     serialForwardData,
     serialExecuteResultForwardData,
     executeMemoryForwardData,
-    loadStoreUnit.io.rdata,
+    memoryStageRdata,
     commitForwardData
   )
 
@@ -341,16 +386,43 @@ class NpcBackend(
   val floatingRawHazard = floatingSourceHazard(dispatch.rs1, dispatch.usesFrs1) ||
     floatingSourceHazard(dispatch.rs2, dispatch.usesFrs2) ||
     floatingSourceHazard(dispatch.rs3, dispatch.usesFrs3)
+  val pipelinedLoadResponseReady = pipelinedMemoryStage.map(stage =>
+    stage.io.response.valid && stage.io.response.bits.writebackFromMemory).getOrElse(false.B)
+  val pipelinedLoadResponseRd = pipelinedMemoryStage.map(_.io.response.bits.rd).getOrElse(0.U(5.W))
+  val pipelinedLoadHazard = if (pipelinedMemory) {
+    val rs1Hazard = dispatch.usesRs1 && dispatch.rs1 =/= 0.U &&
+      pipelinedLoadScoreboardValid.zip(pipelinedLoadScoreboardRd).map {
+        case (valid, rd) => valid && rd === dispatch.rs1
+      }.reduce(_ || _) && !(pipelinedLoadResponseReady && pipelinedLoadResponseRd === dispatch.rs1)
+    val rs2Hazard = dispatch.usesRs2 && dispatch.rs2 =/= 0.U &&
+      pipelinedLoadScoreboardValid.zip(pipelinedLoadScoreboardRd).map {
+        case (valid, rd) => valid && rd === dispatch.rs2
+      }.reduce(_ || _) && !(pipelinedLoadResponseReady && pipelinedLoadResponseRd === dispatch.rs2)
+    rs1Hazard || rs2Hazard
+  } else false.B
+  val pipelinedMemoryWriteHazard = if (pipelinedMemory) {
+    val rs1Hazard = dispatch.usesRs1 && dispatch.rs1 =/= 0.U &&
+      pipelinedMemoryWriteScoreboardValid.zip(pipelinedMemoryWriteScoreboardRd).map {
+        case (valid, rd) => valid && rd === dispatch.rs1
+      }.reduce(_ || _)
+    val rs2Hazard = dispatch.usesRs2 && dispatch.rs2 =/= 0.U &&
+      pipelinedMemoryWriteScoreboardValid.zip(pipelinedMemoryWriteScoreboardRd).map {
+        case (valid, rd) => valid && rd === dispatch.rs2
+      }.reduce(_ || _)
+    rs1Hazard || rs2Hazard
+  } else false.B
   val busyAfterDecode = decodeExecuteReg.io.out.valid || integerExecuteReg.io.out.valid ||
     serialExecuteControlReg.io.out.valid || serialExecuteResultReg.io.out.valid ||
     (executeState =/= executeIdle) || executeMemoryReg.io.out.valid ||
-    (memoryState =/= memoryIdle) || memoryWritebackReg.io.out.valid || loadStoreUnit.io.busy
+    (memoryState =/= memoryIdle && !pipelinedMemory.B) || memoryWritebackReg.io.out.valid || memoryStageBusy
   // 本拍的算术发射不能同时给 ID/EX 填入更年轻的指令；这样 M/F 从请求到 EX/MEM
   // 均是单项按序路径，后续派发只会在响应被 EX/MEM 接收后恢复。
   val arithmeticWillIssue = decodeExecuteReg.io.out.valid && executeInputIsArithmetic && arithmeticCanAccept
   val decodeCanIssue = Mux(
     pipelineConfig.enablePipeline.B,
-    !hazardUnit.io.stall && !floatingRawHazard && !redirectBarrier && !machineExternalInterruptPending && !frontendRedirectValid &&
+    !hazardUnit.io.stall && !floatingRawHazard && !pipelinedLoadHazard &&
+      !pipelinedMemoryWriteHazard &&
+      !redirectBarrier && !machineExternalInterruptPending && !frontendRedirectValid &&
       executeState =/= executeArithmeticWait && !arithmeticWillIssue,
     !busyAfterDecode && !machineExternalInterruptPending && !frontendRedirectValid
   )
@@ -359,10 +431,12 @@ class NpcBackend(
   io.dispatch.ready := decodeExecuteReg.io.in.ready && decodeCanIssue
   decodeExecuteReg.io.in.bits.pc := dispatch.pc
   decodeExecuteReg.io.in.bits.instruction := dispatch.instruction
+  decodeExecuteReg.io.in.bits.perfFetchStartCycle := dispatch.perfFetchStartCycle
   decodeExecuteReg.io.in.bits.perfFetchCycles := dispatch.perfFetchCycles
   decodeExecuteReg.io.in.bits.perfDecodeStartCycle := dispatch.perfDecodeStartCycle
   decodeExecuteReg.io.in.bits.perfDecodeCycles := 0.U
-  decodeExecuteReg.io.in.bits.perfExecuteStartCycle := 0.U
+  decodeExecuteReg.io.in.bits.perfExecuteStartCycle := Mux(
+    twoStageIntegerExecute.B, 0.U(64.W), performanceCycle)
   def normalizedFpr(raw: UInt): UInt =
     if (cfg.xlen == 64) Mux(raw(63, 32) === Fill(32, 1.U(1.W)), raw, Cat(Fill(32, 1.U(1.W)), "h7fc00000".U(32.W)))
     else raw
@@ -599,10 +673,14 @@ class NpcBackend(
     val payload = Wire(new ExecuteMemoryPayload(cfg))
     payload.pc := request.pc
     payload.instruction := request.instruction
+    payload.perfFetchStartCycle := request.perfFetchStartCycle
     payload.perfFetchCycles := request.perfFetchCycles
+    payload.perfDecodeStartCycle := request.perfDecodeStartCycle
     payload.perfDecodeCycles := perfDecodeCycles
+    payload.perfExecuteStartCycle := request.perfExecuteStartCycle
     payload.perfExecuteCycles := perfExecuteCycles
     payload.perfMemoryStartCycle := performanceCycle
+    payload.perfMemoryQueueStartCycle := performanceCycle
     payload.aluResult := aluResult
     payload.branchTaken := branchTaken
     payload.branchTarget := branchTarget
@@ -690,6 +768,7 @@ class NpcBackend(
     executeMemoryInput.perfExecuteCycles := serialExecuteResultReg.io.out.bits.perfExecuteCycles + 1.U
   }
   executeMemoryInput.perfMemoryStartCycle := performanceCycle
+  executeMemoryInput.perfMemoryQueueStartCycle := performanceCycle
   executeMemoryReg.io.flush := false.B
   executeMemoryReg.io.in.valid := !executeMemoryRedirectPending &&
     (directIntegerExecuteFire || arithmeticResponseAvailable ||
@@ -715,10 +794,18 @@ class NpcBackend(
     val branchNextPc = Mux(src.branchTaken === 2.U, src.jalrTarget, src.branchTarget)
     dst.pc := src.pc
     dst.instruction := src.instruction
+    dst.perfFetchStartCycle := src.perfFetchStartCycle
     dst.perfFetchCycles := src.perfFetchCycles
+    dst.perfDecodeStartCycle := src.perfDecodeStartCycle
     dst.perfDecodeCycles := src.perfDecodeCycles
+    dst.perfExecuteStartCycle := src.perfExecuteStartCycle
     dst.perfExecuteCycles := src.perfExecuteCycles
+    dst.perfMemoryStartCycle := src.perfMemoryStartCycle
     dst.perfMemoryCycles := performanceCycle - src.perfMemoryStartCycle
+    dst.perfMemoryQueueStartCycle := src.perfMemoryQueueStartCycle
+    dst.perfMemoryServiceStartCycle := src.perfMemoryStartCycle
+    dst.perfMemoryQueueCycles := 0.U
+    dst.perfMemoryServiceCycles := performanceCycle - src.perfMemoryStartCycle
     dst.perfWritebackStartCycle := performanceCycle
     dst.nextPc := Mux(src.branch && src.branchTaken =/= 0.U, branchNextPc, src.pc + 4.U)
     dst.rd := src.rd
@@ -749,33 +836,113 @@ class NpcBackend(
   memoryWritebackReg.io.in.bits := 0.U.asTypeOf(new MemoryWritebackPayload(cfg))
   executeMemoryReg.io.out.ready := false.B
   val memoryAccess = executeMemoryReg.io.out.bits.loadEnable || executeMemoryReg.io.out.bits.storeEnable
-  val memoryStart = memoryState === memoryIdle && executeMemoryReg.io.out.fire && memoryAccess
-  loadStoreUnit.io.start := memoryStart
-  loadStoreUnit.io.addr := Mux(memoryStart, executeMemoryReg.io.out.bits.aluResult(31, 0), memoryRequestReg.aluResult(31, 0))
-  loadStoreUnit.io.wdata := Mux(memoryStart, executeMemoryReg.io.out.bits.storeData, memoryRequestReg.storeData)
-  loadStoreUnit.io.accessType := Mux(memoryStart, executeMemoryReg.io.out.bits.funct3, memoryRequestReg.funct3)
-  loadStoreUnit.io.memRead := Mux(memoryStart, executeMemoryReg.io.out.bits.loadEnable, memoryRequestReg.loadEnable)
-  loadStoreUnit.io.memWrite := Mux(memoryStart, executeMemoryReg.io.out.bits.storeEnable, memoryRequestReg.storeEnable)
-  when(memoryState === memoryIdle) {
-    when(executeMemoryReg.io.out.valid && memoryAccess) {
-      executeMemoryReg.io.out.ready := !loadStoreUnit.io.busy
-      when(executeMemoryReg.io.out.fire) {
-        memoryRequestReg := executeMemoryReg.io.out.bits
-        memoryState := memoryWait
+  if (pipelinedMemory) {
+    val stage = pipelinedMemoryStage.get
+    stage.io.cycle := performanceCycle
+    stage.io.flush := false.B
+    // Scoreboard 满时只阻止新的 load 进入 MEM；已有 store 和非访存指令仍可
+    // 保持队列顺序，避免四项 outstanding 被错误地退化成单项阻塞。
+    val loadSlotAvailable = pipelinedLoadScoreboardCount =/= outstandingLoadDepth.U ||
+      pipelinedLoadCommit
+    val memoryStageInputAllowed = !memoryAccess || !executeMemoryReg.io.out.bits.loadEnable ||
+      loadSlotAvailable
+    stage.io.request.valid := executeMemoryReg.io.out.valid && memoryStageInputAllowed
+    stage.io.request.bits := executeMemoryReg.io.out.bits
+    executeMemoryReg.io.out.ready := stage.io.request.ready && memoryStageInputAllowed
+    memoryWritebackReg.io.in.valid := stage.io.response.valid
+    memoryWritebackReg.io.in.bits := stage.io.response.bits
+    stage.io.response.ready := memoryWritebackReg.io.in.ready
+    pipelinedLoadAllocate := stage.io.request.fire &&
+      stage.io.request.bits.loadEnable && stage.io.request.bits.registerWriteEnable &&
+      stage.io.request.bits.rd =/= 0.U
+    pipelinedLoadAllocateRd := stage.io.request.bits.rd
+    pipelinedMemoryWriteAllocate := stage.io.request.fire &&
+      stage.io.request.bits.registerWriteEnable && stage.io.request.bits.rd =/= 0.U
+    pipelinedMemoryWriteAllocateRd := stage.io.request.bits.rd
+    pipelinedMemoryWriteComplete := stage.io.response.fire &&
+      stage.io.response.bits.registerWriteEnable && stage.io.response.bits.rd =/= 0.U
+  } else {
+    val lsu = loadStoreUnit.get
+    val memoryStart = memoryState === memoryIdle && executeMemoryReg.io.out.fire && memoryAccess
+    lsu.io.start := memoryStart
+    lsu.io.addr := Mux(memoryStart, executeMemoryReg.io.out.bits.aluResult(31, 0), memoryRequestReg.aluResult(31, 0))
+    lsu.io.wdata := Mux(memoryStart, executeMemoryReg.io.out.bits.storeData, memoryRequestReg.storeData)
+    lsu.io.accessType := Mux(memoryStart, executeMemoryReg.io.out.bits.funct3, memoryRequestReg.funct3)
+    lsu.io.memRead := Mux(memoryStart, executeMemoryReg.io.out.bits.loadEnable, memoryRequestReg.loadEnable)
+    lsu.io.memWrite := Mux(memoryStart, executeMemoryReg.io.out.bits.storeEnable, memoryRequestReg.storeEnable)
+    when(memoryState === memoryIdle) {
+      when(executeMemoryReg.io.out.valid && memoryAccess) {
+        executeMemoryReg.io.out.ready := !lsu.io.busy
+        when(executeMemoryReg.io.out.fire) {
+          memoryRequestReg := executeMemoryReg.io.out.bits
+          memoryState := memoryWait
+        }
+      }.otherwise {
+        memoryWritebackReg.io.in.valid := executeMemoryReg.io.out.valid
+        driveMemoryWritebackPayload(memoryWritebackReg.io.in.bits, executeMemoryReg.io.out.bits, 0.U(cfg.xlen.W))
+        executeMemoryReg.io.out.ready := memoryWritebackReg.io.in.ready
       }
     }.otherwise {
-      memoryWritebackReg.io.in.valid := executeMemoryReg.io.out.valid
-      driveMemoryWritebackPayload(memoryWritebackReg.io.in.bits, executeMemoryReg.io.out.bits, 0.U(cfg.xlen.W))
-      executeMemoryReg.io.out.ready := memoryWritebackReg.io.in.ready
+      memoryWritebackReg.io.in.valid := !lsu.io.busy
+      driveMemoryWritebackPayload(memoryWritebackReg.io.in.bits, memoryRequestReg, lsu.io.rdata)
+      when(memoryWritebackReg.io.in.fire) { memoryState := memoryIdle }
     }
-  }.otherwise {
-    memoryWritebackReg.io.in.valid := !loadStoreUnit.io.busy
-    driveMemoryWritebackPayload(memoryWritebackReg.io.in.bits, memoryRequestReg, loadStoreUnit.io.rdata)
-    when(memoryWritebackReg.io.in.fire) { memoryState := memoryIdle }
   }
 
   memoryWritebackReg.io.out.ready := true.B
   val commitFire = memoryWritebackReg.io.out.fire
+  pipelinedLoadCommit := pipelinedMemory.B && commitFire &&
+    memoryWritebackReg.io.out.bits.writebackFromMemory &&
+    memoryWritebackReg.io.out.bits.registerWriteEnable &&
+    memoryWritebackReg.io.out.bits.rd =/= 0.U
+  when(pipelinedMemory.B) {
+    when(pipelinedLoadCommit) {
+      for (index <- 0 until outstandingLoadDepth - 1) {
+        pipelinedLoadScoreboardValid(index) := pipelinedLoadScoreboardValid(index + 1)
+        pipelinedLoadScoreboardRd(index) := pipelinedLoadScoreboardRd(index + 1)
+      }
+      pipelinedLoadScoreboardValid(outstandingLoadDepth - 1) := false.B
+      when(pipelinedLoadAllocate) {
+        // 同拍提交一项并接收一项时，队列长度不变；新项占据提交后队尾。
+        when(pipelinedLoadScoreboardCount =/= 0.U) {
+          val appendIndex = (pipelinedLoadScoreboardCount - 1.U)(1, 0)
+          pipelinedLoadScoreboardValid(appendIndex) := true.B
+          pipelinedLoadScoreboardRd(appendIndex) := pipelinedLoadAllocateRd
+        }
+      }.otherwise {
+        pipelinedLoadScoreboardCount := pipelinedLoadScoreboardCount - 1.U
+      }
+    }.elsewhen(pipelinedLoadAllocate) {
+      // 未满时 count 只能是 0..3，因此低两位就是合法的 Vec 索引。
+      pipelinedLoadScoreboardValid(pipelinedLoadScoreboardCount(1, 0)) := true.B
+      pipelinedLoadScoreboardRd(pipelinedLoadScoreboardCount(1, 0)) := pipelinedLoadAllocateRd
+      pipelinedLoadScoreboardCount := pipelinedLoadScoreboardCount + 1.U
+    }
+
+    when(pipelinedMemoryWriteComplete) {
+      for (index <- 0 until outstandingLoadDepth - 1) {
+        pipelinedMemoryWriteScoreboardValid(index) := pipelinedMemoryWriteScoreboardValid(index + 1)
+        pipelinedMemoryWriteScoreboardRd(index) := pipelinedMemoryWriteScoreboardRd(index + 1)
+      }
+      pipelinedMemoryWriteScoreboardValid(outstandingLoadDepth - 1) := false.B
+      when(pipelinedMemoryWriteAllocate) {
+        // 同拍完成一项并接收一项时，写回 scoreboard 保持原长度，新项进入队尾。
+        when(pipelinedMemoryWriteScoreboardCount =/= 0.U) {
+          val appendIndex = (pipelinedMemoryWriteScoreboardCount - 1.U)(1, 0)
+          pipelinedMemoryWriteScoreboardValid(appendIndex) := true.B
+          pipelinedMemoryWriteScoreboardRd(appendIndex) := pipelinedMemoryWriteAllocateRd
+        }
+      }.otherwise {
+        pipelinedMemoryWriteScoreboardCount := pipelinedMemoryWriteScoreboardCount - 1.U
+      }
+    }.elsewhen(pipelinedMemoryWriteAllocate) {
+      // order FIFO 未满时 count 只能是 0..3，低两位可直接作为 Vec 索引。
+      pipelinedMemoryWriteScoreboardValid(pipelinedMemoryWriteScoreboardCount(1, 0)) := true.B
+      pipelinedMemoryWriteScoreboardRd(pipelinedMemoryWriteScoreboardCount(1, 0)) :=
+        pipelinedMemoryWriteAllocateRd
+      pipelinedMemoryWriteScoreboardCount := pipelinedMemoryWriteScoreboardCount + 1.U
+    }
+  }
   val commitWriteData = Mux(memoryWritebackReg.io.out.bits.csrReadWritebackEnable,
     memoryWritebackReg.io.out.bits.csrReadData,
     Mux(memoryWritebackReg.io.out.bits.writebackFromMemory,
@@ -804,7 +971,7 @@ class NpcBackend(
   val interruptPipelineDrained = !decodeExecuteReg.io.out.valid && !integerExecuteReg.io.out.valid &&
     !serialExecuteControlReg.io.out.valid && !serialExecuteResultReg.io.out.valid &&
     !arithmeticResponseReg.io.out.valid && executeState === executeIdle &&
-    !executeMemoryReg.io.out.valid && memoryState === memoryIdle && !loadStoreUnit.io.busy
+    !executeMemoryReg.io.out.valid && memoryState === memoryIdle && !memoryStageBusy
   val commitSynchronousTrap = memoryWritebackReg.io.out.bits.trapEnable
   val commitMret = memoryWritebackReg.io.out.bits.mretEnable
   val commitExternalInterrupt = commitFire && machineExternalInterruptPending &&
@@ -832,10 +999,13 @@ class NpcBackend(
       Mux(commitMret, csrFile.io.machineExceptionPc,
       memoryWritebackReg.io.out.bits.nextPc))
   )
-  when(io.dispatch.fire && (dispatch.trapEnable || dispatch.mretEnable)) {
+  // 较早的 branch 可能在较年轻的 trap/mret 已进入 ID/EX 后发出 redirect。后者会被
+  // 冲刷，因此不能保留其 dispatch 时建立的屏障，否则 redirect 后的取指流会永久阻塞。
+  when(frontendRedirectValid) {
+    redirectBarrier := false.B
+  }.elsewhen(io.dispatch.fire && (dispatch.trapEnable || dispatch.mretEnable)) {
     redirectBarrier := true.B
   }
-  when(commitRedirectValid) { redirectBarrier := false.B }
 
   val commitValidDebug = RegNext(commitFire, false.B)
   val commitPcDebug = RegEnable(memoryWritebackReg.io.out.bits.pc, 0.U(cfg.xlen.W), commitFire)
@@ -854,9 +1024,27 @@ class NpcBackend(
     memoryWritebackReg.io.out.bits.aluResult(log2Ceil(cfg.xlen / 8) - 1, 0), cfg.xlen),
     0.U(cfg.xlen.W), commitStore)
   val commitFetchCyclesDebug = RegEnable(memoryWritebackReg.io.out.bits.perfFetchCycles, 0.U(64.W), commitFire)
+  val commitFetchStartCycleDebug = RegEnable(
+    memoryWritebackReg.io.out.bits.perfFetchStartCycle, 0.U(64.W), commitFire)
+  val commitDecodeStartCycleDebug = RegEnable(
+    memoryWritebackReg.io.out.bits.perfDecodeStartCycle, 0.U(64.W), commitFire)
+  val commitExecuteStartCycleDebug = RegEnable(
+    memoryWritebackReg.io.out.bits.perfExecuteStartCycle, 0.U(64.W), commitFire)
+  val commitMemoryStartCycleDebug = RegEnable(
+    memoryWritebackReg.io.out.bits.perfMemoryStartCycle, 0.U(64.W), commitFire)
+  val commitMemoryQueueStartCycleDebug = RegEnable(
+    memoryWritebackReg.io.out.bits.perfMemoryQueueStartCycle, 0.U(64.W), commitFire)
+  val commitMemoryServiceStartCycleDebug = RegEnable(
+    memoryWritebackReg.io.out.bits.perfMemoryServiceStartCycle, 0.U(64.W), commitFire)
+  val commitWritebackStartCycleDebug = RegEnable(
+    memoryWritebackReg.io.out.bits.perfWritebackStartCycle, 0.U(64.W), commitFire)
   val commitDecodeCyclesDebug = RegEnable(memoryWritebackReg.io.out.bits.perfDecodeCycles, 0.U(64.W), commitFire)
   val commitExecuteCyclesDebug = RegEnable(memoryWritebackReg.io.out.bits.perfExecuteCycles, 0.U(64.W), commitFire)
   val commitMemoryCyclesDebug = RegEnable(memoryWritebackReg.io.out.bits.perfMemoryCycles, 0.U(64.W), commitFire)
+  val commitMemoryQueueCyclesDebug = RegEnable(
+    memoryWritebackReg.io.out.bits.perfMemoryQueueCycles, 0.U(64.W), commitFire)
+  val commitMemoryServiceCyclesDebug = RegEnable(
+    memoryWritebackReg.io.out.bits.perfMemoryServiceCycles, 0.U(64.W), commitFire)
   val commitWritebackCyclesDebug = RegEnable(performanceCycle - memoryWritebackReg.io.out.bits.perfWritebackStartCycle, 0.U(64.W), commitFire)
   val commitTrapEnDebug = RegNext(csrFile.io.trapEnable, false.B)
   val commitCsrAccessAllowedDebug = RegEnable(memoryWritebackReg.io.out.bits.csrAccessAllowed, false.B, commitFire)
@@ -878,7 +1066,9 @@ class NpcBackend(
     serialExecuteBackpressured) {
     executeStallCycles := executeStallCycles + 1.U
   }
-  when((executeMemoryReg.io.out.valid && !executeMemoryReg.io.out.ready) || memoryState === memoryWait) {
+  when((executeMemoryReg.io.out.valid && !executeMemoryReg.io.out.ready) ||
+    (memoryState === memoryWait && !pipelinedMemory.B) ||
+    (pipelinedMemory.B && memoryStageBusy)) {
     memoryStallCycles := memoryStallCycles + 1.U
   }
 
@@ -916,6 +1106,10 @@ class NpcBackend(
   io.debug.sampleDecodeCycles := memoryWritebackReg.io.out.bits.perfDecodeCycles
   io.debug.sampleExecuteCycles := memoryWritebackReg.io.out.bits.perfExecuteCycles
   io.debug.sampleMemoryCycles := memoryWritebackReg.io.out.bits.perfMemoryCycles
+  io.debug.sampleMemoryQueueStartCycle := memoryWritebackReg.io.out.bits.perfMemoryQueueStartCycle
+  io.debug.sampleMemoryServiceStartCycle := memoryWritebackReg.io.out.bits.perfMemoryServiceStartCycle
+  io.debug.sampleMemoryQueueCycles := memoryWritebackReg.io.out.bits.perfMemoryQueueCycles
+  io.debug.sampleMemoryServiceCycles := memoryWritebackReg.io.out.bits.perfMemoryServiceCycles
   io.debug.sampleWritebackCycles := performanceCycle - memoryWritebackReg.io.out.bits.perfWritebackStartCycle
   // `mtestexit` is an FPGA runtime ABI, not a RISC-V exception. It is
   // deliberately derived from the commit payload, so an EBREAK remains an
@@ -928,24 +1122,34 @@ class NpcBackend(
   io.debug.completionCommitNextPc := commitNextPc
   io.debug.cycleCount := performanceCycle
   io.debug.commitFetchCycles := commitFetchCyclesDebug
+  io.debug.commitFetchStartCycle := commitFetchStartCycleDebug
+  io.debug.commitDecodeStartCycle := commitDecodeStartCycleDebug
+  io.debug.commitExecuteStartCycle := commitExecuteStartCycleDebug
+  io.debug.commitMemoryStartCycle := commitMemoryStartCycleDebug
+  io.debug.commitMemoryQueueStartCycle := commitMemoryQueueStartCycleDebug
+  io.debug.commitMemoryServiceStartCycle := commitMemoryServiceStartCycleDebug
+  io.debug.commitWritebackStartCycle := commitWritebackStartCycleDebug
   io.debug.commitDecodeCycles := commitDecodeCyclesDebug
   io.debug.commitExecuteCycles := commitExecuteCyclesDebug
   io.debug.commitMemoryCycles := commitMemoryCyclesDebug
+  io.debug.commitMemoryQueueCycles := commitMemoryQueueCyclesDebug
+  io.debug.commitMemoryServiceCycles := commitMemoryServiceCyclesDebug
   io.debug.commitWritebackCycles := commitWritebackCyclesDebug
   io.debug.pipelineFeatures := Cat(pipelineConfig.forwarding.enableExecuteForwarding.B,
     pipelineConfig.forwarding.enableIdForwarding.B, pipelineConfig.enablePipeline.B)
   io.debug.idStallCycles := idStallCycles
   io.debug.executeStallCycles := executeStallCycles
   io.debug.memoryStallCycles := memoryStallCycles
-  io.debug.coreBusy := busyAfterDecode || loadStoreUnit.io.busy
+  io.debug.coreBusy := busyAfterDecode || memoryStageBusy
   io.debug.executeAluResult := serialExecuteResult
-  io.debug.memoryResult := loadStoreUnit.io.rdata
+  io.debug.memoryResult := memoryStageRdata
   io.debug.dispatchBackpressured := io.dispatch.valid && !io.dispatch.ready
   io.debug.idExBackpressured := idExBackpressured
   io.debug.integerExecuteBackpressured := integerExecuteBackpressured
   io.debug.exMemBackpressured := executeMemoryReg.io.out.valid && !executeMemoryReg.io.out.ready
-  io.debug.memoryWaitingForLsu := memoryState === memoryWait
-  io.debug.lsuTransactionActive := loadStoreUnit.io.busy
+  io.debug.memoryWaitingForLsu := (memoryState === memoryWait && !pipelinedMemory.B) ||
+    (pipelinedMemory.B && memoryStageBusy)
+  io.debug.lsuTransactionActive := memoryStageBusy
   io.debug.serialExecuteActive := executeState =/= executeIdle || serialControlStagePending ||
     serialResultStagePending
 }

@@ -61,6 +61,7 @@ class PipelineRegister[T <: Data](gen: T) extends Module {
 class FetchDecodePayload(cfg: ISAConfig) extends Bundle {
   val pc = UInt(cfg.xlen.W)
   val instruction = UInt(32.W)
+  val perfFetchStartCycle = UInt(64.W)
   // 仿真性能侧带：从 PC 生效到进入 IF/ID 的取指周期数，以及 ID 起点。
   val perfFetchCycles = UInt(64.W)
   val perfDecodeStartCycle = UInt(64.W)
@@ -76,6 +77,7 @@ class FetchDecodePayload(cfg: ISAConfig) extends Bundle {
 class DecodedDispatchPayload(cfg: ISAConfig) extends Bundle {
   val pc = UInt(cfg.xlen.W)
   val instruction = UInt(32.W)
+  val perfFetchStartCycle = UInt(64.W)
   val perfFetchCycles = UInt(64.W)
   val perfDecodeStartCycle = UInt(64.W)
 
@@ -121,6 +123,7 @@ class DecodedDispatchPayload(cfg: ISAConfig) extends Bundle {
 class DecodeExecutePayload(cfg: ISAConfig) extends Bundle {
   val pc = UInt(cfg.xlen.W)
   val instruction = UInt(32.W)
+  val perfFetchStartCycle = UInt(64.W)
   val perfFetchCycles = UInt(64.W)
   val perfDecodeStartCycle = UInt(64.W)
   val perfDecodeCycles = UInt(64.W)
@@ -170,10 +173,15 @@ class DecodeExecutePayload(cfg: ISAConfig) extends Bundle {
 class ExecuteMemoryPayload(cfg: ISAConfig) extends Bundle {
   val pc = UInt(cfg.xlen.W)
   val instruction = UInt(32.W)
+  val perfFetchStartCycle = UInt(64.W)
   val perfFetchCycles = UInt(64.W)
+  val perfDecodeStartCycle = UInt(64.W)
   val perfDecodeCycles = UInt(64.W)
+  val perfExecuteStartCycle = UInt(64.W)
   val perfExecuteCycles = UInt(64.W)
+  // 该指令进入 EX/MEM 访存队列的周期；真正的 service 起点由 MEM stage 在 AXI 握手时填写。
   val perfMemoryStartCycle = UInt(64.W)
+  val perfMemoryQueueStartCycle = UInt(64.W)
   val aluResult = UInt(cfg.xlen.W)
   val branchTaken = UInt(3.W)
   val branchTarget = UInt(cfg.xlen.W)
@@ -208,10 +216,19 @@ class ExecuteMemoryPayload(cfg: ISAConfig) extends Bundle {
 class MemoryWritebackPayload(cfg: ISAConfig) extends Bundle {
   val pc = UInt(cfg.xlen.W)
   val instruction = UInt(32.W)
+  val perfFetchStartCycle = UInt(64.W)
   val perfFetchCycles = UInt(64.W)
+  val perfDecodeStartCycle = UInt(64.W)
   val perfDecodeCycles = UInt(64.W)
+  val perfExecuteStartCycle = UInt(64.W)
   val perfExecuteCycles = UInt(64.W)
+  // MEM 字段的主值保持为实际 service 时间；queue 侧带单独保留排队区间。
+  val perfMemoryStartCycle = UInt(64.W)
   val perfMemoryCycles = UInt(64.W)
+  val perfMemoryQueueStartCycle = UInt(64.W)
+  val perfMemoryServiceStartCycle = UInt(64.W)
+  val perfMemoryQueueCycles = UInt(64.W)
+  val perfMemoryServiceCycles = UInt(64.W)
   val perfWritebackStartCycle = UInt(64.W)
   val nextPc = UInt(cfg.xlen.W)
   val rd = UInt(5.W)

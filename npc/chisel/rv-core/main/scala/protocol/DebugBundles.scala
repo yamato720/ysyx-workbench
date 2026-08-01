@@ -57,6 +57,10 @@ class NpcBackendDebugBundle(cfg: ISAConfig) extends Bundle {
   val sampleDecodeCycles = UInt(64.W)
   val sampleExecuteCycles = UInt(64.W)
   val sampleMemoryCycles = UInt(64.W)
+  val sampleMemoryQueueStartCycle = UInt(64.W)
+  val sampleMemoryServiceStartCycle = UInt(64.W)
+  val sampleMemoryQueueCycles = UInt(64.W)
+  val sampleMemoryServiceCycles = UInt(64.W)
   val sampleWritebackCycles = UInt(64.W)
   val completionCommitValid = Bool()
   val completionCommitPc = UInt(cfg.xlen.W)
@@ -64,9 +68,18 @@ class NpcBackendDebugBundle(cfg: ISAConfig) extends Bundle {
 
   val cycleCount = UInt(64.W)
   val commitFetchCycles = UInt(64.W)
+  val commitFetchStartCycle = UInt(64.W)
+  val commitDecodeStartCycle = UInt(64.W)
+  val commitExecuteStartCycle = UInt(64.W)
+  val commitMemoryStartCycle = UInt(64.W)
+  val commitMemoryQueueStartCycle = UInt(64.W)
+  val commitMemoryServiceStartCycle = UInt(64.W)
+  val commitWritebackStartCycle = UInt(64.W)
   val commitDecodeCycles = UInt(64.W)
   val commitExecuteCycles = UInt(64.W)
   val commitMemoryCycles = UInt(64.W)
+  val commitMemoryQueueCycles = UInt(64.W)
+  val commitMemoryServiceCycles = UInt(64.W)
   val commitWritebackCycles = UInt(64.W)
   val pipelineFeatures = UInt(3.W)
   val idStallCycles = UInt(64.W)
@@ -99,6 +112,7 @@ class NpcMasterDebugBundle(addrWidth: Int, dataWidth: Int) extends Bundle {
 class NpcCacheDebugBundle extends Bundle {
   val instruction = new CacheStatistics
   val data = new CacheStatistics
+  val unifiedL2 = new CacheStatistics
   val drained = Bool()
 }
 

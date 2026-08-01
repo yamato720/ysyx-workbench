@@ -70,7 +70,7 @@ run_root_phase() {
   while IFS= read -r -d '' argument; do work_args+=("$argument"); done < <(root_construction_work_args)
   "$phase_log" run "$phase_logs" "$phase" "$index" "$total" -- \
     make -C "$npc_root" "$target" "$@" INTERNAL_CONSTRUCTION=1 config="$CONFIG_FQCN" \
-    CONSTRUCTION_PROFILE="$profile" NPC_VCD_TRACE=0 "${work_args[@]}"
+    CONSTRUCTION_PROFILE="$profile" NPC_VCD_TRACE="$NEMU_VCD" "${work_args[@]}"
 }
 
 run_root_phase_visible() {
@@ -80,7 +80,7 @@ run_root_phase_visible() {
   while IFS= read -r -d '' argument; do work_args+=("$argument"); done < <(root_construction_work_args)
   PHASE_LOG_PASSTHROUGH=1 "$phase_log" run "$phase_logs" "$phase" "$index" "$total" -- \
     make -C "$npc_root" "$target" "$@" INTERNAL_CONSTRUCTION=1 config="$CONFIG_FQCN" \
-    CONSTRUCTION_PROFILE="$profile" NPC_VCD_TRACE=0 "${work_args[@]}"
+    CONSTRUCTION_PROFILE="$profile" NPC_VCD_TRACE="$NEMU_VCD" "${work_args[@]}"
 }
 
 copy_glue() {

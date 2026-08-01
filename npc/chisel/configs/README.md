@@ -62,6 +62,10 @@ classpath、Make 和 construction manager 在启动前解析公开终端。该�
 | `StandaloneConfig` | NPC | 最小 RV64I_Zicsr 本地仿真 |
 | `SimulationConfig` | NPC | 默认 RV64IM_Zicsr 本地仿真 |
 | `CacheSimulationConfig` | NPC | 显式启用教学 I$/D$、Zifencei 和 4 项 instruction buffer 的 RV64IM 本地仿真 |
+| `HbmJitterCacheSimulationConfig` | NPC | L1-only 宽 512-bit DPI、64-byte I$/D$ 和固定种子 73--81 cycle 主存响应的 U55C 宽 L1 功能时序对比 |
+| `HbmJitterL2CacheSimulationConfig` | NPC | 上述宽 L1 模型加统一 256 KiB、8-way、64-byte L2 的本地 DPI 时序对比 |
+| `HbmJitterCacheVcdSimulationConfig` | NPC | 上述宽 L1 本地时序模型，加可由 SDB `start`/`stop` 控制的 Verilator VCD；需完整构造 |
+| `PipelinedTwoCycleWideL2SimulationConfig` | NPC | 仅本地仿真的 RV64IM 两拍 I$/D$/L2，512-bit DPI Fabric；命中 N+2 返回，四项 FIFO 深度和 8 项 instruction buffer 固化 |
 | `PipelineSimulationConfig` | NPC | 启用 ID/EX 前递的流水 NPC 本地仿真 |
 | `FullIsa64NoPipelineSimulationConfig` | NPC | RV64IMF_Zicsr 无流水线性能基线 |
 | `FullIsa64PipelineNoForwardingSimulationConfig` | NPC | RV64IMF_Zicsr 流水线无 ID/EX 前递 |
@@ -79,6 +83,8 @@ classpath、Make 和 construction manager 在启动前解析公开终端。该�
 | `U55cRv64Npc{100,125,150,200,250,300}MHzPerformanceMonitorFpgaConfig` | FPGA（`TARGET=NPC`） | U55C RV64IM 批处理性能监测；核心按后缀运行 |
 | `U55cRv64CacheNpc150MHzPerformanceMonitorFpgaConfig` | FPGA（`TARGET=NPC`） | U55C RV64 150 MHz 教学缓存批处理性能监测；核心通过 MMCM/FIFO 接入固定 300 MHz 平台，报告读取硬件 cache mailbox 状态 |
 | `U55cRv64CacheNpc300MHzPerformanceMonitorFpgaConfig` | FPGA（`TARGET=NPC`） | U55C RV64 300 MHz 教学缓存批处理性能监测；报告读取硬件 cache mailbox 状态 |
+| `U55cRv64Hbm512CacheNpc150MHzPerformanceMonitorFpgaConfig` | FPGA（`TARGET=NPC`） | RV64 CPU/64-bit MMIO 加 512-bit HBM、64-byte L1 line 的 batch 性能监测基线 |
+| `U55cRv64Hbm512L2CacheNpc150MHzPerformanceMonitorFpgaConfig` | FPGA（`TARGET=NPC`） | 上述宽 HBM L1 基线加统一 256 KiB/8-way/64-byte write-back L2；需独立 rebuild |
 | `U55cYsyxSocFpgaConfig` | FPGA（`TARGET=SOC`） | U55C ysyxSoC 上板运行 |
 | `U55cCacheYsyxSocFpgaConfig` | FPGA（`TARGET=SOC`） | U55C ysyxSoC 教学缓存版本 |
 | `Zcu102NpcFpgaConfig` | FPGA（`TARGET=NPC`） | ZCU102 裸 NPC 上板运行 |
@@ -94,6 +100,8 @@ classpath、Make 和 construction manager 在启动前解析公开终端。该�
 | `FpgaConfig` | L1 | 默认 FPGA 裸 NPC 核心成品 |
 | `CacheFpgaConfig` | L1 | 显式教学缓存的 RV32 FPGA 裸 NPC 核心成品 |
 | `CacheRv64PipelineDualForwardingTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecuteFpgaConfig` | L1 | U55C RV64 300 MHz 时序核心的缓存成品 |
+| `WideHbmCacheRv64PipelineDualForwardingTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecuteFpgaConfig` | L1 | U55C 512-bit HBM、64-byte L1 line 的 RV64 缓存成品 |
+| `WideHbmL2CacheRv64PipelineDualForwardingTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecuteFpgaConfig` | L1 | 上述宽 HBM 成品加 Fabric 内统一 L2；其下游保持 AXI4-Full |
 | `Rv64PipelineDualForwardingFpgaConfig` | L1 | RV64IM_Zicsr FPGA 核心成品；F/D 仅由本地仿真 Config 提供 |
 | `ExternalAxiConfig` | L1 | 供 SoC/外部系统集成的 AXI NPC 成品 |
 | `CacheExternalAxiConfig` | L1 | 供 SoC/外部系统集成的教学缓存 AXI NPC 成品 |
@@ -129,6 +137,27 @@ store 总线副作用。该 preset 的 `cacheHtml` 也是显式开关：缓存 C
 链接到该页；无缓存 Config 不生成空报告。自定义终端可用
 `NemuHostConfig.LocalPipelineTrace.copy(cacheHtml = false)` 关闭它。
 FPGA 上板和 check-only Config 保持关闭。
+
+`HbmJitterCacheSimulationConfig` 使用 local DPI RAM，而非 FPGA AXI/HBM：一个 512-bit RAM 事务并行
+展开为八个稳定 64-bit DPI ABI lane，并在 AXI-Lite 读/写响应前插入固定种子 73--81 cycle 等待。
+这使一次 64-byte L1 refill 保持为一次有延迟的 line transaction；MMIO 仍收窄为即时 32/64-bit DPI
+访问。该模型适合对比 L1 hit/miss 停顿和本地 HTML 轨迹，不代表 U55C HBM 控制器的逐周期仿真。
+
+`HbmJitterL2CacheSimulationConfig` 复用同一 DPI 抖动和宽 L1，仅把 NpcMemoryFabric 的本地主存路径
+改为 IF/LSU 仲裁器 -> 统一 L2 -> 512-bit DPI RAM；MMIO 仍在 L2 外部旁路。它是本地功能时序模型，
+用于比较 L2 命中收益，不等同于 FPGA HBM bank/queue 的完整时序。
+
+`PipelinedTwoCycleWideL2SimulationConfig` 选择 `CacheAccessMode.PipelinedTwoCycle`，并将
+`CACHE_REQUEST_QUEUE_DEPTH`、`CACHE_RESPONSE_QUEUE_DEPTH`、`CACHE_FETCH_QUEUE_DEPTH` 与
+`CACHE_MEMORY_QUEUE_DEPTH` 全部冻结为 4。I$/D$/L2 使用同步 `CacheStorage.Auto` 阵列：S0 锁存并发起
+读，S1 比较 tag，命中响应经有序 FIFO 在 N+2 可见。local DPI 分支以轮转 I$/D$ 仲裁和返回路由 FIFO
+服务单端口 L2；MMIO 保持阻塞、非缓存、按序。redirect/FENCE.I 通过取指 epoch 丢弃旧响应，维护操作在
+入口、流水和 FIFO 为空后执行。该端点不能用于 FPGA/SoC/外部 AXI 构建。
+
+`HbmJitterCacheVcdSimulationConfig` 只覆盖运行 host 为 `NemuHostConfig.LocalVcdTrace`，其 L1 和
+DPI 时序参数与前者一致。由于 VCD 要求 Verilator 在生成时带 `--trace`，它是单独的仿真 ABI：新建时使用
+`make -C npc build config=HbmJitterCacheVcdSimulationConfig`，已有构造更新时使用 `rebuild`，不能以
+`host-build` 把无 VCD 的 Verilator 库升级为可追踪版本。运行目录中的 VCD 由 SDB `start`/`stop` 分段产生。
 
 `HostConstruction`、`NemuSimulationConstruction`、`FpgaConstruction` 和 `MakeTerminal` 是
 `common/base/ConstructionTraits.scala` 中的底层接口，只供 terminal 层组合，终端不能直接混入。
@@ -170,7 +199,8 @@ HBM[1]、8 MiB、200000 条 32-byte 记录、2048-record URAM FIFO、256-bit tra
 校验这一接口频率。profile 另以 `FPGA_CLOCK_MHZ` 冻结核心目标频率，低于 300 MHz 时 wrapper 使用 MMCM 和
 逐通道异步 FIFO，确保核心不超过该值。每个频点必须完整 `rebuild`，host-only 构造不能为外部 v11 xclbin 提供硬件记录。
 Make/Tcl 只做映射与一致性检查，不能覆盖这些值。
-缓存 FPGA 终端还会把相同的 `ICACHE_*`、`DCACHE_*`、`INSTRUCTION_BUFFER_*` 和 `NPC_ZIFENCEI`
+缓存 profile 还会写入 `CACHE_ACCESS_MODE` 与四项 `CACHE_*_QUEUE_DEPTH`。缓存 FPGA 终端会把相同的
+`ICACHE_*`、`DCACHE_*`、`L2CACHE_*`、`INSTRUCTION_BUFFER_*` 和 `NPC_ZIFENCEI`
 写入 elaboration manifest。任何几何、策略或存储风格变化都必须完整 `rebuild`；普通无缓存终端的字段
 保持 disabled，外部 AXI/HBM 端口不变。
 `host-build` 在没有正式构造时只创建 `constructions/.hosts/<FQCN>/` 下的 NEMU host 缓存，适合与外部

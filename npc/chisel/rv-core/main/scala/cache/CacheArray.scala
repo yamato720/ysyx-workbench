@@ -73,14 +73,18 @@ class CacheArray(cache: CacheConfig, addrWidth: Int, dataWidth: Int, hasDirty: B
   val dirtyBits = if (hasDirty) {
     Some(RegInit(VecInit(Seq.fill(sets)(VecInit(Seq.fill(ways)(false.B))))))
   } else None
-  val readValid = if (sets == 1) validBits(0) else validBits(io.readSet)
-  val readDirty = dirtyBits.map(bits => if (sets == 1) bits(0) else bits(io.readSet))
+  // 同步 tag/data RAM 的输出属于上一拍的读地址。valid/dirty 也使用同一锁存地址，
+  // 这样连续 S0 请求不会把下一笔的元数据与上一笔的 tag/data 拼在一起。
+  val readSetReg = RegInit(0.U(setWidth.W))
+  when(io.readEnable) { readSetReg := io.readSet }
+  val readValid = if (sets == 1) validBits(0) else validBits(readSetReg)
+  val readDirty = dirtyBits.map(bits => if (sets == 1) bits(0) else bits(readSetReg))
     .getOrElse(VecInit(Seq.fill(ways)(false.B)))
   val readTags = Wire(Vec(ways, UInt(tagWidth.W)))
 
   if (cache.storage == CacheStorage.Registers) {
     val tags = Reg(Vec(sets, Vec(ways, UInt(tagWidth.W))))
-    readTags := (if (sets == 1) tags(0) else tags(io.readSet))
+    readTags := (if (sets == 1) tags(0) else tags(readSetReg))
     when(io.metaWriteEnable) {
       for (set <- 0 until sets; way <- 0 until ways) {
         when((if (sets == 1) true.B else io.metaWriteSet === set.U) &&
@@ -112,7 +116,7 @@ class CacheArray(cache: CacheConfig, addrWidth: Int, dataWidth: Int, hasDirty: B
 
   if (cache.storage == CacheStorage.Registers) {
     val lines = RegInit(VecInit(Seq.fill(sets)(VecInit(Seq.fill(ways)(0.U(lineWidth.W))))))
-    io.readLines := (if (sets == 1) lines(0) else lines(io.readSet))
+    io.readLines := (if (sets == 1) lines(0) else lines(readSetReg))
     when(io.dataWriteEnable) {
       for (set <- 0 until sets; way <- 0 until ways) {
         when((if (sets == 1) true.B else io.dataWriteSet === set.U) &&

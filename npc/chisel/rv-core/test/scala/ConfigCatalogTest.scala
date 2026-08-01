@@ -38,6 +38,9 @@ class ConfigCatalogTest extends AnyFlatSpec {
 
     assert(names.contains("StandaloneConfig"))
     assert(names.contains("CacheSimulationConfig"))
+    assert(names.contains("HbmJitterL2CacheSimulationConfig"))
+    assert(names.contains("HbmJitterCacheVcdSimulationConfig"))
+    assert(names.contains("PipelinedTwoCycleWideL2SimulationConfig"))
     assert(names.contains("YsyxSimulationConfig"))
     assert(names.contains("CacheYsyxSimulationConfig"))
     assert(names.contains("U55cYsyxSocFpgaConfig"))
@@ -157,10 +160,11 @@ class ConfigCatalogTest extends AnyFlatSpec {
     val construction = new SimulationConfig
     val values = ConstructionProfile.values(entry, construction, construction.config).toMap
 
-    assert(values("PROFILE_FORMAT") == "21")
+    assert(values("PROFILE_FORMAT") == "22")
     assert(values("HOST_ABI") == "nemu-construction-v1")
     assert(values("NEMU_PRESET") == "LocalPipelineTrace")
     assert(values("NEMU_BACKEND") == "local")
+    assert(values("NEMU_MEMORY_STATISTICS_MODE") == "Split")
     assert(values("PROTOCOL_ABI") == "npc-dpi-v1")
     assert(values("ISA_STRING") == "rv64im_zicsr")
     assert(values("INTEGER_EXECUTE_STAGES") == "1")
@@ -168,6 +172,13 @@ class ConfigCatalogTest extends AnyFlatSpec {
     assert(values("REGISTER_INITIAL_FETCH_REQUEST") == "0")
     assert(values("SEPARATE_SERIAL_INTEGER_ALU") == "0")
     assert(values("SERIAL_EXECUTE_RESULT_FORWARDING") == "1")
+
+    val serviceOnlyHost = new HostConstruction {
+      override protected val configuredNemu: NemuHostConfig =
+        NemuHostConfig.LocalBase.copy(memoryStatisticsMode = MemoryStatisticsMode.ServiceOnly)
+    }
+    val serviceOnlyValues = ConstructionProfile.values(entry, serviceOnlyHost, construction.config).toMap
+    assert(serviceOnlyValues("NEMU_MEMORY_STATISTICS_MODE") == "ServiceOnly")
   }
 
   it should "reject a construction behavior that conflicts with the Config scope" in {
@@ -223,5 +234,48 @@ class ConfigCatalogTest extends AnyFlatSpec {
     assert(scalarValues("NEMU_PERFORMANCE_HTML") == "1")
     assert(scalarValues("NEMU_CACHE_HTML") == "1")
     assert(scalarValues("NEMU_PIPELINE_HTML") == "1")
+  }
+
+  it should "make VCD a separately frozen local Verilator ABI" in {
+    val construction = new HbmJitterCacheVcdSimulationConfig
+    val entry = ConfigCatalog.resolve(construction.getClass.getName, Set("npc"))
+    val values = ConstructionProfile.values(entry, construction, construction.config).toMap
+
+    assert(values("NEMU_PRESET") == "LocalVcdTrace")
+    assert(values("NEMU_BACKEND") == "local")
+    assert(values("NEMU_TRACE") == "1")
+    assert(values("NEMU_VCD") == "1")
+    assert(values("NEMU_PERFORMANCE_HTML") == "1")
+    assert(values("NEMU_CACHE_HTML") == "1")
+    assert(values("NEMU_PIPELINE_HTML") == "1")
+    assert(values("NEMU_NPC_DIFFTEST") == "1")
+  }
+
+  it should "describe the local wide-HBM L2 timing endpoint" in {
+    val construction = new HbmJitterL2CacheSimulationConfig
+    val entry = ConfigCatalog.resolve(construction.getClass.getName, Set("npc"))
+    val values = ConstructionProfile.values(entry, construction, construction.config).toMap
+
+    assert(values("AXI_MEMORY_DATA_WIDTH") == "512")
+    assert(values("AXI_EXTERNAL") == "0")
+    assert(values("ICACHE_LINE_BYTES") == "64")
+    assert(values("DCACHE_LINE_BYTES") == "64")
+    assert(values("L2CACHE_ENABLED") == "1")
+    assert(values("L2CACHE_CAPACITY_BYTES") == (256 * 1024).toString)
+    assert(values("DPI_MEMORY_READ_RESPONSE_MIN_CYCLES") == "73")
+    assert(values("DPI_MEMORY_READ_RESPONSE_MAX_CYCLES") == "81")
+  }
+
+  it should "freeze the two-cycle cache mode and local FIFO depths in the profile" in {
+    val construction = new PipelinedTwoCycleWideL2SimulationConfig
+    val entry = ConfigCatalog.resolve(construction.getClass.getName, Set("npc"))
+    val values = ConstructionProfile.values(entry, construction, construction.config).toMap
+
+    assert(values("CACHE_ACCESS_MODE") == "pipelined-two-cycle")
+    assert(values("CACHE_REQUEST_QUEUE_DEPTH") == "4")
+    assert(values("CACHE_RESPONSE_QUEUE_DEPTH") == "4")
+    assert(values("CACHE_FETCH_QUEUE_DEPTH") == "4")
+    assert(values("CACHE_MEMORY_QUEUE_DEPTH") == "4")
+    assert(values("INSTRUCTION_BUFFER_ENTRIES") == "8")
   }
 }

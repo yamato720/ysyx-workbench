@@ -100,6 +100,8 @@ fi
 for name in U55cNpcFpgaConfig U55cCacheNpcFpgaConfig U55cRv64NpcFpgaConfig \
   U55cRv64Npc300MHzFpgaConfig U55cRv64CacheNpc300MHzFpgaConfig \
   U55cRv64CacheNpc150MHzPerformanceMonitorFpgaConfig U55cRv64CacheNpc300MHzPerformanceMonitorFpgaConfig \
+  U55cRv64Hbm512CacheNpc150MHzPerformanceMonitorFpgaConfig \
+  U55cRv64Hbm512L2CacheNpc150MHzPerformanceMonitorFpgaConfig \
   U55cRv64Npc100MHzPerformanceMonitorFpgaConfig U55cRv64Npc125MHzPerformanceMonitorFpgaConfig \
   U55cRv64Npc150MHzPerformanceMonitorFpgaConfig U55cRv64Npc200MHzPerformanceMonitorFpgaConfig \
   U55cRv64Npc250MHzPerformanceMonitorFpgaConfig U55cRv64Npc300MHzPerformanceMonitorFpgaConfig \
@@ -115,14 +117,20 @@ if $resolver "$catalog" U55cYsyxSocFpgaConfig npc >/dev/null 2>&1; then fail '�
 if $resolver "$catalog" UnknownConfig fpga >/dev/null 2>&1; then fail '未知 Config 未被拒绝'; fi
 
 check_terminal() {
-  local config=$1 expected_board=$2 expected_target=$3 expected_xlen=$4 expected_clock=$5 expected_xrt_mode expected_protocol_abi expected_capability=run expected_sdb=1 expected_trace=0 expected_integer_execute_stages=1 expected_serial_execute_stages=1 expected_register_initial_fetch_request=0 expected_separate_serial_integer_alu=0 expected_serial_execute_result_forwarding=1 expected_divider_non_blocking=0 resolved profile output
+  local config=$1 expected_board=$2 expected_target=$3 expected_xlen=$4 expected_clock=$5 expected_xrt_mode expected_protocol_abi expected_capability=run expected_sdb=1 expected_trace=0 expected_integer_execute_stages=1 expected_serial_execute_stages=1 expected_register_initial_fetch_request=0 expected_separate_serial_integer_alu=0 expected_serial_execute_result_forwarding=1 expected_divider_non_blocking=0 expected_memory_data_width expected_cache_line_bytes resolved profile output
+  expected_memory_data_width=$expected_xlen
+  expected_cache_line_bytes=16
   case "$config" in
     U55cRv64Npc300MHzFpgaConfig|U55cRv64CacheNpc300MHzFpgaConfig) expected_xrt_mode=unset; expected_protocol_abi=npc-fpga-runtime-v11; expected_integer_execute_stages=2; expected_serial_execute_stages=3; expected_register_initial_fetch_request=1; expected_separate_serial_integer_alu=1; expected_serial_execute_result_forwarding=0; expected_divider_non_blocking=1 ;;
-    U55cRv64CacheNpc*MHzPerformanceMonitorFpgaConfig|U55cRv64Npc*MHzPerformanceMonitorFpgaConfig) expected_xrt_mode=unset; expected_protocol_abi=npc-fpga-runtime-v13-performance-monitor; expected_capability=batch; expected_sdb=0; expected_trace=1; expected_integer_execute_stages=2; expected_serial_execute_stages=3; expected_register_initial_fetch_request=1; expected_separate_serial_integer_alu=1; expected_serial_execute_result_forwarding=0; expected_divider_non_blocking=1 ;;
+    U55cRv64Hbm512*CacheNpc*MHzPerformanceMonitorFpgaConfig|U55cRv64CacheNpc*MHzPerformanceMonitorFpgaConfig|U55cRv64Npc*MHzPerformanceMonitorFpgaConfig) expected_xrt_mode=unset; expected_protocol_abi=npc-fpga-runtime-v13-performance-monitor; expected_capability=batch; expected_sdb=0; expected_trace=1; expected_integer_execute_stages=2; expected_serial_execute_stages=3; expected_register_initial_fetch_request=1; expected_separate_serial_integer_alu=1; expected_serial_execute_result_forwarding=0; expected_divider_non_blocking=1 ;;
     U55c*) expected_xrt_mode=unset; expected_protocol_abi=npc-fpga-runtime-v11 ;;
     Zcu102*) expected_xrt_mode=inherit; expected_protocol_abi=npc-fpga-runtime-v7 ;;
     *) fail "$config 缺少 Vitis XRT 环境策略预期" ;;
   esac
+  if [[ $config == U55cRv64Hbm512*CacheNpc* ]]; then
+    expected_memory_data_width=512
+    expected_cache_line_bytes=64
+  fi
   resolved=$($manager resolve "$npc_root" "$config" '')
   profile=${resolved##*|}
   grep -qx "CAPABILITY=$expected_capability" "$profile" || fail "$config capability 错误"
@@ -144,6 +152,8 @@ check_terminal() {
   grep -qx "target=$expected_target" <<< "$output" || fail "$config 目标错误"
   grep -qx "xlen=$expected_xlen" <<< "$output" || fail "$config XLEN 错误"
   grep -qx "clock_mhz=$expected_clock" <<< "$output" || fail "$config 频率错误"
+  grep -qx "axi_memory_data_width=$expected_memory_data_width" <<< "$output" ||
+    fail "$config 主存 AXI 位宽错误"
   if [[ $expected_board == u55c ]]; then
     grep -qx 'platform_clock_mhz=300' <<< "$output" || fail "$config U55C platform 频率错误"
   fi
@@ -194,8 +204,10 @@ check_terminal() {
     grep -qx 'DCACHE_ENABLED=1' "$profile" || fail "$config 未启用 D$"
     grep -qx 'ICACHE_CAPACITY_BYTES=4096' "$profile" || fail "$config I$ 容量错误"
     grep -qx 'DCACHE_CAPACITY_BYTES=4096' "$profile" || fail "$config D$ 容量错误"
-    grep -qx 'ICACHE_LINE_BYTES=16' "$profile" || fail "$config I$ line 错误"
-    grep -qx 'DCACHE_LINE_BYTES=16' "$profile" || fail "$config D$ line 错误"
+    grep -qx "AXI_MEMORY_DATA_WIDTH=$expected_memory_data_width" "$profile" ||
+      fail "$config 主存 AXI 位宽错误"
+    grep -qx "ICACHE_LINE_BYTES=$expected_cache_line_bytes" "$profile" || fail "$config I$ line 错误"
+    grep -qx "DCACHE_LINE_BYTES=$expected_cache_line_bytes" "$profile" || fail "$config D$ line 错误"
     grep -qx 'DCACHE_WRITE_POLICY=write-back' "$profile" || fail "$config D$ 写策略错误"
     grep -qx 'DCACHE_WRITE_MISS=write-allocate' "$profile" || fail "$config D$ 写未命中策略错误"
     grep -qx 'INSTRUCTION_BUFFER_ENTRIES=4' "$profile" || fail "$config 取指缓冲深度错误"
@@ -203,6 +215,17 @@ check_terminal() {
   else
     grep -qx 'ICACHE_ENABLED=0' "$profile" || fail "$config 意外启用 I$"
     grep -qx 'DCACHE_ENABLED=0' "$profile" || fail "$config 意外启用 D$"
+  fi
+  if [[ $config == *L2Cache* ]]; then
+    grep -qx 'L2CACHE_ENABLED=1' "$profile" || fail "$config 未启用 L2"
+    grep -qx 'L2CACHE_CAPACITY_BYTES=262144' "$profile" || fail "$config L2 容量错误"
+    grep -qx 'L2CACHE_LINE_BYTES=64' "$profile" || fail "$config L2 line 错误"
+    grep -qx 'L2CACHE_WAYS=8' "$profile" || fail "$config L2 路数错误"
+    grep -qx 'L2CACHE_REPLACEMENT=tree-plru' "$profile" || fail "$config L2 替换策略错误"
+    grep -qx 'L2CACHE_WRITE_POLICY=write-back' "$profile" || fail "$config L2 写策略错误"
+    grep -qx 'L2CACHE_WRITE_MISS=write-allocate' "$profile" || fail "$config L2 写未命中策略错误"
+  else
+    grep -qx 'L2CACHE_ENABLED=0' "$profile" || fail "$config 意外启用 L2"
   fi
   grep -qx "FPGA_IP_ATTACHMENT=xilinx-$expected_board" "$profile" ||
     fail "$config FPGA IP attachment 错误"
@@ -255,6 +278,8 @@ check_terminal U55cRv64Npc300MHzFpgaConfig u55c NPC 64 300
 check_terminal U55cRv64CacheNpc300MHzFpgaConfig u55c NPC 64 300
 check_terminal U55cRv64CacheNpc150MHzPerformanceMonitorFpgaConfig u55c NPC 64 150
 check_terminal U55cRv64CacheNpc300MHzPerformanceMonitorFpgaConfig u55c NPC 64 300
+check_terminal U55cRv64Hbm512CacheNpc150MHzPerformanceMonitorFpgaConfig u55c NPC 64 150
+check_terminal U55cRv64Hbm512L2CacheNpc150MHzPerformanceMonitorFpgaConfig u55c NPC 64 150
 check_terminal U55cRv64Npc100MHzPerformanceMonitorFpgaConfig u55c NPC 64 100
 check_terminal U55cRv64Npc125MHzPerformanceMonitorFpgaConfig u55c NPC 64 125
 check_terminal U55cRv64Npc150MHzPerformanceMonitorFpgaConfig u55c NPC 64 150

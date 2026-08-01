@@ -58,8 +58,20 @@ endif
 WORK_DIR  = $(shell pwd)
 # Config 批量运行会为每个“版本 × 用例”传入独立目录。源文件仍从 WORK_DIR 读取，
 # 仅编译、链接和 NEMU 日志产物进入 AM_BUILD_ROOT，避免并行任务争用 build/。
+#
+# FPGA guest 的结束指令是 mtestexit CSR，而本地 NEMU 使用 ebreak。二者由
+# CONFIG 的 scope 决定，不能共享已编译的 AM 对象。若调用方通过冻结构造选择
+# 运行但未显式给出 AM_BUILD_ROOT，就按构造 FQCN 自动隔离；显式路径仍优先。
 AM_BUILD_ROOT_ORIGIN := $(origin AM_BUILD_ROOT)
-AM_BUILD_ROOT ?= $(WORK_DIR)/build
+ifeq ($(AM_BUILD_ROOT_ORIGIN),undefined)
+  ifneq ($(strip $(NPC_CONSTRUCTION_DIR)),)
+    AM_BUILD_ROOT := $(WORK_DIR)/build/$(notdir $(abspath $(NPC_CONSTRUCTION_DIR)))
+    AM_BUILD_ROOT_ORIGIN := automatic
+    export AM_BUILD_ROOT
+  else
+    AM_BUILD_ROOT := $(WORK_DIR)/build
+  endif
+endif
 DST_DIR   = $(AM_BUILD_ROOT)/$(ARCH)
 $(shell mkdir -p $(DST_DIR))
 

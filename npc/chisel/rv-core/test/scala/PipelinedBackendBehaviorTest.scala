@@ -1,0 +1,176 @@
+package npc
+
+import chisel3._
+import chisel3.simulator.EphemeralSimulator._
+import org.scalatest.flatspec.AnyFlatSpec
+
+import scala.collection.mutable
+
+/** 直接驱动后端派发口，检查两拍整数 EX 与流水 MEM 重叠时仍保持 RAW 前递。 */
+class PipelinedBackendBehaviorTest extends AnyFlatSpec {
+  private val config = new PipelinedTwoCycleWideL2SimulationConfig().config
+
+  private def clearDispatch(dut: NpcBackend): Unit = {
+    val bits = dut.io.dispatch.bits
+    bits.pc.poke(0)
+    bits.instruction.poke(0)
+    bits.perfFetchStartCycle.poke(0)
+    bits.perfFetchCycles.poke(0)
+    bits.perfDecodeStartCycle.poke(0)
+    bits.immediate.poke(0)
+    bits.rd.poke(0)
+    bits.rs1.poke(0)
+    bits.rs2.poke(0)
+    bits.rs3.poke(0)
+    bits.funct3.poke(0)
+    bits.funct7.poke(0)
+    bits.csrAddress.poke(0)
+    bits.branch.poke(false)
+    bits.loadEnable.poke(false)
+    bits.writebackFromMemory.poke(false)
+    bits.storeEnable.poke(false)
+    bits.useImmediate.poke(false)
+    bits.registerWriteEnable.poke(false)
+    bits.usesRs1.poke(false)
+    bits.usesRs2.poke(false)
+    bits.executionUnit.poke(NpcExecutionUnit.integer)
+    bits.aluCtrl.poke(NpcAluOp.Integer.ADD.asUInt)
+    bits.privilegedInstruction.poke(false)
+    bits.trapEnable.poke(false)
+    bits.trapCause.poke(0)
+    bits.mretEnable.poke(false)
+    bits.csrEnable.poke(false)
+    bits.csrOperation.poke(0)
+    bits.csrUseImmediate.poke(false)
+    bits.csrReadWritebackEnable.poke(false)
+    bits.floatingOperation.poke(false)
+    bits.floatingInstruction.poke(false)
+    bits.floatRegisterWriteEnable.poke(false)
+    bits.usesFrs1.poke(false)
+    bits.usesFrs2.poke(false)
+    bits.usesFrs3.poke(false)
+  }
+
+  private def setAddi(dut: NpcBackend, pc: BigInt, rd: Int, rs1: Int, immediate: BigInt): Unit = {
+    clearDispatch(dut)
+    dut.io.dispatch.bits.pc.poke(pc)
+    dut.io.dispatch.bits.instruction.poke(0x00000013L)
+    dut.io.dispatch.bits.rd.poke(rd)
+    dut.io.dispatch.bits.rs1.poke(rs1)
+    dut.io.dispatch.bits.immediate.poke(immediate)
+    dut.io.dispatch.bits.useImmediate.poke(true)
+    dut.io.dispatch.bits.registerWriteEnable.poke(true)
+    dut.io.dispatch.bits.usesRs1.poke(rs1 != 0)
+  }
+
+  private def setStore(dut: NpcBackend, pc: BigInt, rs1: Int, rs2: Int, immediate: BigInt): Unit = {
+    clearDispatch(dut)
+    dut.io.dispatch.bits.pc.poke(pc)
+    dut.io.dispatch.bits.instruction.poke(0x00000023L)
+    dut.io.dispatch.bits.rs1.poke(rs1)
+    dut.io.dispatch.bits.rs2.poke(rs2)
+    dut.io.dispatch.bits.immediate.poke(immediate)
+    dut.io.dispatch.bits.funct3.poke(3)
+    dut.io.dispatch.bits.storeEnable.poke(true)
+    dut.io.dispatch.bits.useImmediate.poke(true)
+    dut.io.dispatch.bits.usesRs1.poke(true)
+    dut.io.dispatch.bits.usesRs2.poke(true)
+  }
+
+  private def initialize(dut: NpcBackend): Unit = {
+    dut.io.dispatch.valid.poke(false)
+    dut.io.interrupt.poke(false)
+    dut.io.axi.aw.ready.poke(true)
+    dut.io.axi.w.ready.poke(true)
+    dut.io.axi.b.valid.poke(true)
+    dut.io.axi.b.bits.resp.poke(0)
+    dut.io.axi.ar.ready.poke(true)
+    dut.io.axi.r.valid.poke(false)
+    dut.io.axi.r.bits.data.poke(0)
+    dut.io.axi.r.bits.resp.poke(0)
+  }
+
+  "NpcBackend" should "forward an ALU result to consecutive stores while MEM is pipelined" in {
+    simulate(new NpcBackend(config)) { dut =>
+      initialize(dut)
+      dut.reset.poke(true)
+      dut.clock.step(2)
+      dut.reset.poke(false)
+
+      def send(): Unit = {
+        dut.io.dispatch.valid.poke(true)
+        var guard = 0
+        while (!dut.io.dispatch.ready.peek().litToBoolean && guard < 20) {
+          dut.clock.step()
+          guard += 1
+        }
+        assert(dut.io.dispatch.ready.peek().litToBoolean)
+        dut.clock.step()
+        dut.io.dispatch.valid.poke(false)
+      }
+
+      setAddi(dut, 0x100, rd = 2, rs1 = 0, immediate = 0x9000)
+      send()
+      setAddi(dut, 0x104, rd = 2, rs1 = 2, immediate = -0x50)
+      send()
+      setStore(dut, 0x108, rs1 = 2, rs2 = 9, immediate = 0x38)
+      send()
+      setStore(dut, 0x10c, rs1 = 2, rs2 = 18, immediate = 0x30)
+      send()
+
+      val stores = mutable.ArrayBuffer.empty[BigInt]
+      var guard = 0
+      while (stores.size < 2 && guard < 120) {
+        if (dut.io.debug.commitStoreValid.peek().litToBoolean) {
+          stores += dut.io.debug.commitStoreAddress.peek().litValue
+        }
+        dut.clock.step()
+        guard += 1
+      }
+
+      assert(stores.toSeq == Seq(BigInt("8fe8", 16), BigInt("8fe0", 16)))
+    }
+  }
+
+  "NpcBackend" should "keep a continuous dispatch stream ordered across a two-stage RAW chain" in {
+    simulate(new NpcBackend(config)) { dut =>
+      initialize(dut)
+      dut.reset.poke(true)
+      dut.clock.step(2)
+      dut.reset.poke(false)
+
+      val instructions = Seq[() => Unit](
+        () => setAddi(dut, 0x200, rd = 2, rs1 = 0, immediate = 0x9000),
+        () => setAddi(dut, 0x204, rd = 2, rs1 = 2, immediate = -0x50),
+        () => setStore(dut, 0x208, rs1 = 2, rs2 = 9, immediate = 0x38),
+        () => setStore(dut, 0x20c, rs1 = 2, rs2 = 18, immediate = 0x30)
+      )
+
+      dut.io.dispatch.valid.poke(true)
+      var instructionIndex = 0
+      var guard = 0
+      while (instructionIndex < instructions.size && guard < 120) {
+        instructions(instructionIndex)()
+        if (dut.io.dispatch.ready.peek().litToBoolean) {
+          instructionIndex += 1
+        }
+        dut.clock.step()
+        guard += 1
+      }
+      dut.io.dispatch.valid.poke(false)
+      assert(instructionIndex == instructions.size)
+
+      val stores = mutable.ArrayBuffer.empty[BigInt]
+      guard = 0
+      while (stores.size < 2 && guard < 120) {
+        if (dut.io.debug.commitStoreValid.peek().litToBoolean) {
+          stores += dut.io.debug.commitStoreAddress.peek().litValue
+        }
+        dut.clock.step()
+        guard += 1
+      }
+
+      assert(stores.toSeq == Seq(BigInt("8fe8", 16), BigInt("8fe0", 16)))
+    }
+  }
+}

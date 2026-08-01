@@ -4,8 +4,8 @@ import chisel3._
 import chisel3.util._
 import npc.protocol.FetchDecodePayload
 
-/** Small in-order fetch queue. Redirects synchronously discard all speculative entries. */
-class InstructionBuffer(entries: Int, cfg: ISAConfig) extends Module {
+/** 小型顺序取指队列；redirect 在时钟边沿丢弃全部推测项。 */
+class InstructionBuffer(entries: Int, cfg: ISAConfig, flowThrough: Boolean = false) extends Module {
   require(PowerOfTwo(entries), s"instruction buffer entries must be a power of two, got $entries")
   private val pointerWidth = math.max(1, log2Ceil(entries))
 
@@ -22,8 +22,9 @@ class InstructionBuffer(entries: Int, cfg: ISAConfig) extends Module {
   val count = RegInit(0.U(log2Ceil(entries + 1).W))
 
   io.in.ready := count =/= entries.U
-  io.out.valid := count =/= 0.U
-  io.out.bits := storage(readPointer)
+  // 流水模式下，空队列可把本周期刚到达的取指结果直接交给 ID；非流水模式仍保持一拍寄存行为。
+  io.out.valid := count =/= 0.U || (flowThrough.B && io.in.valid)
+  io.out.bits := Mux(count === 0.U && flowThrough.B, io.in.bits, storage(readPointer))
 
   def next(pointer: UInt): UInt =
     if (entries == 1) 0.U else Mux(pointer === (entries - 1).U, 0.U, pointer + 1.U)
@@ -33,8 +34,8 @@ class InstructionBuffer(entries: Int, cfg: ISAConfig) extends Module {
     writePointer := 0.U
     count := 0.U
   }.elsewhen(io.dropYounger) {
-    // FENCE.I remains at the head until maintenance finishes, but every
-    // younger instruction may have been fetched from stale I$ contents.
+    // FENCE.I 在维护完成前保留在队首；其后的指令可能来自失效前的 I$，
+    // 因而当前周期只保留队首，下一拍才允许继续取指。
     writePointer := next(readPointer)
     count := Mux(count === 0.U, 0.U, 1.U)
   }.otherwise {

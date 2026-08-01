@@ -51,6 +51,7 @@ int main(void) {
   PerformanceHtmlReport report = {
     .label = "bubble<&\"sort",
     .mode = "NPC",
+    .memory_statistics_mode = "Split",
     .outcome_text = "通过",
     .outcome = PERFORMANCE_HTML_OUTCOME_GOOD,
     .clock_mhz = 300.0,
@@ -62,7 +63,7 @@ int main(void) {
     .pipeline_features = 7,
     .stalls = {3, 5, 7, 11, 13},
     .cache_statistics_available = true,
-    .cache = {{80, 20, 20, 0, 3}, {45, 5, 5, 2, 1}},
+    .cache = {{80, 20, 20, 0, 3}, {45, 5, 5, 2, 1}, {30, 10, 10, 1, 2}},
     .cache_configuration_available = true,
     .cache_configuration = {
       {
@@ -76,6 +77,12 @@ int main(void) {
         .mapping = "set-associative", .replacement = "Tree-PLRU",
         .read_miss = "read-allocate", .write_policy = "write-back",
         .write_miss = "write-allocate", .storage = "URAM",
+      },
+      {
+        .enabled = true, .capacity_bytes = 262144, .line_bytes = 64, .ways = 8, .sets = 512,
+        .mapping = "set-associative", .replacement = "Tree-PLRU",
+        .read_miss = "read-allocate", .write_policy = "write-back",
+        .write_miss = "write-allocate", .storage = "auto",
       },
     },
     .instruction_buffer_enabled = true,
@@ -104,6 +111,8 @@ int main(void) {
   assert(strstr(content, ">4.2000<") != NULL);
   assert(strstr(content, ">0.2381<") != NULL);
   assert(strstr(content, "MEM backpressure") != NULL);
+  assert(strstr(content, "MEM 统计: Split") != NULL);
+  assert(strstr(content, "QUEUE avg") != NULL);
   assert(strstr(content, "缓存统计") == NULL);
   assert(strstr(content, "缓存配置") == NULL);
   assert(strstr(content, "href=\"cache.html\" target=\"_blank\"") != NULL);
@@ -113,6 +122,15 @@ int main(void) {
   assert(strstr(content, "href=\"pipeline.html\"") != NULL);
   assert(strstr(content, "rel=\"noopener\"") != NULL);
   free(content);
+
+  report.memory_statistics_mode = "ServiceOnly";
+  assert(performance_html_write(path, &report) == 0);
+  content = read_file(path);
+  assert(strstr(content, "MEM 统计: ServiceOnly") != NULL);
+  assert(strstr(content, "QUEUE avg") == NULL);
+  assert(strstr(content, ">MEM avg<") != NULL);
+  free(content);
+  report.memory_statistics_mode = "Split";
 
   assert(performance_html_write_cache(cache_path, &report) == 0);
   content = read_file(cache_path);
@@ -125,6 +143,8 @@ int main(void) {
   assert(strstr(content, "顺序取指缓冲：启用，4 entries") != NULL);
   assert(strstr(content, "I$ 命中率") != NULL);
   assert(strstr(content, ">80.00%<") != NULL);
+  assert(strstr(content, "L2$ 命中率") != NULL);
+  assert(strstr(content, "512 x 8") != NULL);
   assert(strstr(content, "href=\"performance.html\"") != NULL);
   free(content);
 

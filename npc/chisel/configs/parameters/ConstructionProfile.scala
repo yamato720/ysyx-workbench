@@ -99,7 +99,7 @@ object ConstructionProfile {
     require(entry.scope == "fpga" || !config.cache.usesUram,
       s"CacheStorage.Uram is only valid for an FPGA construction: ${entry.className}")
     val base = Seq(
-      "PROFILE_FORMAT" -> "21",
+      "PROFILE_FORMAT" -> "22",
       "CONFIG_SHORT_NAME" -> entry.shortName,
       "CONFIG_FQCN" -> entry.className,
       "SCOPE" -> entry.scope,
@@ -119,6 +119,7 @@ object ConstructionProfile {
       "NEMU_DEBUG" -> bit(settings.debug),
       "NEMU_LTO" -> bit(settings.lto),
       "NEMU_ASAN" -> bit(settings.asan),
+      "NEMU_MEMORY_STATISTICS_MODE" -> settings.memoryStatisticsMode.name,
       "PROTOCOL_ABI" -> protocolAbi,
       "FPGA_RUNTIME_SDB" -> bit(runtimeSdbEnabled),
       "FPGA_RUNTIME_TRACE" -> bit(performanceMonitor.enabled),
@@ -170,13 +171,27 @@ object ConstructionProfile {
       "MEMORY_BASE" -> hex(config.memory.mainMemoryBase),
       "MEMORY_SIZE" -> hex(config.memory.mainMemorySize),
       "RESET_VECTOR" -> s"0x${config.memory.resetVector.toString(16)}",
+      "DPI_MEMORY_TIMING_ENABLED" -> bit(config.memory.dpiTiming.enabled),
+      "DPI_MEMORY_READ_RESPONSE_MIN_CYCLES" -> config.memory.dpiTiming.minReadResponseCycles.toString,
+      "DPI_MEMORY_READ_RESPONSE_MAX_CYCLES" -> config.memory.dpiTiming.maxReadResponseCycles.toString,
+      "DPI_MEMORY_WRITE_RESPONSE_MIN_CYCLES" -> config.memory.dpiTiming.minWriteResponseCycles.toString,
+      "DPI_MEMORY_WRITE_RESPONSE_MAX_CYCLES" -> config.memory.dpiTiming.maxWriteResponseCycles.toString,
+      "DPI_MEMORY_TIMING_SEED" -> config.memory.dpiTiming.randomSeed.toString,
       "AXI_ADDR_WIDTH" -> config.axi.addrWidth.toString,
       "AXI_DATA_WIDTH" -> config.axi.dataWidth.toString,
+      "AXI_EXTERNAL_DATA_WIDTH" -> config.axi.resolvedExternalDataWidth.toString,
+      "AXI_MEMORY_DATA_WIDTH" -> config.memoryDataWidth.toString,
       "AXI_ID_WIDTH" -> config.axi.idWidth.toString,
       "AXI_EXTERNAL" -> bit(config.axi.useExternalMaster)
     )
     val cache = cacheValues("ICACHE", config.cache.icache) ++
-      cacheValues("DCACHE", config.cache.dcache) ++ Seq(
+      cacheValues("DCACHE", config.cache.dcache) ++
+      cacheValues("L2CACHE", config.cache.l2cache) ++ Seq(
+        "CACHE_ACCESS_MODE" -> config.cache.accessMode.name,
+        "CACHE_REQUEST_QUEUE_DEPTH" -> config.cache.pipelinedQueues.requestDepth.toString,
+        "CACHE_RESPONSE_QUEUE_DEPTH" -> config.cache.pipelinedQueues.responseDepth.toString,
+        "CACHE_FETCH_QUEUE_DEPTH" -> config.cache.pipelinedQueues.fetchDepth.toString,
+        "CACHE_MEMORY_QUEUE_DEPTH" -> config.cache.pipelinedQueues.memoryDepth.toString,
         "INSTRUCTION_BUFFER_ENABLED" -> bit(config.cache.instructionBuffer.enabled),
         "INSTRUCTION_BUFFER_ENTRIES" -> config.cache.instructionBuffer.entries.toString
       )

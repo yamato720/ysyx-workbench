@@ -86,6 +86,7 @@ object FpgaElaborationManifest {
       "CONFIG_FQCN" -> scalaConfig,
       "NPC_TARGET" -> target,
       "NPC_XLEN" -> npcConfig.isa.xlen.toString,
+      "NPC_AXI_MEMORY_DATA_WIDTH" -> npcConfig.memoryDataWidth.toString,
       "NPC_PIPELINE" -> bit(npcConfig.pipeline.enablePipeline),
       "NPC_INTERLOCK" -> bit(npcConfig.pipeline.enableInterlock),
       "NPC_ID_FWD" -> bit(npcConfig.pipeline.forwarding.enableIdForwarding),
@@ -130,6 +131,7 @@ object FpgaElaborationManifest {
       "INSTRUCTION_BUFFER_ENTRIES" -> npcConfig.cache.instructionBuffer.entries.toString
     ) ++ cacheValues("ICACHE", npcConfig.cache.icache) ++
       cacheValues("DCACHE", npcConfig.cache.dcache) ++
+      cacheValues("L2CACHE", npcConfig.cache.l2cache) ++
       npcConfig.operators.routes.profileValues(npcConfig.isa) ++
       ipAttachment.manifestValues ++
       platform.manifestValues(npcConfig)

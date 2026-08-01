@@ -33,6 +33,11 @@ static double ratio(uint64_t numerator, uint64_t denominator) {
   return denominator == 0 ? 0.0 : (double)numerator / (double)denominator;
 }
 
+static bool memory_statistics_split(const PerformanceHtmlReport *report) {
+  return report->memory_statistics_mode == NULL ||
+         strcmp(report->memory_statistics_mode, "ServiceOnly") != 0;
+}
+
 static uint64_t sum_stages(const uint64_t stages[PERFORMANCE_HTML_STAGE_COUNT]) {
   uint64_t total = 0;
   for (size_t index = 0; index < PERFORMANCE_HTML_STAGE_COUNT; index++) total += stages[index];
@@ -102,6 +107,9 @@ static int write_document(FILE *output, const PerformanceHtmlReport *report) {
   }
   fputs("\">", output);
   write_html_string(output, report->outcome_text);
+  fputs("</span><span>·</span><span>MEM 统计: ", output);
+  write_html_string(output, report->memory_statistics_mode == NULL
+      ? "Split" : report->memory_statistics_mode);
   fputs("</span></div></header><main><section><h2>执行总览</h2><div class=\"metrics\">", output);
 
   char value[96];
@@ -176,22 +184,35 @@ static int write_document(FILE *output, const PerformanceHtmlReport *report) {
 
   if (report->aggregate_row < report->timing_row_count) {
     const PerformanceHtmlTimingRow *aggregate = &report->timing_rows[report->aggregate_row];
+    const bool split_memory = memory_statistics_split(report);
     fputs("<div class=\"stage-stack\" aria-label=\"全部指令平均阶段驻留占比\">", output);
     static const char *stage_colors[] = {"var(--if)", "var(--id)", "var(--ex)", "var(--mem)", "var(--wb)"};
     for (size_t index = 0; index < PERFORMANCE_HTML_STAGE_COUNT; index++) {
+      if (split_memory && index == 3) {
+        const double queue_average = ratio(aggregate->memory_queue_total, aggregate->count);
+        fprintf(output, "<span style=\"--c:#b25d19;flex-grow:%.6f\" title=\"QUEUE 平均 %.2f 周期\">QUEUE</span>",
+                queue_average, queue_average);
+      }
       const double average = ratio(aggregate->stage_total[index], aggregate->count);
       fprintf(output, "<span style=\"--c:%s;flex-grow:%.6f\" title=\"%s 平均 %.2f 周期\">%s</span>",
               stage_colors[index], average, stage_names[index], average, stage_names[index]);
     }
     fputs("</div><div class=\"stage-legend\">", output);
     for (size_t index = 0; index < PERFORMANCE_HTML_STAGE_COUNT; index++) {
+      if (split_memory && index == 3) {
+        fprintf(output, "<span><i style=\"--c:#b25d19\"></i>QUEUE %.2f</span>",
+                ratio(aggregate->memory_queue_total, aggregate->count));
+      }
       fprintf(output, "<span><i style=\"--c:%s\"></i>%s %.2f</span>", stage_colors[index], stage_names[index],
               ratio(aggregate->stage_total[index], aggregate->count));
     }
     fputs("</div>", output);
   }
   fputs("</section></div></div><main><section><div class=\"table-tools\"><h2>指令类别时序</h2><div class=\"segments\" role=\"group\" aria-label=\"类别筛选\"><button class=\"active\" data-filter=\"all\">全部</button><button data-filter=\"summary\">汇总</button><button data-filter=\"load\">加载</button><button data-filter=\"store\">存储</button><button data-filter=\"multiply\">M 扩展</button></div></div>", output);
-  fputs("<div class=\"table-wrap\"><table><thead><tr><th>类别</th><th>次数</th><th>IF avg</th><th>ID avg</th><th>EX avg</th><th>MEM avg</th><th>WB avg</th><th>平均延迟</th><th>最大延迟</th></tr></thead><tbody id=\"timingRows\">", output);
+  const bool split_memory = memory_statistics_split(report);
+  fputs("<div class=\"table-wrap\"><table><thead><tr><th>类别</th><th>次数</th><th>IF avg</th><th>ID avg</th><th>EX avg</th>", output);
+  if (split_memory) fputs("<th>QUEUE avg</th>", output);
+  fputs("<th>MEM avg</th><th>WB avg</th><th>平均延迟</th><th>最大延迟</th></tr></thead><tbody id=\"timingRows\">", output);
   for (size_t row_index = 0; row_index < report->timing_row_count; row_index++) {
     const PerformanceHtmlTimingRow *row = &report->timing_rows[row_index];
     if (row->count == 0) continue;
@@ -201,6 +222,11 @@ static int write_document(FILE *output, const PerformanceHtmlReport *report) {
     double total_average = 0.0;
     for (size_t stage = 0; stage < PERFORMANCE_HTML_STAGE_COUNT; stage++) {
       const double average = ratio(row->stage_total[stage], row->count);
+      if (split_memory && stage == 3) {
+        const double queue_average = ratio(row->memory_queue_total, row->count);
+        fprintf(output, "<td>%.2f</td>", queue_average);
+        total_average += queue_average;
+      }
       total_average += average;
       fprintf(output, "<td>%.2f</td>", average);
     }
@@ -208,7 +234,9 @@ static int write_document(FILE *output, const PerformanceHtmlReport *report) {
   }
   fputs("</tbody></table></div></section><section><h2>", output);
   fputs(report->latest_samples_are_trace_prefix ? "分类 trace 前缀中的最近样本" : "最近一次分类样本", output);
-  fputs("</h2><div class=\"table-wrap\"><table><thead><tr><th>类别</th><th>次数</th><th>PC</th><th>机器码</th><th>IF</th><th>ID</th><th>EX</th><th>MEM</th><th>WB</th><th>延迟</th></tr></thead><tbody>", output);
+  fputs("</h2><div class=\"table-wrap\"><table><thead><tr><th>类别</th><th>次数</th><th>PC</th><th>机器码</th><th>IF</th><th>ID</th><th>EX</th>", output);
+  if (split_memory) fputs("<th>QUEUE</th>", output);
+  fputs("<th>MEM</th><th>WB</th><th>延迟</th></tr></thead><tbody>", output);
   for (size_t row_index = 0; row_index < report->timing_row_count; row_index++) {
     const PerformanceHtmlTimingRow *row = &report->timing_rows[row_index];
     if (!row->detailed || row->count == 0) continue;
@@ -216,9 +244,13 @@ static int write_document(FILE *output, const PerformanceHtmlReport *report) {
     fprintf(output, "</td><td>%'" PRIu64 "</td><td>0x%016" PRIx64 "</td><td>0x%08" PRIx32 "</td>",
             row->count, row->last_pc, row->last_instruction);
     for (size_t stage = 0; stage < PERFORMANCE_HTML_STAGE_COUNT; stage++) {
+      if (split_memory && stage == 3) {
+        fprintf(output, "<td>%'" PRIu64 "</td>", row->last_memory_queue);
+      }
       fprintf(output, "<td>%'" PRIu64 "</td>", row->last_stage[stage]);
     }
-    fprintf(output, "<td>%'" PRIu64 "</td></tr>", sum_stages(row->last_stage));
+    fprintf(output, "<td>%'" PRIu64 "</td></tr>",
+            sum_stages(row->last_stage) + (split_memory ? row->last_memory_queue : 0));
   }
   fputs("</tbody></table></div></section><section><h2>最后提交</h2>", output);
   if (report->last_commit_valid) {
@@ -229,6 +261,10 @@ static int write_document(FILE *output, const PerformanceHtmlReport *report) {
     fprintf(output, "%'" PRIu64 " → %'" PRIu64, report->last_commits_before, report->last_commits_after);
     fputs("</strong></div>", output);
     for (size_t stage = 0; stage < PERFORMANCE_HTML_STAGE_COUNT; stage++) {
+      if (split_memory && stage == 3) {
+        fprintf(output, "<div><span>QUEUE 驻留</span><strong>%'"
+                PRIu64 " cycles</strong></div>", report->last_memory_queue);
+      }
       fprintf(output, "<div><span>%s 驻留</span><strong>%'" PRIu64 " cycles</strong></div>", stage_names[stage], report->last_stage[stage]);
     }
     fputs("</div>", output);
@@ -276,7 +312,7 @@ static int write_cache_document(FILE *output, const PerformanceHtmlReport *repor
       ".actions a{display:inline-flex;padding:7px 10px;border:1px solid #82919f;border-radius:4px;color:#155f78;background:#fff;text-decoration:none}footer{max-width:1240px;margin:auto;padding:0 20px 24px;color:var(--muted);font-size:12px}"
       "@media(max-width:900px){.metrics{grid-template-columns:repeat(2,1fr)}}@media(max-width:520px){header,main,footer{padding-left:12px;padding-right:12px}.metrics{grid-template-columns:1fr}.metric strong{font-size:18px}}"
       "</style></head><body><header><h1>NEMU 缓存报告</h1><div class=\"subtitle\"><span>";
-  static const char *cache_names[] = {"I$", "D$"};
+  static const char *cache_names[] = {"I$", "D$", "L2$"};
   static const char *counter_names[] = {"命中", "未命中", "填充", "写回", "替换"};
 
   fputs(prefix, output);

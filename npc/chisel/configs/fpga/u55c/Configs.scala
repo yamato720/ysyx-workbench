@@ -4,6 +4,8 @@ import org.chipsalliance.cde.config.{Config => CDEConfig}
 import _root_.npc.{
   CacheFpgaConfig,
   CacheRv64PipelineDualForwardingTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecuteFpgaConfig,
+  WideHbmCacheRv64PipelineDualForwardingTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecuteFpgaConfig,
+  WideHbmL2CacheRv64PipelineDualForwardingTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecuteFpgaConfig,
   FpgaConfig,
   FpgaIpTerminal,
   Rv64PipelineDualForwardingFpgaConfig,
@@ -89,6 +91,29 @@ class U55cRv64CacheNpc300MHzPerformanceMonitorFpgaConfig extends CDEConfig(
 class U55cRv64CacheNpc150MHzPerformanceMonitorFpgaConfig extends CDEConfig(
   new U55cPerformanceMonitorBoardConfig(150) ++
     new CacheRv64PipelineDualForwardingTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecuteFpgaConfig
+) with U55cNpcPerformanceMonitorTerminal with FpgaIpTerminal
+
+/**
+  * U55C RV64 宽 HBM 缓存监测构造。
+  *
+  * I$/D$ 使用 64-byte line，`m_axi_gmem` 为 512 bit；每次正常 line refill
+  * 和 dirty writeback 恰好各使用一个完整 HBM beat。它与 16-byte 教学缓存监测构造
+  * 使用独立 ABI。
+  */
+class U55cRv64Hbm512CacheNpc150MHzPerformanceMonitorFpgaConfig extends CDEConfig(
+  new U55cPerformanceMonitorBoardConfig(150) ++
+    new WideHbmCacheRv64PipelineDualForwardingTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecuteFpgaConfig
+) with U55cNpcPerformanceMonitorTerminal with FpgaIpTerminal
+
+/** U55C RV64 宽 HBM 缓存监测构造，带共享 write-back L2。
+  *
+  * CPU 保持 64 bit，I$/D$ 使用 64-byte line。物理 L2 位于两者 AXI-Lite 仲裁器之后、
+  * 512-bit AXI4-Full HBM bridge 之前；MMIO 仍由其前方的 host-MMIO slave 消费。
+  * 该构造使用独立的 v13 FPGA ABI，必须完整执行 `make -C npc rebuild`。
+  */
+class U55cRv64Hbm512L2CacheNpc150MHzPerformanceMonitorFpgaConfig extends CDEConfig(
+  new U55cPerformanceMonitorBoardConfig(150) ++
+    new WideHbmL2CacheRv64PipelineDualForwardingTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecuteFpgaConfig
 ) with U55cNpcPerformanceMonitorTerminal with FpgaIpTerminal
 
 /** U55C RV64IM performance-monitor terminals with a hardware-generated slow

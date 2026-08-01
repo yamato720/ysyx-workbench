@@ -22,7 +22,8 @@ object DescribeNemuConfigCatalog extends App {
       s"opt=${settings.optimization}",
       s"debug=${bit(settings.debug)}",
       s"lto=${bit(settings.lto)}",
-      s"asan=${bit(settings.asan)}"
+      s"asan=${bit(settings.asan)}",
+      s"memory-statistics=${settings.memoryStatisticsMode.name}"
     ).mkString(",")
     s"${preset.name}\t${settings.backend.id}\t$policy"
   }

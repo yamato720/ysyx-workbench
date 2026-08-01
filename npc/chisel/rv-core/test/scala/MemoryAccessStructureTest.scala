@@ -33,7 +33,7 @@ class MemoryAccessStructureTest extends AnyFlatSpec {
     }
   }
 
-  "DPI slaves" should "elaborate both 32-bit and 64-bit word interfaces" in {
+  "DPI slaves" should "elaborate narrow and 512-bit cache-memory interfaces" in {
     Seq(32, 64).foreach { xlen =>
       val ram = _root_.circt.stage.ChiselStage.emitCHIRRTL(
         new npc.protocol.AxiLiteDpiRamSlave(dataWidth = xlen)
@@ -46,5 +46,27 @@ class MemoryAccessStructureTest extends AnyFlatSpec {
       assert(mmio.contains(s"data : UInt<$xlen>"))
       assert(mmio.contains("strb"))
     }
+
+    val wideTiming = DpiMemoryTimingConfig.HbmJitter73To81
+    val wideRam = _root_.circt.stage.ChiselStage.emitCHIRRTL(
+      new npc.protocol.AxiLiteDpiRamSlave(dataWidth = 512, timing = wideTiming)
+    )
+    val wideMmio = _root_.circt.stage.ChiselStage.emitCHIRRTL(
+      new npc.protocol.AxiLiteDpiMmioSlave(dataWidth = 512)
+    )
+    assert(wideRam.contains("data : UInt<512>"))
+    assert(wideRam.contains("delayCounter"))
+    assert(wideRam.contains("randomState"))
+    assert(wideMmio.contains("data : UInt<512>"))
+    assert(wideMmio.contains("MMIOCore"))
+
+    val pipelinedRam = _root_.circt.stage.ChiselStage.emitCHIRRTL(
+      new npc.protocol.PipelinedAxiLiteDpiRamSlave(dataWidth = 512, depth = 4)
+    )
+    val pipelinedArbiter = _root_.circt.stage.ChiselStage.emitCHIRRTL(
+      new npc.protocol.PipelinedAxiLiteArbiter2(dataWidth = 512, depth = 4)
+    )
+    assert(pipelinedRam.contains("module PipelinedAxiLiteDpiRamSlave"))
+    assert(pipelinedArbiter.contains("readRoutes"))
   }
 }
