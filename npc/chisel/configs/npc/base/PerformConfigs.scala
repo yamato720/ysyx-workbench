@@ -71,6 +71,24 @@ class WithoutNpcExecuteForwardingConfig extends ConfigFragment {
   )
 }
 
+/** 启用完成但尚未退休结果的旁路。该模式只供本地两拍缓存完成表使用。 */
+class WithNpcOutstandingCompletionForwardingConfig extends ConfigFragment {
+  override private[npc] def applyTo(base: NpcConfig): NpcConfig = base.copy(
+    pipeline = base.pipeline.copy(
+      forwarding = base.pipeline.forwarding.copy(enableOutstandingCompletionForwarding = true)
+    )
+  )
+}
+
+/** 关闭完成表旁路，保留原有按序 MEM 行为。 */
+class WithoutNpcOutstandingCompletionForwardingConfig extends ConfigFragment {
+  override private[npc] def applyTo(base: NpcConfig): NpcConfig = base.copy(
+    pipeline = base.pipeline.copy(
+      forwarding = base.pipeline.forwarding.copy(enableOutstandingCompletionForwarding = false)
+    )
+  )
+}
+
 /** 将普通整数执行路径固定为 ID/EX -> EX0 -> EX/MEM 两拍。 */
 class WithTwoStageIntegerExecuteConfig extends ConfigFragment {
   override private[npc] def applyTo(base: NpcConfig): NpcConfig = base.copy(

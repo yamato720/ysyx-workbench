@@ -33,6 +33,11 @@ class PipelinedTwoCycleWideL2SimulationConfig extends ConstructionConfig(
   new PipelinedTwoCycleWideL2SimulationCoreConfig
 ) with LocalNpcTerminal with NemuSimulationIpTerminal
 
+/** 本地 RV64IM 两拍 L1/L2、512-bit DPI Fabric 仿真，关闭完成表结果前递。 */
+class PipelinedTwoCycleWideL2NoCompletionForwardingSimulationConfig extends ConstructionConfig(
+  new PipelinedTwoCycleWideL2NoCompletionForwardingSimulationCoreConfig
+) with LocalNpcTerminal with NemuSimulationIpTerminal
+
 /** 仅 L1 的宽 HBM DPI 抖动构造，启用交互式 SDB VCD 采集。 */
 class HbmJitterCacheVcdSimulationConfig extends ConstructionConfig(
   new HbmJitterCacheSimulationCoreConfig

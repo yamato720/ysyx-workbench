@@ -55,13 +55,18 @@ int main(void) {
   assert(strstr(content, "viewport.style.setProperty('--timeline-width',timelineWidth+'px')") != NULL);
   assert(strstr(content, ">WAIT<") != NULL);
   assert(strstr(content, ">QUEUE<") != NULL);
+  assert(strstr(content, ">ORDER<") != NULL);
   assert(strstr(content, "id=\"detailModal\"") != NULL);
   assert(strstr(content, "function timelineBlocks(record)") != NULL);
   assert(strstr(content, "function openDetail(record,block,target)") != NULL);
   assert(strstr(content, "trace.memory_statistics_mode!=='ServiceOnly'") != NULL);
   assert(strstr(content, "stage queue") != NULL);
+  assert(strstr(content, "stage order") != NULL);
+  assert(strstr(content, "orderWait=i===4&&record.d[3]===0") != NULL);
+  assert(strstr(content, "按序等待较老指令") != NULL);
   assert(strstr(content, "b.addEventListener('click'") != NULL);
   assert(strstr(content, ".stage.wait{background:var(--wait)") != NULL);
+  assert(strstr(content, ".stage.order") != NULL);
   assert(strstr(content, "href=\"performance.html\"") != NULL);
   free(content);
   assert(pipeline_html_write_instructions(empty) == 0);

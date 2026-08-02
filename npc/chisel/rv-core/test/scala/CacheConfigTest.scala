@@ -89,12 +89,16 @@ class CacheConfigTest extends AnyFlatSpec {
 
   it should "freeze the local two-cycle access mode and its four queue depths" in {
     val pipelined = new PipelinedTwoCycleWideL2SimulationConfig().config
+    val noCompletionForwarding = new PipelinedTwoCycleWideL2NoCompletionForwardingSimulationConfig().config
     assert(pipelined.cache.accessMode == CacheAccessMode.PipelinedTwoCycle)
     assert(pipelined.cache.pipelinedQueues == PipelinedCacheQueueConfig.TwoCycleLocal)
     assert(pipelined.cache.instructionBuffer == InstructionBufferConfig(enabled = true, entries = 8))
     assert(pipelined.cache.icache.geometry.lineBytes == 64)
     assert(pipelined.cache.l2cache.geometry.capacityBytes == 256 * 1024)
     assert(pipelined.memoryDataWidth == 512)
+    assert(pipelined.pipeline.forwarding.enableOutstandingCompletionForwarding)
+    assert(!noCompletionForwarding.pipeline.forwarding.enableOutstandingCompletionForwarding)
+    assert(noCompletionForwarding.cache == pipelined.cache)
     assert(!pipelined.memory.dpiTiming.enabled)
     assert(NpcConfig().validated.cache.accessMode == CacheAccessMode.Blocking)
     assertThrows[IllegalArgumentException](pipelined.copy(

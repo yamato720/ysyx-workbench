@@ -41,4 +41,18 @@ endef
 _default:
 	@echo "Please run 'make' under subprojects."
 
+# npc/Makefile 会 include 本文件；只有从工作区根目录直接调用时才声明转发目标，
+# 避免这些目标覆盖 npc 自己的实现并递归进入 npc/npc。
+WORKBENCH_ROOT_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
+ifeq ($(abspath $(CURDIR)),$(WORKBENCH_ROOT_DIR))
+# 构造管理命令不依赖当前目录；从工作区根目录转发可以保持 config/version 等
+# 命令行变量由递归 make 原样传给 npc/Makefile。
+NPC_FORWARD_TARGETS = config-list host-config-list build rebuild resume-post-link host-build build-host rebuild-host version
+
+$(NPC_FORWARD_TARGETS):
+	+$(MAKE) -C "$(CURDIR)/npc" "$@"
+
+.PHONY: .git_commit .clean_index _default $(NPC_FORWARD_TARGETS)
+else
 .PHONY: .git_commit .clean_index _default
+endif

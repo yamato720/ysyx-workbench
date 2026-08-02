@@ -264,7 +264,8 @@ object CacheHierarchyConfig {
 /** 流水线旁路通路的开关。 */
 case class ForwardingConfig(
   enableIdForwarding: Boolean = true,
-  enableExecuteForwarding: Boolean = true
+  enableExecuteForwarding: Boolean = true,
+  enableOutstandingCompletionForwarding: Boolean = false
 )
 
 /** 流水线、互锁和旁路的生成时参数。 */

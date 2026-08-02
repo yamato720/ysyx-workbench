@@ -33,9 +33,9 @@ export CONSTRUCTION_ID_PREFIX=20260718153042
 export NPC_CONFIG_CATALOG_READY=1
 
 # 没有正式 FPGA 构造时，host-build 仍应能根据完整 Config 产生可与外部 xclbin
-# 搭配使用的 U55C host；这个缓存不能出现在正式版本库中，也不能携带硬件资产。
+# 搭配使用的 U55C host；兼容目录不出现在正式版本库中，也不生成硬件资产。
 host_only_fqcn=npc.fpga.u55c.U55cRv64Npc300MHzFpgaConfig
-host_only="$CONSTRUCTION_TEST_ROOT/.hosts/$host_only_fqcn"
+host_only="$CONSTRUCTION_TEST_ROOT/.compatible/$host_only_fqcn"
 "$manager" host-build "$npc_root" U55cRv64Npc300MHzFpgaConfig 0 1
 [[ -x $host_only/abi/nemu/nemu-exec && -f $host_only/abi/nemu/host.env &&
   -f $host_only/profile.env && -f $host_only/construction.env && -s $host_only/logs/host/nemu-host.log ]] ||
@@ -46,17 +46,26 @@ host_only="$CONSTRUCTION_TEST_ROOT/.hosts/$host_only_fqcn"
   $(value "$host_only/construction.env" HOST_ONLY) == 1 ]] ||
   fail 'host-only 缓存没有冻结匹配的 U55C Config profile'
 [[ ! -e $host_only/version.tag && ! -d "$CONSTRUCTION_TEST_ROOT/$host_only_fqcn" &&
-  ! -e $host_only/fpga && ! -e $host_only/abi/rtl ]] ||
+  ! -e $host_only/fpga/artifacts/npc-$(value "$host_only/profile.env" FPGA_PLATFORM).xclbin && ! -e $host_only/abi/rtl ]] ||
   fail 'host-only 缓存错误地生成正式构造或硬件资产'
 if "$manager" resolve "$npc_root" '' 1 >/dev/null 2>&1; then
   fail 'host-only 缓存错误地成为正式 version'
 fi
 
+# 外部平台只需把匹配 FQCN/平台的运行资产放入兼容目录；一旦资产出现，
+# resolve/ensure 都必须选择兼容 host，而不是要求本机 Vivado 构造。
+compatible_asset="$host_only/fpga/artifacts/npc-$(value "$host_only/profile.env" FPGA_PLATFORM).xclbin"
+printf 'external-compatible-xclbin\n' > "$compatible_asset"
+resolved_compatible=$($manager resolve "$npc_root" U55cRv64Npc300MHzFpgaConfig '')
+[[ $(printf '%s\n' "$resolved_compatible" | cut -d'|' -f9) == "$host_only" ]] ||
+  fail '兼容 FPGA 资产出现后 resolve 没有选择兼容 host'
+$manager ensure "$npc_root" "$host_only_fqcn" 0 0 >/dev/null
+
 # The monitor is deliberately a separate v13, batch-only host profile.  A
 # host-only cache can prepare an external v13 xclbin, but it must never turn a
 # regular `run` invocation into an interactive monitor session.
 monitor_fqcn=npc.fpga.u55c.U55cRv64Npc300MHzPerformanceMonitorFpgaConfig
-monitor_host_only="$CONSTRUCTION_TEST_ROOT/.hosts/$monitor_fqcn"
+monitor_host_only="$CONSTRUCTION_TEST_ROOT/.compatible/$monitor_fqcn"
 "$manager" host-build "$npc_root" U55cRv64Npc300MHzPerformanceMonitorFpgaConfig 0 1
 [[ -x $monitor_host_only/abi/nemu/nemu-exec && -f $monitor_host_only/profile.env &&
   $(value "$monitor_host_only/profile.env" CAPABILITY) == batch &&
@@ -249,7 +258,8 @@ host_before=$(sha256sum "$dpi/abi/nemu/nemu-exec" | cut -d' ' -f1)
 [[ $(value "$dpi/construction.env" REBUILD_COUNT) == 0 ]] || fail '未请求 rebuild 却发生重构'
 
 build_hold="$work/rebuild-hold"
-CONSTRUCTION_TEST_HOLD_DIR="$build_hold" "$manager" rebuild "$npc_root" SimulationConfig > "$work/rebuild.log" 2>&1 &
+# version= 只替代 Config 选择；完整重构仍使用当前源码并保留原版本编号。
+CONSTRUCTION_TEST_HOLD_DIR="$build_hold" "$manager" rebuild "$npc_root" "version=$dpi_version" > "$work/rebuild.log" 2>&1 &
 build_pid=$!
 for _ in $(seq 1 1500); do [[ -e $build_hold/ready ]] && break; sleep 0.02; done
 [[ -e $build_hold/ready ]] || fail 'rebuild 没有进入可观察状态'
@@ -327,6 +337,11 @@ mkdir -p "$dpi/runtime/preserve"; printf 'keep\n' > "$dpi/runtime/preserve/trace
   $(value "$dpi/abi/nemu/host.env" NEMU_CACHE_HTML) == 1 &&
   $(value "$dpi/abi/nemu/host.env" NEMU_PIPELINE_HTML) == 1 ]] ||
   fail 'host 元数据没有升级性能/流水 HTML ABI'
+# 版本选择必须直接命中保存目录；即使旧 host 与保存 profile 失配，也不能退回当前 catalog 解析。
+"$manager" host-build "$npc_root" "version=$dpi_version" 0 1
+[[ -f $dpi/runtime/preserve/trace &&
+  $(value "$dpi/abi/nemu/host.env" NEMU_PRESET) == LocalPipelineTrace ]] ||
+  fail 'host-build version= 没有刷新已保存构造或破坏运行产物'
 "$manager" host-build "$npc_root" '' 1 -1
 "$manager" ensure "$npc_root" SimulationConfig 0 1
 if "$manager" ensure "$npc_root" SimulationConfig 0 0 1 >/dev/null 2>&1; then

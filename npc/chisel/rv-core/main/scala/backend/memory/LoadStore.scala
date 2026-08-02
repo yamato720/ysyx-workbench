@@ -222,11 +222,36 @@ class LSUAXIAdapter(
 
 /** 已发出到 D$ 的流水访存，用于把 AXI 响应与原始指令按顺序重新配对。 */
 class PipelinedMemoryIssued(addrWidth: Int) extends Bundle {
+  val tag = UInt(2.W)
   val write = Bool()
   val addr = UInt(addrWidth.W)
   val accessType = UInt(3.W)
   val serviceStartCycle = UInt(64.W)
   val queueCycles = UInt(64.W)
+}
+
+/** 已分配完成表槽位的待发访存。 */
+class PipelinedMemoryPending(cfg: ISAConfig) extends Bundle {
+  val tag = UInt(2.W)
+  val payload = new ExecuteMemoryPayload(cfg)
+}
+
+/** 算术端点回填完成表时携带的结果。 */
+class PipelinedArithmeticCompletion(xlen: Int) extends Bundle {
+  val tag = UInt(2.W)
+  val result = UInt(xlen.W)
+  val exceptionFlags = UInt(5.W)
+  val illegal = Bool()
+}
+
+/** 供后端 RAW 检测和旁路选择的完成表候选项，顺序由新到旧。 */
+class OutstandingCompletionCandidate(xlen: Int) extends Bundle {
+  val valid = Bool()
+  val writesRd = Bool()
+  val writesFloatingRd = Bool()
+  val rd = UInt(5.W)
+  val data = UInt(xlen.W)
+  val dataValid = Bool()
 }
 
 /** D$ 完成队列的元素；fault 也占据一个完成位置，不能让年轻请求越过它。 */
@@ -255,7 +280,7 @@ class PipelinedMemoryCompletion(addrWidth: Int, dataWidth: Int) extends Bundle {
   * 周期和 service 周期通过独立侧带保留。AXI fault 或错位访问都生成一个有序
   * completion，并锁住年轻请求直到外部观察到 fault。
   */
-class PipelinedMemoryStage(
+private class LegacyPipelinedMemoryStage(
   addrWidth: Int = 32,
   dataWidth: Int = 64,
   mainMemoryBase: Long = 0x80000000L,
@@ -365,6 +390,7 @@ class PipelinedMemoryStage(
   pendingQueue.io.deq.ready := dropYoung || faultCompletion || readIssue || writeComplete
 
   issuedQueue.io.enq.valid := busIssue
+  issuedQueue.io.enq.bits.tag := 0.U
   issuedQueue.io.enq.bits.write := pending.storeEnable
   issuedQueue.io.enq.bits.addr := pending.aluResult(addrWidth - 1, 0)
   issuedQueue.io.enq.bits.accessType := pending.funct3
@@ -510,4 +536,459 @@ class PipelinedMemoryStage(
     issuedQueue.io.deq.valid || completionQueue.io.deq.valid
   io.busy := faultValid || dropYoung || anyQueueValid || writeAwSent || writeWSent
   io.drained := !io.busy
+}
+
+/** 两拍缓存完成表的公共接口。 */
+class PipelinedMemoryStageIO(
+  addrWidth: Int,
+  dataWidth: Int,
+  outstandingDepth: Int,
+  cfg: ISAConfig
+) extends Bundle {
+  val request = Flipped(Decoupled(new ExecuteMemoryPayload(cfg)))
+  val arithmeticRequest = Flipped(Decoupled(new ExecuteMemoryPayload(cfg)))
+  val arithmeticAllocateTag = Output(UInt(2.W))
+  val arithmeticSlotAvailable = Output(Bool())
+  val arithmeticCompletion = Vec(2, Flipped(Decoupled(new PipelinedArithmeticCompletion(cfg.xlen))))
+  val completionCandidates = Output(Vec(outstandingDepth, new OutstandingCompletionCandidate(cfg.xlen)))
+  val response = Decoupled(new MemoryWritebackPayload(cfg))
+  val cycle = Input(UInt(64.W))
+  val flush = Input(Bool())
+  val axi = new AxiLiteMasterIO(addrWidth, dataWidth)
+  val fault = Output(new MemoryFault(addrWidth))
+  val busy = Output(Bool())
+  val drained = Output(Bool())
+}
+
+/**
+  * 本地两拍缓存的四项完成/退休环。
+  *
+  * 槽位按分配顺序形成一个固定环。访存和 M/F 请求先占据槽位，完成可以乱序回填，
+  * 但只有环首已完成的槽位可送入 MEM/WB。发生 fault 后停止新分配，在 fault
+  * 退休的同拍丢弃年轻槽位，并等待旧端点响应被吸收后才复用 tag。
+  */
+private class OutstandingPipelinedMemoryStage(
+  addrWidth: Int,
+  dataWidth: Int,
+  mainMemoryBase: Long,
+  mainMemorySize: Long,
+  outstandingDepth: Int,
+  cfg: ISAConfig
+) extends Module {
+  require(outstandingDepth == 4,
+    s"OutstandingPipelinedMemoryStage freezes four completion entries, got $outstandingDepth")
+
+  val io = IO(new PipelinedMemoryStageIO(addrWidth, dataWidth, outstandingDepth, cfg))
+  private val tagWidth = 2
+  private val beatBytes = dataWidth / 8
+  private val beatOffsetBits = log2Ceil(beatBytes)
+
+  val entryPayload = Reg(Vec(outstandingDepth, new ExecuteMemoryPayload(cfg)))
+  val entryValid = RegInit(VecInit(Seq.fill(outstandingDepth)(false.B)))
+  val entryComplete = RegInit(VecInit(Seq.fill(outstandingDepth)(false.B)))
+  val entryArithmetic = RegInit(VecInit(Seq.fill(outstandingDepth)(false.B)))
+  val entryLoadData = Reg(Vec(outstandingDepth, UInt(cfg.xlen.W)))
+  val entryResult = Reg(Vec(outstandingDepth, UInt(cfg.xlen.W)))
+  val entryExceptionFlags = Reg(Vec(outstandingDepth, UInt(5.W)))
+  val entryIllegal = RegInit(VecInit(Seq.fill(outstandingDepth)(false.B)))
+  val entryFault = RegInit(VecInit(Seq.fill(outstandingDepth)(false.B)))
+  val entryFaultReason = Reg(Vec(outstandingDepth, UInt(3.W)))
+  val entryServiceStart = Reg(Vec(outstandingDepth, UInt(64.W)))
+  val entryQueueCycles = Reg(Vec(outstandingDepth, UInt(64.W)))
+  val entryServiceCycles = Reg(Vec(outstandingDepth, UInt(64.W)))
+  val headIndex = RegInit(0.U(tagWidth.W))
+  val tailIndex = RegInit(0.U(tagWidth.W))
+  val entryCount = RegInit(0.U(3.W))
+
+  val pendingQueue = Module(new Queue(new PipelinedMemoryPending(cfg), outstandingDepth,
+    pipe = false, flow = false))
+  val issuedQueue = Module(new Queue(new PipelinedMemoryIssued(addrWidth), outstandingDepth,
+    pipe = false, flow = false))
+  val writeAwSent = RegInit(false.B)
+  val writeWSent = RegInit(false.B)
+  val faultPending = RegInit(false.B)
+  val faultAddrReg = RegInit(0.U(addrWidth.W))
+  val faultWriteReg = RegInit(false.B)
+  val faultLenReg = RegInit(0.U(4.W))
+  val faultReasonReg = RegInit(0.U(3.W))
+  val dropYoung = RegInit(false.B)
+  val arithmeticRoundRobin = RegInit(false.B)
+  val mulDivInFlight = RegInit(false.B)
+  val floatingInFlight = RegInit(false.B)
+
+  def accessBytes(accessType: UInt): UInt = MuxLookup(accessType(1, 0), 1.U(4.W))(Seq(
+    "b00".U -> 1.U(4.W), "b01".U -> 2.U(4.W), "b10".U -> 4.U(4.W),
+    "b11".U -> 8.U(4.W)
+  ))
+
+  def naturallyMisaligned(addr: UInt, accessType: UInt): Bool = MuxLookup(accessType(1, 0), false.B)(Seq(
+    "b00".U -> false.B,
+    "b01".U -> addr(0),
+    "b10".U -> addr(1, 0).orR,
+    "b11".U -> addr(2, 0).orR
+  ))
+
+  def crossesBeat(addr: UInt, accessType: UInt): Bool =
+    (addr(beatOffsetBits - 1, 0) +& accessBytes(accessType)) > beatBytes.U
+
+  private def increment(index: UInt): UInt = (index + 1.U)(tagWidth - 1, 0)
+  private def newestIndex(offset: Int): UInt = (tailIndex - (offset + 1).U)(tagWidth - 1, 0)
+  private def isMemory(payload: ExecuteMemoryPayload): Bool = payload.loadEnable || payload.storeEnable
+
+  val canAllocate = !dropYoung && !faultPending && !io.flush && entryCount =/= outstandingDepth.U
+  val normalIsMemory = isMemory(io.request.bits)
+  // 环为空时，已完成的普通项可直接退休；该快路径不跨越任何较老槽位，也不占用
+  // MEM queue/service 统计，保持原有空 MEM 的单拍行为。
+  val sameCycleRetire = canAllocate && entryCount === 0.U && io.request.valid && !normalIsMemory
+  io.request.ready := Mux(sameCycleRetire, io.response.ready,
+    canAllocate && (!normalIsMemory || pendingQueue.io.enq.ready))
+  // EX/MEM 中的指令比 ID/EX 的算术请求更老，因而分配端口必须先让 EX/MEM 使用空槽位。
+  io.arithmeticRequest.ready := canAllocate && !io.request.valid
+  io.arithmeticAllocateTag := tailIndex
+  io.arithmeticSlotAvailable := canAllocate
+  val normalAllocate = io.request.fire && !sameCycleRetire
+  val arithmeticAllocate = io.arithmeticRequest.fire
+  val allocate = normalAllocate || arithmeticAllocate
+  val allocatePayload = Wire(new ExecuteMemoryPayload(cfg))
+  allocatePayload := Mux(arithmeticAllocate, io.arithmeticRequest.bits, io.request.bits)
+  val allocateMemory = normalAllocate && normalIsMemory
+
+  pendingQueue.io.enq.valid := normalAllocate && normalIsMemory
+  pendingQueue.io.enq.bits.tag := tailIndex
+  pendingQueue.io.enq.bits.payload := io.request.bits
+
+  val pending = pendingQueue.io.deq.bits
+  val pendingPayload = pending.payload
+  val pendingValid = pendingQueue.io.deq.valid && !dropYoung && !faultPending && !io.flush
+  val pendingMisaligned = naturallyMisaligned(pendingPayload.aluResult, pendingPayload.funct3)
+  val pendingCrossesBeat = crossesBeat(pendingPayload.aluResult, pendingPayload.funct3)
+  val pendingFault = pendingMisaligned || pendingCrossesBeat
+  val canIssueBus = pendingValid && !pendingFault && issuedQueue.io.enq.ready
+
+  io.axi.aw.valid := canIssueBus && pendingPayload.storeEnable && !writeAwSent
+  io.axi.aw.bits.addr := pendingPayload.aluResult(addrWidth - 1, 0)
+  io.axi.aw.bits.size := pendingPayload.funct3(1, 0)
+  io.axi.aw.bits.prot := "b000".U
+  io.axi.w.valid := canIssueBus && pendingPayload.storeEnable && !writeWSent
+  io.axi.w.bits.data := AxiLiteWstrb.alignData(pendingPayload.storeData,
+    pendingPayload.aluResult(beatOffsetBits - 1, 0), dataWidth)
+  io.axi.w.bits.strb := AxiLiteWstrb.genStrb(pendingPayload.funct3,
+    pendingPayload.aluResult(beatOffsetBits - 1, 0), dataWidth)
+  io.axi.ar.valid := canIssueBus && pendingPayload.loadEnable
+  io.axi.ar.bits.addr := pendingPayload.aluResult(addrWidth - 1, 0)
+  io.axi.ar.bits.size := pendingPayload.funct3(1, 0)
+  io.axi.ar.bits.prot := "b100".U
+  io.axi.r.ready := false.B
+  io.axi.b.ready := false.B
+
+  val awFire = io.axi.aw.fire
+  val wFire = io.axi.w.fire
+  val writeComplete = canIssueBus && pendingPayload.storeEnable &&
+    (writeAwSent || awFire) && (writeWSent || wFire)
+  val readIssue = io.axi.ar.fire
+  val busIssue = readIssue || writeComplete
+  pendingQueue.io.deq.ready := dropYoung || readIssue || writeComplete
+  issuedQueue.io.enq.valid := busIssue
+  issuedQueue.io.enq.bits.tag := pending.tag
+  issuedQueue.io.enq.bits.write := pendingPayload.storeEnable
+  issuedQueue.io.enq.bits.addr := pendingPayload.aluResult(addrWidth - 1, 0)
+  issuedQueue.io.enq.bits.accessType := pendingPayload.funct3
+  issuedQueue.io.enq.bits.serviceStartCycle := io.cycle
+  issuedQueue.io.enq.bits.queueCycles := io.cycle - pendingPayload.perfMemoryQueueStartCycle
+
+  when(writeComplete) {
+    writeAwSent := false.B
+    writeWSent := false.B
+  }.otherwise {
+    when(awFire) { writeAwSent := true.B }
+    when(wFire) { writeWSent := true.B }
+  }
+
+  val issued = issuedQueue.io.deq.bits
+  // 错位 fault 需先排在全部已发请求之后，才能与正常 AXI 响应共用一次回填端口。
+  val faultCompletion = pendingValid && pendingFault && !issuedQueue.io.deq.valid
+  val arithmetic0Valid = io.arithmeticCompletion(0).valid
+  val arithmetic1Valid = io.arithmeticCompletion(1).valid
+  val arithmeticSelected = WireDefault(false.B)
+  val arithmeticSelectedIndex = WireDefault(0.U(1.W))
+  when(arithmetic0Valid && (!arithmetic1Valid || !arithmeticRoundRobin)) {
+    arithmeticSelected := true.B
+    arithmeticSelectedIndex := 0.U
+  }.elsewhen(arithmetic1Valid) {
+    arithmeticSelected := true.B
+    arithmeticSelectedIndex := 1.U
+  }
+
+  val headFault = entryValid(headIndex) && entryComplete(headIndex) && entryFault(headIndex)
+  val faultRetire = io.response.fire && !sameCycleRetire && headFault
+  // `faultRetire` 只能在时钟边界启动清理，不能反向参与本拍 response.valid，
+  // 否则 valid/ready 会形成组合环。
+  val droppingNow = dropYoung
+  val arithmeticFire = arithmeticSelected && !faultCompletion && !droppingNow
+  io.arithmeticCompletion(0).ready := droppingNow || (arithmeticFire && arithmeticSelectedIndex === 0.U)
+  io.arithmeticCompletion(1).ready := droppingNow || (arithmeticFire && arithmeticSelectedIndex === 1.U)
+
+  val allowBusResponse = !faultCompletion && !arithmeticSelected && !droppingNow
+  io.axi.r.ready := issuedQueue.io.deq.valid && !issued.write && (allowBusResponse || dropYoung)
+  io.axi.b.ready := issuedQueue.io.deq.valid && issued.write && (allowBusResponse || dropYoung)
+  val readResponse = io.axi.r.fire
+  val writeResponse = io.axi.b.fire
+  val busResponse = readResponse || writeResponse
+  issuedQueue.io.deq.ready := dropYoung || busResponse
+
+  val memoryCompletion = faultCompletion || busResponse
+  val memoryCompletionTag = Mux(faultCompletion, pending.tag, issued.tag)
+  val memoryCompletionFault = Mux(faultCompletion, true.B,
+    Mux(issued.write, io.axi.b.bits.resp =/= AxiLiteResp.OKAY, io.axi.r.bits.resp =/= AxiLiteResp.OKAY))
+  val memoryCompletionReason = Mux(faultCompletion,
+    Mux(pendingMisaligned, MemoryFaultReason.misaligned, MemoryFaultReason.crossBeat),
+    Mux(issued.write, MemoryFaultReason.writeResponse, MemoryFaultReason.readResponse))
+  val memoryCompletionData = Mux(issued.write, 0.U(cfg.xlen.W),
+    AxiLiteLoadUnpack.unpack(io.axi.r.bits.data, issued.addr(beatOffsetBits - 1, 0),
+      issued.accessType, dataWidth))
+  val memoryCompletionStart = Mux(faultCompletion, io.cycle, issued.serviceStartCycle)
+  val memoryCompletionQueueCycles = Mux(faultCompletion,
+    io.cycle - pendingPayload.perfMemoryQueueStartCycle, issued.queueCycles)
+  val memoryCompletionCycles = Mux(faultCompletion, 0.U, io.cycle - issued.serviceStartCycle)
+
+  val responsePayload = Wire(new ExecuteMemoryPayload(cfg))
+  responsePayload := entryPayload(headIndex)
+  when(sameCycleRetire) { responsePayload := io.request.bits }
+  val responseArithmetic = !sameCycleRetire && entryArithmetic(headIndex)
+  val responseFault = !sameCycleRetire && entryFault(headIndex)
+  val responseIllegal = !sameCycleRetire && entryIllegal(headIndex)
+  val responseMemory = isMemory(responsePayload)
+  val responseAluResult = Mux(responseArithmetic, entryResult(headIndex), responsePayload.aluResult)
+  val responseData = Mux(responsePayload.writebackFromMemory, entryLoadData(headIndex), responseAluResult)
+  val responseFaultCause = Mux(responsePayload.storeEnable,
+    Mux(entryFaultReason(headIndex) === MemoryFaultReason.misaligned ||
+      entryFaultReason(headIndex) === MemoryFaultReason.crossBeat,
+      CsrCause.misalignedStore.U(cfg.xlen.W), CsrCause.storeAccess.U(cfg.xlen.W)),
+    Mux(entryFaultReason(headIndex) === MemoryFaultReason.misaligned ||
+      entryFaultReason(headIndex) === MemoryFaultReason.crossBeat,
+      CsrCause.misalignedLoad.U(cfg.xlen.W), CsrCause.loadAccess.U(cfg.xlen.W)))
+  val branchNextPc = Mux(responsePayload.branchTaken === 2.U,
+    responsePayload.jalrTarget, responsePayload.branchTarget)
+
+  io.response.valid := sameCycleRetire ||
+    (entryValid(headIndex) && entryComplete(headIndex) && !droppingNow)
+  io.response.bits := 0.U.asTypeOf(new MemoryWritebackPayload(cfg))
+  io.response.bits.pc := responsePayload.pc
+  io.response.bits.instruction := responsePayload.instruction
+  io.response.bits.perfFetchStartCycle := responsePayload.perfFetchStartCycle
+  io.response.bits.perfFetchCycles := responsePayload.perfFetchCycles
+  io.response.bits.perfDecodeStartCycle := responsePayload.perfDecodeStartCycle
+  io.response.bits.perfDecodeCycles := responsePayload.perfDecodeCycles
+  io.response.bits.perfExecuteStartCycle := responsePayload.perfExecuteStartCycle
+  io.response.bits.perfExecuteCycles := responsePayload.perfExecuteCycles
+  io.response.bits.perfMemoryStartCycle := Mux(responseMemory, entryServiceStart(headIndex), responsePayload.perfMemoryStartCycle)
+  io.response.bits.perfMemoryCycles := Mux(responseMemory, entryServiceCycles(headIndex), 0.U)
+  io.response.bits.perfMemoryQueueStartCycle := Mux(responseMemory,
+    responsePayload.perfMemoryQueueStartCycle, responsePayload.perfMemoryStartCycle)
+  io.response.bits.perfMemoryServiceStartCycle := Mux(responseMemory,
+    entryServiceStart(headIndex), responsePayload.perfMemoryStartCycle)
+  io.response.bits.perfMemoryQueueCycles := Mux(responseMemory, entryQueueCycles(headIndex), 0.U)
+  io.response.bits.perfMemoryServiceCycles := Mux(responseMemory, entryServiceCycles(headIndex), 0.U)
+  io.response.bits.perfWritebackStartCycle := io.cycle
+  io.response.bits.nextPc := Mux(responsePayload.branch && responsePayload.branchTaken =/= 0.U,
+    branchNextPc, responsePayload.pc + 4.U)
+  io.response.bits.rd := responsePayload.rd
+  io.response.bits.aluResult := responseAluResult
+  io.response.bits.storeData := responsePayload.storeData
+  io.response.bits.storeEnable := responsePayload.storeEnable
+  io.response.bits.storeAccessType := responsePayload.funct3
+  io.response.bits.loadData := responseData
+  io.response.bits.csrReadData := responsePayload.csrReadData
+  io.response.bits.writebackFromMemory := responsePayload.writebackFromMemory
+  io.response.bits.registerWriteEnable := responsePayload.registerWriteEnable && !responseFault && !responseIllegal
+  io.response.bits.floatRegisterWriteEnable := responsePayload.floatRegisterWriteEnable && !responseFault && !responseIllegal
+  io.response.bits.floatingInstruction := responsePayload.floatingInstruction && !responseFault && !responseIllegal
+  io.response.bits.floatingExceptionFlags := Mux(responseArithmetic, entryExceptionFlags(headIndex),
+    responsePayload.floatingExceptionFlags)
+  io.response.bits.csrReadWritebackEnable := responsePayload.csrReadWritebackEnable
+  io.response.bits.csrAddress := responsePayload.csrAddress
+  io.response.bits.csrWriteEnable := responsePayload.csrWriteEnable
+  io.response.bits.csrWriteData := responsePayload.csrWriteData
+  io.response.bits.csrAccessAllowed := responsePayload.csrAccessAllowed
+  io.response.bits.trapEnable := responsePayload.trapEnable || responseFault || responseIllegal
+  io.response.bits.trapCause := Mux(responseFault, responseFaultCause,
+    Mux(responseIllegal, CsrCause.illegalInstruction.U(cfg.xlen.W), responsePayload.trapCause))
+  io.response.bits.trapEpc := Mux(responseFault || responseIllegal, responsePayload.pc,
+    responsePayload.trapEpc)
+  io.response.bits.mretEnable := responsePayload.mretEnable
+
+  for (offset <- 0 until outstandingDepth) {
+    val index = newestIndex(offset)
+    val payload = entryPayload(index)
+    val faultOrIllegal = entryFault(index) || entryIllegal(index)
+    io.completionCandidates(offset).valid := entryCount > offset.U
+    io.completionCandidates(offset).writesRd := payload.registerWriteEnable && !faultOrIllegal
+    io.completionCandidates(offset).writesFloatingRd := payload.floatRegisterWriteEnable && !faultOrIllegal
+    io.completionCandidates(offset).rd := payload.rd
+    io.completionCandidates(offset).data := Mux(payload.csrReadWritebackEnable, payload.csrReadData,
+      Mux(payload.writebackFromMemory, entryLoadData(index),
+        Mux(entryArithmetic(index), entryResult(index), payload.aluResult)))
+    io.completionCandidates(offset).dataValid := entryComplete(index)
+  }
+
+  val selectedArithmeticCompletion = Wire(new PipelinedArithmeticCompletion(cfg.xlen))
+  selectedArithmeticCompletion := io.arithmeticCompletion(0).bits
+  when(arithmeticSelectedIndex === 1.U) {
+    selectedArithmeticCompletion := io.arithmeticCompletion(1).bits
+  }
+
+  when(allocate) {
+    entryPayload(tailIndex) := allocatePayload
+    entryValid(tailIndex) := true.B
+    entryComplete(tailIndex) := !allocateMemory && !arithmeticAllocate
+    entryArithmetic(tailIndex) := arithmeticAllocate
+    entryLoadData(tailIndex) := 0.U
+    entryResult(tailIndex) := allocatePayload.aluResult
+    entryExceptionFlags(tailIndex) := allocatePayload.floatingExceptionFlags
+    entryIllegal(tailIndex) := false.B
+    entryFault(tailIndex) := false.B
+    entryFaultReason(tailIndex) := 0.U
+    entryServiceStart(tailIndex) := allocatePayload.perfMemoryStartCycle
+    entryQueueCycles(tailIndex) := 0.U
+    entryServiceCycles(tailIndex) := 0.U
+    tailIndex := increment(tailIndex)
+  }
+  when(memoryCompletion && !droppingNow) {
+    entryComplete(memoryCompletionTag) := true.B
+    entryLoadData(memoryCompletionTag) := memoryCompletionData
+    entryFault(memoryCompletionTag) := memoryCompletionFault
+    entryFaultReason(memoryCompletionTag) := memoryCompletionReason
+    entryServiceStart(memoryCompletionTag) := memoryCompletionStart
+    entryQueueCycles(memoryCompletionTag) := memoryCompletionQueueCycles
+    entryServiceCycles(memoryCompletionTag) := memoryCompletionCycles
+    when(memoryCompletionFault) {
+      faultPending := true.B
+      faultAddrReg := Mux(faultCompletion, pendingPayload.aluResult(addrWidth - 1, 0), issued.addr)
+      faultWriteReg := Mux(faultCompletion, pendingPayload.storeEnable, issued.write)
+      faultLenReg := Mux(faultCompletion, accessBytes(pendingPayload.funct3), accessBytes(issued.accessType))
+      faultReasonReg := memoryCompletionReason
+    }
+  }
+  when(arithmeticFire) {
+    entryComplete(selectedArithmeticCompletion.tag) := true.B
+    entryResult(selectedArithmeticCompletion.tag) := selectedArithmeticCompletion.result
+    entryExceptionFlags(selectedArithmeticCompletion.tag) := selectedArithmeticCompletion.exceptionFlags
+    entryIllegal(selectedArithmeticCompletion.tag) := selectedArithmeticCompletion.illegal
+    arithmeticRoundRobin := !arithmeticSelectedIndex.asBool
+  }
+
+  when(arithmeticAllocate && !io.arithmeticRequest.bits.floatingInstruction) {
+    mulDivInFlight := true.B
+  }
+  when(arithmeticAllocate && io.arithmeticRequest.bits.floatingInstruction) {
+    floatingInFlight := true.B
+  }
+  when(io.arithmeticCompletion(0).fire) { mulDivInFlight := false.B }
+  when(io.arithmeticCompletion(1).fire) { floatingInFlight := false.B }
+
+  val tableRetire = io.response.fire && !sameCycleRetire
+  when(tableRetire) {
+    entryValid(headIndex) := false.B
+    headIndex := increment(headIndex)
+  }
+  when(allocate && !tableRetire) {
+    entryCount := entryCount + 1.U
+  }.elsewhen(!allocate && tableRetire) {
+    entryCount := entryCount - 1.U
+  }
+
+  when(faultRetire) {
+    // fault 已在环首退休，年轻项不再具有架构可见性，tag 仍保留到端点响应被吸收。
+    dropYoung := true.B
+    faultPending := false.B
+    entryCount := 0.U
+    for (index <- 0 until outstandingDepth) {
+      entryValid(index) := false.B
+      entryComplete(index) := false.B
+    }
+  }
+  when(dropYoung && !pendingQueue.io.deq.valid && !issuedQueue.io.deq.valid &&
+    !mulDivInFlight && !floatingInFlight && !writeAwSent && !writeWSent) {
+    dropYoung := false.B
+    headIndex := 0.U
+    tailIndex := 0.U
+  }
+
+  io.fault.valid := faultPending
+  io.fault.addr := faultAddrReg
+  io.fault.write := faultWriteReg
+  io.fault.len := faultLenReg
+  io.fault.reason := faultReasonReg
+  io.busy := entryCount =/= 0.U || pendingQueue.io.deq.valid || issuedQueue.io.deq.valid ||
+    faultPending || dropYoung || mulDivInFlight || floatingInFlight || writeAwSent || writeWSent
+  io.drained := !io.busy
+}
+
+/**
+  * 两拍缓存 MEM 阶段的公开封装。
+  *
+  * 默认实例保持历史按序 FIFO 行为；只有显式开启完成表旁路时才实例化可并发完成的
+  * 四项环，从而使其他流水线、FPGA 和 SoC 的生成 RTL 保持不变。
+  */
+class PipelinedMemoryStage(
+  addrWidth: Int = 32,
+  dataWidth: Int = 64,
+  mainMemoryBase: Long = 0x80000000L,
+  mainMemorySize: Long = 0x08000000L,
+  val outstandingDepth: Int = 4,
+  cfg: ISAConfig = ISAConfig(),
+  enableOutstandingCompletionForwarding: Boolean = false
+) extends Module {
+  val io = IO(new PipelinedMemoryStageIO(addrWidth, dataWidth, outstandingDepth, cfg))
+
+  if (enableOutstandingCompletionForwarding) {
+    val implementation = Module(new OutstandingPipelinedMemoryStage(addrWidth, dataWidth,
+      mainMemoryBase, mainMemorySize, outstandingDepth, cfg))
+    implementation.io.request.valid := io.request.valid
+    implementation.io.request.bits := io.request.bits
+    io.request.ready := implementation.io.request.ready
+    implementation.io.arithmeticRequest.valid := io.arithmeticRequest.valid
+    implementation.io.arithmeticRequest.bits := io.arithmeticRequest.bits
+    io.arithmeticRequest.ready := implementation.io.arithmeticRequest.ready
+    io.arithmeticAllocateTag := implementation.io.arithmeticAllocateTag
+    io.arithmeticSlotAvailable := implementation.io.arithmeticSlotAvailable
+    for (index <- 0 until 2) {
+      implementation.io.arithmeticCompletion(index).valid := io.arithmeticCompletion(index).valid
+      implementation.io.arithmeticCompletion(index).bits := io.arithmeticCompletion(index).bits
+      io.arithmeticCompletion(index).ready := implementation.io.arithmeticCompletion(index).ready
+    }
+    io.completionCandidates := implementation.io.completionCandidates
+    io.response.valid := implementation.io.response.valid
+    io.response.bits := implementation.io.response.bits
+    implementation.io.response.ready := io.response.ready
+    implementation.io.cycle := io.cycle
+    implementation.io.flush := io.flush
+    io.axi <> implementation.io.axi
+    io.fault := implementation.io.fault
+    io.busy := implementation.io.busy
+    io.drained := implementation.io.drained
+  } else {
+    val implementation = Module(new LegacyPipelinedMemoryStage(addrWidth, dataWidth,
+      mainMemoryBase, mainMemorySize, outstandingDepth, cfg))
+    implementation.io.request.valid := io.request.valid
+    implementation.io.request.bits := io.request.bits
+    io.request.ready := implementation.io.request.ready
+    io.arithmeticRequest.ready := false.B
+    io.arithmeticAllocateTag := 0.U
+    io.arithmeticSlotAvailable := false.B
+    for (index <- 0 until 2) {
+      io.arithmeticCompletion(index).ready := true.B
+    }
+    io.completionCandidates := VecInit(Seq.fill(outstandingDepth)(0.U.asTypeOf(
+      new OutstandingCompletionCandidate(cfg.xlen))))
+    io.response.valid := implementation.io.response.valid
+    io.response.bits := implementation.io.response.bits
+    implementation.io.response.ready := io.response.ready
+    implementation.io.cycle := io.cycle
+    implementation.io.flush := io.flush
+    io.axi <> implementation.io.axi
+    io.fault := implementation.io.fault
+    io.busy := implementation.io.busy
+    io.drained := implementation.io.drained
+  }
 }

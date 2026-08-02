@@ -28,6 +28,7 @@ class PipelineUnitsTest extends AnyFlatSpec {
 
     assert(pipeline.forwarding.enableIdForwarding)
     assert(pipeline.forwarding.enableExecuteForwarding)
+    assert(!pipeline.forwarding.enableOutstandingCompletionForwarding)
     assert(pipeline.integerExecuteStages == 1)
     assert(pipeline.serialExecuteStages == 1)
     assert(!pipeline.registerInitialFetchRequest)

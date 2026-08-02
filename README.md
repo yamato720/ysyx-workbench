@@ -47,6 +47,18 @@ echo "NVBOARD_HOME=$NVBOARD_HOME"
 `config=`：
 
 ```bash
+# 构造管理目标也可以直接从工作区根目录发起，等价于 make -C npc ...。
+make config-list
+make build config=SimulationConfig
+make rebuild config=SimulationConfig
+make rebuild version=1
+make resume-post-link config=U55cRv64CacheNpc150MHzPerformanceMonitorFpgaConfig
+make host-config-list
+make host-build config=SimulationConfig
+make build-host config=SimulationConfig
+make rebuild-host version=1
+make version
+
 make -C npc config-list
 make -C npc build config=SimulationConfig
 make -C npc build config=YsyxSimulationConfig
@@ -59,6 +71,8 @@ make -C npc build config=YsyxSimulationConfig
 make -C npc version
 make -C npc version config=SimulationConfig
 make -C npc version version=1
+make rebuild version=1
+make host-build version=1
 ```
 
 所有由 `config=` 选中的终端都会绑定保存的 NEMU 运行宿主；本地仿真只是其中的本地 Verilator 实现，
@@ -75,8 +89,16 @@ make -C am-kernels/tests/cpu-tests run-bat ALL="forwarding matrix-mul fpu" versi
 
 仿真 Config 在首次运行时自动构造。后续运行直接执行保存的 NEMU host，不再启动 NEMU Make；需要按
 C/C++/menuconfig 依赖增量刷新 host 时使用运行入口的 `host-rebuild=1`，或执行
-`make -C npc host-build config=<硬件Config>`。变更 Chisel、生成 RTL、Verilator glue 或要更新硬件 ABI
-时，执行 `make -C npc rebuild config=<Config>`。
+`make host-build version=<编号>`（也可使用 `make -C npc host-build version=<编号>`）按已保存构造刷新 host；
+也可用 `config=<硬件Config>`按当前 Config 解析。变更 Chisel、生成 RTL、Verilator glue 或要更新硬件 ABI
+时，执行 `make rebuild config=<Config>`，或以 `make rebuild version=<编号>` 从保存构造取得同名 Config。
+后者仍使用当前源码和当前 Config 做完整更新，只保留原版本编号。`host-build`/`rebuild` 的 `config=` 与
+`version=` 均不能同时使用。
+
+FPGA 也可以只构造 host，再接入其他平台生成的资产：
+`make build-host config=<FPGA Config>` 会创建 `npc/constructions/.compatible/<FQCN>/`，将 U55C 的
+`npc-<FPGA_PLATFORM>.xclbin` 或 ZCU102 的 `npc.bit`/`npc-zcu102.env` 放入其 `fpga/artifacts/` 后即可运行。
+兼容目录资产优先于同一 Config 的正式 Vivado/Vitis 目录；正式构造的版本号和资产不会被改写。
 
 ## FPGA 构造
 

@@ -66,6 +66,7 @@ classpath、Make 和 construction manager 在启动前解析公开终端。该�
 | `HbmJitterL2CacheSimulationConfig` | NPC | 上述宽 L1 模型加统一 256 KiB、8-way、64-byte L2 的本地 DPI 时序对比 |
 | `HbmJitterCacheVcdSimulationConfig` | NPC | 上述宽 L1 本地时序模型，加可由 SDB `start`/`stop` 控制的 Verilator VCD；需完整构造 |
 | `PipelinedTwoCycleWideL2SimulationConfig` | NPC | 仅本地仿真的 RV64IM 两拍 I$/D$/L2，512-bit DPI Fabric；命中 N+2 返回，四项 FIFO 深度和 8 项 instruction buffer 固化 |
+| `PipelinedTwoCycleWideL2NoCompletionForwardingSimulationConfig` | NPC | 与两拍 I$/D$/L2 端点相同，但关闭完成表结果前递，供本地 A/B 对照 |
 | `PipelineSimulationConfig` | NPC | 启用 ID/EX 前递的流水 NPC 本地仿真 |
 | `FullIsa64NoPipelineSimulationConfig` | NPC | RV64IMF_Zicsr 无流水线性能基线 |
 | `FullIsa64PipelineNoForwardingSimulationConfig` | NPC | RV64IMF_Zicsr 流水线无 ID/EX 前递 |
@@ -153,6 +154,8 @@ FPGA 上板和 check-only Config 保持关闭。
 读，S1 比较 tag，命中响应经有序 FIFO 在 N+2 可见。local DPI 分支以轮转 I$/D$ 仲裁和返回路由 FIFO
 服务单端口 L2；MMIO 保持阻塞、非缓存、按序。redirect/FENCE.I 通过取指 epoch 丢弃旧响应，维护操作在
 入口、流水和 FIFO 为空后执行。该端点不能用于 FPGA/SoC/外部 AXI 构建。
+同层级的 `PipelinedTwoCycleWideL2NoCompletionForwardingSimulationConfig` 只关闭完成表
+前递开关，保留相同的缓存层次、DPI 和队列深度，适合以 `make config=` 比较该旁路的周期收益。
 
 `HbmJitterCacheVcdSimulationConfig` 只覆盖运行 host 为 `NemuHostConfig.LocalVcdTrace`，其 L1 和
 DPI 时序参数与前者一致。由于 VCD 要求 Verilator 在生成时带 `--trace`，它是单独的仿真 ABI：新建时使用
@@ -185,7 +188,9 @@ make -C npc config-list
 make -C npc build config=SimulationConfig
 make -C npc build config=U55cYsyxSocFpgaConfig
 make -C npc host-build config=U55cRv64Npc300MHzFpgaConfig
+make -C npc host-build version=1
 make -C npc rebuild config=U55cRv64Npc300MHzFpgaConfig
+make -C npc rebuild version=1
 ```
 
 自动 TSV 只在 Make 启动 JVM 前提供短名、FQCN、作用域、板卡和目标。选中后由 Scala 反射实例化，
@@ -203,6 +208,9 @@ Make/Tcl 只做映射与一致性检查，不能覆盖这些值。
 `ICACHE_*`、`DCACHE_*`、`L2CACHE_*`、`INSTRUCTION_BUFFER_*` 和 `NPC_ZIFENCEI`
 写入 elaboration manifest。任何几何、策略或存储风格变化都必须完整 `rebuild`；普通无缓存终端的字段
 保持 disabled，外部 AXI/HBM 端口不变。
-`host-build` 在没有正式构造时只创建 `constructions/.hosts/<FQCN>/` 下的 NEMU host 缓存，适合与外部
-xclbin 配合；缓存不携带 RTL、FPGA 资产或版本标签，不能作为 `run`/`run-bat` 的构造选择器。`rebuild` 才会
-生成并替换完整硬件 ABI 和 FPGA 资产。
+`host-build` 在没有正式构造时，对本地 NPC/SoC 仍创建 `constructions/.hosts/<FQCN>/`；对 FPGA 则创建
+`constructions/.compatible/<FQCN>/`，并预先建立 `fpga/artifacts/`。外部平台生成的 U55C
+`npc-<FPGA_PLATFORM>.xclbin` 或 ZCU102 `npc.bit`/`npc-zcu102.env` 放入该目录后，兼容 host 可直接运行。
+同一 Config 的兼容资产优先于正式 Vivado/Vitis `fpga/artifacts/`，但不进入 `make version`，也不会生成
+RTL 或正式版本标签。`build-host` 与 `rebuild-host` 都是 `host-build` 的公开别名；`rebuild` 才会生成并替换
+完整硬件 ABI 和 FPGA 资产。

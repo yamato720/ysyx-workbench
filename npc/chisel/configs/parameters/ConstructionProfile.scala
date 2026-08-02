@@ -143,6 +143,7 @@ object ConstructionProfile {
       "INTERLOCK" -> bit(config.pipeline.enableInterlock),
       "ID_FWD" -> bit(config.pipeline.forwarding.enableIdForwarding),
       "EX_FWD" -> bit(config.pipeline.forwarding.enableExecuteForwarding),
+      "OUTSTANDING_COMPLETION_FWD" -> bit(config.pipeline.forwarding.enableOutstandingCompletionForwarding),
       "INTEGER_EXECUTE_STAGES" -> config.pipeline.integerExecuteStages.toString,
       "SERIAL_EXECUTE_STAGES" -> config.pipeline.serialExecuteStages.toString,
       "REGISTER_INITIAL_FETCH_REQUEST" -> bit(config.pipeline.registerInitialFetchRequest),

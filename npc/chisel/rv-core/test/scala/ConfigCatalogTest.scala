@@ -41,6 +41,7 @@ class ConfigCatalogTest extends AnyFlatSpec {
     assert(names.contains("HbmJitterL2CacheSimulationConfig"))
     assert(names.contains("HbmJitterCacheVcdSimulationConfig"))
     assert(names.contains("PipelinedTwoCycleWideL2SimulationConfig"))
+    assert(names.contains("PipelinedTwoCycleWideL2NoCompletionForwardingSimulationConfig"))
     assert(names.contains("YsyxSimulationConfig"))
     assert(names.contains("CacheYsyxSimulationConfig"))
     assert(names.contains("U55cYsyxSocFpgaConfig"))
@@ -277,5 +278,11 @@ class ConfigCatalogTest extends AnyFlatSpec {
     assert(values("CACHE_FETCH_QUEUE_DEPTH") == "4")
     assert(values("CACHE_MEMORY_QUEUE_DEPTH") == "4")
     assert(values("INSTRUCTION_BUFFER_ENTRIES") == "8")
+    assert(values("OUTSTANDING_COMPLETION_FWD") == "1")
+
+    val disabled = new PipelinedTwoCycleWideL2NoCompletionForwardingSimulationConfig
+    val disabledEntry = ConfigCatalog.resolve(disabled.getClass.getName, Set("npc"))
+    val disabledValues = ConstructionProfile.values(disabledEntry, disabled, disabled.config).toMap
+    assert(disabledValues("OUTSTANDING_COMPLETION_FWD") == "0")
   }
 }

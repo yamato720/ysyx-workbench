@@ -90,14 +90,19 @@ class NpcBackend(
   val csrFile = Module(new CsrFile(cfg))
   val machineExternalInterruptPending = csrFile.io.machineExternalInterruptPending
   private val pipelinedMemory = config.cache.accessMode == CacheAccessMode.PipelinedTwoCycle
+  private val outstandingCompletionForwarding = pipelinedMemory &&
+    pipelineConfig.forwarding.enableOutstandingCompletionForwarding
   private val outstandingLoadDepth = 4
+  require(!outstandingCompletionForwarding || arithmeticTagWidth >= 2,
+    "Outstanding completion forwarding requires at least two arithmetic tag bits")
   val pipelinedMemoryStage = if (pipelinedMemory) Some(Module(new PipelinedMemoryStage(
     axiConfig.addrWidth,
     axiConfig.dataWidth,
     config.memory.mainMemoryBase,
     config.memory.mainMemorySize,
     config.cache.pipelinedQueues.memoryDepth,
-    cfg = cfg
+    cfg = cfg,
+    enableOutstandingCompletionForwarding = outstandingCompletionForwarding
   ))) else None
   val loadStoreUnit = if (!pipelinedMemory) Some(Module(new LSUAXIAdapter(
     axiConfig.addrWidth,
@@ -191,15 +196,19 @@ class NpcBackend(
     !serialResultStagePending &&
     !executeMemoryReg.io.out.valid && memoryState === memoryIdle &&
     !memoryWritebackReg.io.out.valid && !memoryStageBusy
-  // 算术请求只会在全部旧指令排空后发射。响应路径由 arithmeticResponseReg 截断，
-  // 因而 endpoint 的完成 valid 不会反压到 ID/EX 的完整载荷。
+  // 关闭完成表时，算术请求仍按旧路径等待全部旧指令排空。开启后请求先分配 MEM
+  // 完成槽位，M/F 的 tag 指向该槽位，因而可与较老访存及另一类端点重叠。
   val arithmeticUnitReady = Mux(
     executeInput.executionUnit === NpcExecutionUnit.multiply || executeInput.executionUnit === NpcExecutionUnit.divide,
     mulDivAlu.map(_.io.req.ready).getOrElse(false.B),
     Mux(executeInput.executionUnit === NpcExecutionUnit.floating,
       floatingAlu.map(_.io.req.ready).getOrElse(false.B), false.B)
   )
-  val arithmeticCanAccept = executeState === executeIdle && arithmeticUnitReady && serialOlderInstructionsDrained
+  val outstandingArithmeticSlotReady = pipelinedMemoryStage.map(_.io.arithmeticSlotAvailable).getOrElse(false.B)
+  val arithmeticCanAccept = executeState === executeIdle && arithmeticUnitReady && Mux(
+    outstandingCompletionForwarding.B,
+    outstandingArithmeticSlotReady && !executeMemoryReg.io.out.valid,
+    serialOlderInstructionsDrained)
   val serialCanAccept = executeState === executeIdle &&
     (!pipelineMode || serialOlderInstructionsDrained)
   val directCanAccept = executeState === executeIdle &&
@@ -225,7 +234,8 @@ class NpcBackend(
     memoryState === memoryWait && !memoryStageBusy && memoryWritebackReg.io.in.ready
   }
 
-  val forwardingUnit = Module(new ForwardingUnit(cfg.xlen))
+  private val producerCount = 11
+  val forwardingUnit = Module(new ForwardingUnit(cfg.xlen, producerCount))
   forwardingUnit.io.enableIdForwarding := pipelineConfig.forwarding.enableIdForwarding.B
   forwardingUnit.io.enableExecuteForwarding := pipelineConfig.forwarding.enableExecuteForwarding.B
   forwardingUnit.io.idRs1 := dispatch.rs1
@@ -241,7 +251,7 @@ class NpcBackend(
   forwardingUnit.io.executeRs1Data := executeInput.rs1Data
   forwardingUnit.io.executeRs2Data := executeInput.storeData
 
-  val hazardUnit = Module(new HazardUnit)
+  val hazardUnit = Module(new HazardUnit(producerCount))
   hazardUnit.io.enableInterlock := pipelineConfig.enableInterlock.B
   hazardUnit.io.enableIdForwarding := pipelineConfig.forwarding.enableIdForwarding.B
   hazardUnit.io.enableExecuteForwarding := pipelineConfig.forwarding.enableExecuteForwarding.B
@@ -250,14 +260,19 @@ class NpcBackend(
   hazardUnit.io.rs1 := dispatch.rs1
   hazardUnit.io.rs2 := dispatch.rs2
 
-  // 生产者从新到旧排列。EX0、串行 EX1 结果级都没有组合旁路，必须等结果进入
-  // 既有 EX/MEM 前递点后，年轻消费者才能继续。
+  // 生产者从新到旧排列。完成表位于 EX/MEM 与 WB 之间；其四项候选即使未完成
+  // 也必须保留为生产者，以阻断对同 rd/FPR 的更老值的错误选择。
+  val completionCandidates = (0 until outstandingLoadDepth).map { index =>
+    pipelinedMemoryStage.map(_.io.completionCandidates(index)).getOrElse(
+      0.U.asTypeOf(new OutstandingCompletionCandidate(cfg.xlen)))
+  }
   val producerValid = Seq(
     decodeExecuteReg.io.out.valid,
     if (twoStageIntegerExecute) integerExecuteReg.io.out.valid else false.B,
     executeState =/= executeIdle,
     serialResultStagePending,
-    executeMemoryReg.io.out.valid,
+    executeMemoryReg.io.out.valid
+  ) ++ completionCandidates.map(candidate => outstandingCompletionForwarding.B && candidate.valid) ++ Seq(
     memoryState === memoryWait && !pipelinedMemory.B,
     memoryWritebackReg.io.out.valid
   )
@@ -266,7 +281,8 @@ class NpcBackend(
     integerExecuteReg.io.out.bits.registerWriteEnable,
     executeRequestReg.registerWriteEnable,
     serialExecuteResultReg.io.out.bits.registerWriteEnable,
-    executeMemoryReg.io.out.bits.registerWriteEnable,
+    executeMemoryReg.io.out.bits.registerWriteEnable
+  ) ++ completionCandidates.map(_.writesRd) ++ Seq(
     memoryRequestReg.registerWriteEnable,
     memoryWritebackReg.io.out.bits.registerWriteEnable
   )
@@ -275,7 +291,8 @@ class NpcBackend(
     integerExecuteReg.io.out.bits.rd,
     executeRequestReg.rd,
     serialExecuteResultReg.io.out.bits.rd,
-    executeMemoryReg.io.out.bits.rd,
+    executeMemoryReg.io.out.bits.rd
+  ) ++ completionCandidates.map(_.rd) ++ Seq(
     memoryRequestReg.rd,
     memoryWritebackReg.io.out.bits.rd
   )
@@ -284,7 +301,8 @@ class NpcBackend(
     integerExecuteReg.io.out.bits.floatRegisterWriteEnable,
     executeRequestReg.floatRegisterWriteEnable,
     serialExecuteResultReg.io.out.bits.floatRegisterWriteEnable,
-    executeMemoryReg.io.out.bits.floatRegisterWriteEnable,
+    executeMemoryReg.io.out.bits.floatRegisterWriteEnable
+  ) ++ completionCandidates.map(_.writesFloatingRd) ++ Seq(
     memoryRequestReg.floatRegisterWriteEnable,
     memoryWritebackReg.io.out.bits.floatRegisterWriteEnable
   )
@@ -294,7 +312,8 @@ class NpcBackend(
     false.B,
     serialExecuteResultForwarding.B && !pipelinedSerialExecute.B && executeState === executeDone,
     serialExecuteResultForwarding.B && serialResultStagePending,
-    !executeMemoryReg.io.out.bits.writebackFromMemory,
+    !executeMemoryReg.io.out.bits.writebackFromMemory
+  ) ++ completionCandidates.map(_.dataValid) ++ Seq(
     memoryResponseAvailable,
     true.B
   )
@@ -314,7 +333,8 @@ class NpcBackend(
     serialExecuteResultForwarding.B && !pipelinedSerialExecute.B && incomingCanExecuteDirectNextCycle &&
       executeState === executeDone && executeMemoryReg.io.in.ready,
     false.B,
-    incomingCanExecuteDirectNextCycle && !executeMemoryReg.io.out.bits.writebackFromMemory,
+    incomingCanExecuteDirectNextCycle && !executeMemoryReg.io.out.bits.writebackFromMemory
+  ) ++ completionCandidates.map(_.dataValid) ++ Seq(
     incomingCanExecuteDirectNextCycle && memoryResponseAvailable,
     false.B
   )
@@ -323,7 +343,8 @@ class NpcBackend(
     0.U(cfg.xlen.W),
     serialForwardData,
     serialExecuteResultForwardData,
-    executeMemoryForwardData,
+    executeMemoryForwardData
+  ) ++ completionCandidates.map(_.data) ++ Seq(
     memoryStageRdata,
     commitForwardData
   )
@@ -332,18 +353,20 @@ class NpcBackend(
     candidate: ForwardingCandidate,
     valid: Bool,
     writesRd: Bool,
+    writesFloatingRd: Bool,
     rd: UInt,
     data: UInt,
     dataValid: Bool
   ): Unit = {
     candidate.valid := valid
     candidate.writesRd := writesRd
+    candidate.writesFloatingRd := writesFloatingRd
     candidate.rd := rd
     candidate.data := data
     candidate.dataValid := dataValid
   }
 
-  for (index <- 0 until 7) {
+  for (index <- 0 until producerCount) {
     hazardUnit.io.producers(index).valid := producerValid(index)
     hazardUnit.io.producers(index).writesRd := producerWritesRd(index)
     hazardUnit.io.producers(index).rd := producerRd(index)
@@ -354,6 +377,7 @@ class NpcBackend(
       forwardingUnit.io.idCandidates(index),
       producerValid(index),
       producerWritesRd(index),
+      producerWritesFloatingRd(index),
       producerRd(index),
       idCandidateData(index),
       idCandidateAvailable(index)
@@ -361,35 +385,41 @@ class NpcBackend(
   }
   // 在 EX0/EX1/EX2，槽位零至三分别为当前 ID/EX、EX0、串行请求和串行结果级；它们
   // 都不能组合旁路到普通整数 ALU。更老结果保持由新到旧优先级。
-  driveCandidate(forwardingUnit.io.executeCandidates(0), false.B, false.B, 0.U,
+  driveCandidate(forwardingUnit.io.executeCandidates(0), false.B, false.B, false.B, 0.U,
     0.U(cfg.xlen.W), false.B)
-  driveCandidate(forwardingUnit.io.executeCandidates(1), false.B, false.B, 0.U,
+  driveCandidate(forwardingUnit.io.executeCandidates(1), false.B, false.B, false.B, 0.U,
     0.U(cfg.xlen.W), false.B)
-  driveCandidate(forwardingUnit.io.executeCandidates(2), false.B, false.B, 0.U,
+  driveCandidate(forwardingUnit.io.executeCandidates(2), false.B, false.B, false.B, 0.U,
     0.U(cfg.xlen.W), false.B)
-  driveCandidate(forwardingUnit.io.executeCandidates(3), false.B, false.B, 0.U,
+  driveCandidate(forwardingUnit.io.executeCandidates(3), false.B, false.B, false.B, 0.U,
     0.U(cfg.xlen.W), false.B)
-  for (index <- 4 until 7) {
+  for (index <- 4 until producerCount) {
     driveCandidate(
       forwardingUnit.io.executeCandidates(index),
       producerValid(index),
       producerWritesRd(index),
+      producerWritesFloatingRd(index),
       producerRd(index),
       idCandidateData(index),
       idCandidateAvailable(index)
     )
   }
-  def floatingSourceHazard(source: UInt, used: Bool): Bool =
-    used && producerValid.zip(producerWritesFloatingRd).zip(producerRd).map {
-      case ((valid, writesRd), rd) => valid && writesRd && rd === source
-    }.reduce(_ || _)
+  def floatingSourceHazard(source: UInt, used: Bool): Bool = {
+    val matches = producerValid.zip(producerWritesFloatingRd).zip(producerRd).map {
+      case ((valid, writesRd), rd) => used && source =/= 0.U && valid && writesRd && rd === source
+    }
+    val newestAvailable = idCandidateAvailable.zip(matches).foldRight(false.B) {
+      case ((available, matchesSource), older) => Mux(matchesSource, available, older)
+    }
+    matches.reduce(_ || _) && !(pipelineConfig.forwarding.enableIdForwarding.B && newestAvailable)
+  }
   val floatingRawHazard = floatingSourceHazard(dispatch.rs1, dispatch.usesFrs1) ||
     floatingSourceHazard(dispatch.rs2, dispatch.usesFrs2) ||
     floatingSourceHazard(dispatch.rs3, dispatch.usesFrs3)
   val pipelinedLoadResponseReady = pipelinedMemoryStage.map(stage =>
     stage.io.response.valid && stage.io.response.bits.writebackFromMemory).getOrElse(false.B)
   val pipelinedLoadResponseRd = pipelinedMemoryStage.map(_.io.response.bits.rd).getOrElse(0.U(5.W))
-  val pipelinedLoadHazard = if (pipelinedMemory) {
+  val pipelinedLoadHazard = if (pipelinedMemory && !outstandingCompletionForwarding) {
     val rs1Hazard = dispatch.usesRs1 && dispatch.rs1 =/= 0.U &&
       pipelinedLoadScoreboardValid.zip(pipelinedLoadScoreboardRd).map {
         case (valid, rd) => valid && rd === dispatch.rs1
@@ -400,7 +430,7 @@ class NpcBackend(
       }.reduce(_ || _) && !(pipelinedLoadResponseReady && pipelinedLoadResponseRd === dispatch.rs2)
     rs1Hazard || rs2Hazard
   } else false.B
-  val pipelinedMemoryWriteHazard = if (pipelinedMemory) {
+  val pipelinedMemoryWriteHazard = if (pipelinedMemory && !outstandingCompletionForwarding) {
     val rs1Hazard = dispatch.usesRs1 && dispatch.rs1 =/= 0.U &&
       pipelinedMemoryWriteScoreboardValid.zip(pipelinedMemoryWriteScoreboardRd).map {
         case (valid, rd) => valid && rd === dispatch.rs1
@@ -442,9 +472,20 @@ class NpcBackend(
     else raw
   val rs1FprValue = Mux(dispatch.aluCtrl === NpcAluOp.Floating.FMV_X_W.asUInt, floatingRs1Data, normalizedFpr(floatingRs1Data))
   val rs2FprValue = Mux(dispatch.storeEnable, floatingRs2Data, normalizedFpr(floatingRs2Data))
-  decodeExecuteReg.io.in.bits.rs1Data := Mux(dispatch.usesFrs1, rs1FprValue, forwardingUnit.io.idRs1Forwarded)
-  decodeExecuteReg.io.in.bits.storeData := Mux(dispatch.usesFrs2, rs2FprValue, forwardingUnit.io.idRs2Forwarded)
-  decodeExecuteReg.io.in.bits.operandC := normalizedFpr(floatingRs3Data)
+  forwardingUnit.io.idFrs1 := dispatch.rs1
+  forwardingUnit.io.idFrs2 := dispatch.rs2
+  forwardingUnit.io.idFrs3 := dispatch.rs3
+  forwardingUnit.io.idUsesFrs1 := dispatch.usesFrs1
+  forwardingUnit.io.idUsesFrs2 := dispatch.usesFrs2
+  forwardingUnit.io.idUsesFrs3 := dispatch.usesFrs3
+  forwardingUnit.io.idFrs1Data := rs1FprValue
+  forwardingUnit.io.idFrs2Data := rs2FprValue
+  forwardingUnit.io.idFrs3Data := normalizedFpr(floatingRs3Data)
+  decodeExecuteReg.io.in.bits.rs1Data := Mux(dispatch.usesFrs1,
+    forwardingUnit.io.idFrs1Forwarded, forwardingUnit.io.idRs1Forwarded)
+  decodeExecuteReg.io.in.bits.storeData := Mux(dispatch.usesFrs2,
+    forwardingUnit.io.idFrs2Forwarded, forwardingUnit.io.idRs2Forwarded)
+  decodeExecuteReg.io.in.bits.operandC := forwardingUnit.io.idFrs3Forwarded
   decodeExecuteReg.io.in.bits.immediate := dispatch.immediate
   decodeExecuteReg.io.in.bits.rd := dispatch.rd
   decodeExecuteReg.io.in.bits.rs1 := dispatch.rs1
@@ -538,7 +579,8 @@ class NpcBackend(
     alu.io.req.bits.pc := executeInput.pc
     alu.io.req.bits.instruction := executeInput.instruction
     alu.io.req.bits.fcsr := csrFile.io.fcsrOut
-    alu.io.req.bits.tag := 0.U
+    alu.io.req.bits.tag := Mux(outstandingCompletionForwarding.B,
+      pipelinedMemoryStage.map(_.io.arithmeticAllocateTag).getOrElse(0.U), 0.U)
   }
   floatingAlu.foreach { alu =>
     alu.io.req.valid := arithmeticIssue && executeInput.executionUnit === NpcExecutionUnit.floating
@@ -550,7 +592,8 @@ class NpcBackend(
     alu.io.req.bits.pc := executeInput.pc
     alu.io.req.bits.instruction := executeInput.instruction
     alu.io.req.bits.fcsr := csrFile.io.fcsrOut
-    alu.io.req.bits.tag := 0.U
+    alu.io.req.bits.tag := Mux(outstandingCompletionForwarding.B,
+      pipelinedMemoryStage.map(_.io.arithmeticAllocateTag).getOrElse(0.U), 0.U)
   }
 
   val arithmeticResponseFromMulDiv = executeRequestReg.executionUnit === NpcExecutionUnit.multiply ||
@@ -560,18 +603,32 @@ class NpcBackend(
   val floatingResponse = floatingAlu.map(_.io.resp.bits).getOrElse(emptyArithmeticResponse)
   val mulDivResponseValid = mulDivAlu.map(_.io.resp.valid).getOrElse(false.B)
   val floatingResponseValid = floatingAlu.map(_.io.resp.valid).getOrElse(false.B)
-  val arithmeticResponseActive = executeState === executeArithmeticWait
+  pipelinedMemoryStage.foreach { stage =>
+    stage.io.arithmeticCompletion(0).valid := outstandingCompletionForwarding.B && mulDivResponseValid
+    stage.io.arithmeticCompletion(0).bits.tag := mulDivResponse.tag
+    stage.io.arithmeticCompletion(0).bits.result := mulDivResponse.result
+    stage.io.arithmeticCompletion(0).bits.exceptionFlags := mulDivResponse.exceptionFlags
+    stage.io.arithmeticCompletion(0).bits.illegal := mulDivResponse.illegal
+    stage.io.arithmeticCompletion(1).valid := outstandingCompletionForwarding.B && floatingResponseValid
+    stage.io.arithmeticCompletion(1).bits.tag := floatingResponse.tag
+    stage.io.arithmeticCompletion(1).bits.result := floatingResponse.result
+    stage.io.arithmeticCompletion(1).bits.exceptionFlags := floatingResponse.exceptionFlags
+    stage.io.arithmeticCompletion(1).bits.illegal := floatingResponse.illegal
+  }
+  val arithmeticResponseActive = executeState === executeArithmeticWait && !outstandingCompletionForwarding.B
   val selectedArithmeticResponse = Mux(arithmeticResponseFromMulDiv, mulDivResponse, floatingResponse)
   val selectedArithmeticResponseValid = Mux(arithmeticResponseFromMulDiv,
     mulDivResponseValid, floatingResponseValid)
   arithmeticResponseReg.io.flush := false.B
   arithmeticResponseReg.io.in.valid := arithmeticResponseActive && selectedArithmeticResponseValid
   arithmeticResponseReg.io.in.bits := selectedArithmeticResponse
-  // 只有保存了对应请求的端点可以推进响应；这样 M/F 之间不需要 RR 仲裁或 tag 回填。
-  mulDivAlu.foreach(_.io.resp.ready := arithmeticResponseActive && arithmeticResponseFromMulDiv &&
-    arithmeticResponseReg.io.in.ready)
-  floatingAlu.foreach(_.io.resp.ready := arithmeticResponseActive && !arithmeticResponseFromMulDiv &&
-    arithmeticResponseReg.io.in.ready)
+  // 关闭时维持已锁存请求的单响应路径；开启时由完成表轮转选择 M/F 端点并按 tag 回填。
+  val mulDivCompletionReady = pipelinedMemoryStage.map(_.io.arithmeticCompletion(0).ready).getOrElse(false.B)
+  val floatingCompletionReady = pipelinedMemoryStage.map(_.io.arithmeticCompletion(1).ready).getOrElse(false.B)
+  mulDivAlu.foreach(_.io.resp.ready := Mux(outstandingCompletionForwarding.B, mulDivCompletionReady,
+    arithmeticResponseActive && arithmeticResponseFromMulDiv && arithmeticResponseReg.io.in.ready))
+  floatingAlu.foreach(_.io.resp.ready := Mux(outstandingCompletionForwarding.B, floatingCompletionReady,
+    arithmeticResponseActive && !arithmeticResponseFromMulDiv && arithmeticResponseReg.io.in.ready))
   arithmeticResponseReg.io.out.ready := executeMemoryReg.io.in.ready && !executeMemoryRedirectPending
   val serialExecuteComplete = if (pipelinedSerialExecute) serialExecuteResultReg.io.in.fire
     else executeMemoryReg.io.in.fire
@@ -582,8 +639,10 @@ class NpcBackend(
     executeRequestReg.perfExecuteStartCycle := performanceCycle
     executeState := (if (threeStageSerialExecute) executeSerialDispatch else executeDone)
   }.elsewhen(arithmeticIssue) {
-    executeRequestReg := arithmeticIssuePayload
-    executeState := executeArithmeticWait
+    when(!outstandingCompletionForwarding.B) {
+      executeRequestReg := arithmeticIssuePayload
+      executeState := executeArithmeticWait
+    }
   }.elsewhen(threeStageSerialExecute.B && executeState === executeSerialDispatch &&
     serialExecuteControlReg.io.in.fire) {
     executeState := executeDone
@@ -730,6 +789,25 @@ class NpcBackend(
     arithmeticResponseIllegal,
     executeOutputIsControl
   )
+  // M/F 在发射拍就把完整架构载荷写入完成表；结果、异常标志和 illegal 随后仅按 tag
+  // 回填该槽位，因此响应无需重新穿过 EX/MEM。
+  val outstandingArithmeticPayload = executeMemoryPayload(
+    arithmeticIssuePayload,
+    0.U(cfg.xlen.W),
+    NpcBranchResult.notTaken,
+    arithmeticIssuePayload.pc + arithmeticIssuePayload.immediate,
+    Cat((arithmeticIssuePayload.rs1Data + arithmeticIssuePayload.immediate)(cfg.xlen - 1, 1), 0.U(1.W)),
+    arithmeticIssuePayload.storeData,
+    arithmeticIssuePayload.perfDecodeCycles,
+    0.U,
+    false.B,
+    false.B,
+    false.B
+  )
+  pipelinedMemoryStage.foreach { stage =>
+    stage.io.arithmeticRequest.valid := outstandingCompletionForwarding.B && arithmeticIssue
+    stage.io.arithmeticRequest.bits := outstandingArithmeticPayload
+  }
   // 三拍串行执行的 EX2 只消费 serialExecuteControlReg 的输出。这里不能复用上面的
   // 通用选择网络，否则 executeState 会重新进入该宽 payload 的写入锥。
   val serialJalrTargetRaw = serialComputeRequest.rs1Data + serialComputeRequest.immediate
@@ -842,16 +920,32 @@ class NpcBackend(
     stage.io.flush := false.B
     // Scoreboard 满时只阻止新的 load 进入 MEM；已有 store 和非访存指令仍可
     // 保持队列顺序，避免四项 outstanding 被错误地退化成单项阻塞。
-    val loadSlotAvailable = pipelinedLoadScoreboardCount =/= outstandingLoadDepth.U ||
-      pipelinedLoadCommit
+    val loadSlotAvailable = outstandingCompletionForwarding.B ||
+      pipelinedLoadScoreboardCount =/= outstandingLoadDepth.U || pipelinedLoadCommit
     val memoryStageInputAllowed = !memoryAccess || !executeMemoryReg.io.out.bits.loadEnable ||
       loadSlotAvailable
-    stage.io.request.valid := executeMemoryReg.io.out.valid && memoryStageInputAllowed
+    // 只有 MEM 的所有队列均已排空时，非访存项才能直通 MEM/WB。若存在较老 load/store，
+    // 它仍必须进入 orderQueue，不能在提交顺序上越过较老访存或其可能产生的 fault。
+    val nonMemoryWritebackBypass = !outstandingCompletionForwarding.B &&
+      executeMemoryReg.io.out.valid && !memoryAccess && stage.io.drained
+    stage.io.request.valid := executeMemoryReg.io.out.valid && !nonMemoryWritebackBypass &&
+      memoryStageInputAllowed
     stage.io.request.bits := executeMemoryReg.io.out.bits
-    executeMemoryReg.io.out.ready := stage.io.request.ready && memoryStageInputAllowed
-    memoryWritebackReg.io.in.valid := stage.io.response.valid
-    memoryWritebackReg.io.in.bits := stage.io.response.bits
     stage.io.response.ready := memoryWritebackReg.io.in.ready
+    when(nonMemoryWritebackBypass) {
+      memoryWritebackReg.io.in.valid := true.B
+      driveMemoryWritebackPayload(memoryWritebackReg.io.in.bits, executeMemoryReg.io.out.bits,
+        0.U(cfg.xlen.W))
+      // 该路径不占用 D$、AXI 或 MEM 完成 FIFO；MEM service 和 queue 均应保持为零。
+      memoryWritebackReg.io.in.bits.perfMemoryCycles := 0.U
+      memoryWritebackReg.io.in.bits.perfMemoryQueueCycles := 0.U
+      memoryWritebackReg.io.in.bits.perfMemoryServiceCycles := 0.U
+      executeMemoryReg.io.out.ready := memoryWritebackReg.io.in.ready
+    }.otherwise {
+      executeMemoryReg.io.out.ready := stage.io.request.ready && memoryStageInputAllowed
+      memoryWritebackReg.io.in.valid := stage.io.response.valid
+      memoryWritebackReg.io.in.bits := stage.io.response.bits
+    }
     pipelinedLoadAllocate := stage.io.request.fire &&
       stage.io.request.bits.loadEnable && stage.io.request.bits.registerWriteEnable &&
       stage.io.request.bits.rd =/= 0.U

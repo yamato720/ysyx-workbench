@@ -16,6 +16,7 @@ Chisel；rv-core 保留 ISA 译码与操作码映射，ysyxSoC 保留 Diplomacy 
 查看、生成和管理构造：
 
 ```bash
+# 这些目标也可从工作区根目录发起；rebuild/host-build 可用 version=<编号>选择保存构造。
 make -C npc config-list
 make -C npc build config=SimulationConfig
 make -C npc build config=CacheSimulationConfig
@@ -23,11 +24,16 @@ make -C npc build config=HbmJitterCacheSimulationConfig
 make -C npc build config=HbmJitterL2CacheSimulationConfig
 make -C npc build config=HbmJitterCacheVcdSimulationConfig
 make -C npc build config=PipelinedTwoCycleWideL2SimulationConfig
+make -C npc build config=PipelinedTwoCycleWideL2NoCompletionForwardingSimulationConfig
 make -C npc build config=U55cYsyxSocFpgaConfig
 make -C npc rebuild config=U55cYsyxSocFpgaConfig
+make -C npc rebuild version=1
 make -C npc resume-post-link config=U55cRv64CacheNpc150MHzPerformanceMonitorFpgaConfig
 make -C npc host-config-list
 make -C npc host-build config=U55cRv64Npc300MHzFpgaConfig
+make -C npc build-host config=U55cRv64Npc300MHzFpgaConfig
+make -C npc rebuild-host version=1
+make -C npc host-build version=1
 make -C npc host-build all=1 jobs=-1
 
 make -C npc version
@@ -77,6 +83,7 @@ make -C am-kernels/tests/cpu-tests run-bat ALL="forwarding matrix-mul fpu" \
 终端仍保持原来的无缓存 RTL 和外部端口。公开缓存终端为 `CacheSimulationConfig`、
 `HbmJitterCacheSimulationConfig`、`HbmJitterCacheVcdSimulationConfig`、
 `PipelinedTwoCycleWideL2SimulationConfig`、
+`PipelinedTwoCycleWideL2NoCompletionForwardingSimulationConfig`、
 `CacheYsyxSimulationConfig`、`U55cCacheNpcFpgaConfig`、`U55cRv64CacheNpc300MHzFpgaConfig` 和
 `U55cCacheYsyxSocFpgaConfig`。`U55cRv64CacheNpc{150,300}MHzPerformanceMonitorFpgaConfig` 是
 缓存版 U55C batch-only 性能监测终端；宽 HBM 的 L1 基线与 L1+L2 终端分别为
@@ -133,6 +140,8 @@ IF/LSU 主存端口，因此可以直接和上面的 L1-only 端点做周期、C
 FIFO 深度为 4，instruction buffer 为 8 项。L1 miss、MMIO、dirty writeback、FENCE、FENCE.I 和外部
 drain 会先关闭入口并排空流水/队列，再以 D$ -> L2 -> I$ 的顺序完成维护，因此不承诺固定两拍延迟。
 该 Config 只使用本地 NEMU/Verilator DPI Fabric，不改变 FPGA、SoC 或外部 AXI ABI。
+`PipelinedTwoCycleWideL2NoCompletionForwardingSimulationConfig` 保持完全相同的缓存、DPI 和
+流水配置，但关闭完成表结果前递，可作为 `make config=` 的 A/B 对照端点。
 
 `HbmJitterCacheVcdSimulationConfig` 保持这套 L1-only 宽 HBM DPI 硬件配置，但将本地 Verilator
 ABI 显式构造成支持 VCD 的版本。它必须完整 `build` 或 `rebuild`，不能只执行 `host-build`，因为
@@ -161,7 +170,9 @@ RTL、FPGA 资产和运行产物；中断或失败后目录会保留为无效状
 
 `make build config=<Config>` 只允许首次构造，或修复 `valid?` 为空的 `building`、`interrupted`、`failed`
 和缺资产构造；它会沿用同一个版本号和 FQCN 目录。`valid?=+` 的构造会被 `build` 明确拒绝，必须使用
-`make rebuild config=<Config>` 替换硬件 ABI。
+`make rebuild config=<Config>` 替换硬件 ABI。已有版本也可执行 `make rebuild version=<编号>`：它只从
+保存的版本信息取得 FQCN，再用当前源码中的同名 Config 做完整重构，因此既可修复失败构造，也可主动全局
+更新有效构造；构造目录和版本编号保持不变。
 
 不同 FQCN 的 `build`/`rebuild` 可并行：全局锁只短暂保护 Config profile、稳定目录和版本号分配，随后
 Chisel/Verilator/Vivado/Vitis 长流程由 `constructions/.locks/<FQCN>.lock` 单独保护。因此同一 Config 的
@@ -179,7 +190,9 @@ C/C++ 和 menuconfig 增量依赖只在 `host-build` 或运行入口的 `host-re
 Chisel、生成 RTL、Verilator ABI、`npc/csrc` glue 与 FPGA 文件仍只由 `rebuild` 更新。
 
 若 FPGA 构造已经完成链接并生成完整 manifest/SHA-256 资产，却只在末尾的 NEMU host 阶段失败或中断，
-`host-build config=<Config>` 会校验保留资产、只重试 host，并在 host 与资产复验通过后发布原版本。缺少
+`host-build config=<Config>` 会校验保留资产、只重试 host，并在 host 与资产复验通过后发布原版本；
+`host-build version=<编号>` 直接选择已保存的正式构造，适合 profile 中 FPGA 时钟或 NEMU host 元数据
+失配时修复该版本。版本选择不会先因旧 host 与 profile 失配而拒绝，但发布前仍会完整复验资产。缺少
 `nemu-host` 失败证据、manifest/SHA-256 校验失败或硬件中间阶段失败的构造仍必须使用 `build`/`rebuild`，不会被
 `host-build` 提前发布。
 
@@ -189,11 +202,15 @@ post-link 校验失败，可执行 `make -C npc resume-post-link config=<Config>
 所有非 `NEMU_*` 硬件字段，再实际校验 `DATA_CLK`、WNS 和 artifact manifest/SHA-256，最后构造 host。任一证据
 缺失或硬件字段变化都会拒绝恢复，仍必须执行 `rebuild`；该命令不会重新运行 Vivado/Vitis，也不能用于替换硬件 ABI。
 
-对于另一套流程已经生成的 xclbin，可直接执行
-`make -C npc host-build config=U55cRv64Npc300MHzFpgaConfig`，只生成匹配的 U55C NEMU host，输出在
-`constructions/.hosts/npc.fpga.u55c.U55cRv64Npc300MHzFpgaConfig/abi/nemu/nemu-exec`。该目录保存当前
-Config profile 和 host，但不含 RTL、FPGA 资产或版本标签；它不会被 `version`、`run` 或 `run-bat` 当作正式
-构造。直接运行时由调用者提供外部 xclbin，例如通过 `NEMU_FPGA_XCLBIN=/path/to/design.xclbin`。
+对于另一套流程已经生成的 FPGA bitstream/xclbin，可直接执行
+`make -C npc build-host config=U55cRv64Npc300MHzFpgaConfig`（`rebuild-host` 是同一操作的对称别名），
+然后把对应资产放入
+`constructions/.compatible/npc.fpga.u55c.U55cRv64Npc300MHzFpgaConfig/fpga/artifacts/`：U55C 使用
+`npc-<FPGA_PLATFORM>.xclbin`，ZCU102 使用 `npc.bit` 和 `npc-zcu102.env`。兼容目录会保存匹配的
+Config profile、host 和 `compatibility.env`，不生成 RTL、Vivado/Vitis 产物或正式版本标签；资产出现后，
+`config=`/`version=` 运行预检会自动选择它，且优先级高于同一 Config 正式构造下的 `fpga/artifacts/`。
+U55C 若本机有 `xclbinutil`，运行前还会校验 xclbin 的 `DATA_CLK` 与 profile；不匹配会拒绝运行。
+该机制不要求外部平台生成本仓库的正式 manifest，但资产必须与记录的板卡、平台、host ABI 和协议 ABI 匹配。
 每次 elaboration 同时生成 `ip-sources.manifest`。其中 `RTL=` 是工具实际编译的源，`MODEL=` 记录已嵌入
 生成 RTL 的仿真模型；FPGA 另生成 `synthesis-sources.manifest`，只允许 `RTL=` 和 `XCI=`。构造冻结按该
 清单复制源文件，不再递归保存整个 `ysyxSoC/perip/`。
@@ -202,6 +219,12 @@ Config profile 和 host，但不含 RTL、FPGA 资产或版本标签；它不会
 
 ```text
 constructions/
+  .compatible/<FQCN>/
+    profile.env
+    construction.env
+    compatibility.env
+    abi/nemu/
+    fpga/artifacts/        # 外部 xclbin/bitstream，优先于正式构造资产
   npc.SimulationConfig/
     construction.env
     profile.env

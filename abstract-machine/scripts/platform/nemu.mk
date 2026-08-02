@@ -60,6 +60,21 @@ else ifneq ($(strip $(NPC_CONSTRUCTION_DIR)),)
     $(error 构造目录缺少 profile.env：$(NPC_CONSTRUCTION_DIR))
   endif
   include $(CONSTRUCTION_PROFILE)
+  FPGA_ARTIFACT_DIR := $(NPC_CONSTRUCTION_DIR)/fpga/artifacts
+  # 同一 Config 的外部兼容资产优先于正式 Vivado/Vitis 目录。host-only
+  # 解析本身已经把 NPC_CONSTRUCTION_DIR 指向 .compatible；这里还覆盖正式
+  # 构造与兼容目录并存时的情况。
+  FPGA_COMPATIBLE_DIR := $(abspath $(dir $(NPC_CONSTRUCTION_DIR)))/.compatible/$(CONFIG_FQCN)/fpga/artifacts
+  FPGA_COMPATIBILITY_METADATA := $(abspath $(FPGA_COMPATIBLE_DIR)/../compatibility.env)
+  ifeq ($(FPGA_BOARD),u55c)
+    ifneq ($(and $(wildcard $(FPGA_COMPATIBILITY_METADATA)),$(wildcard $(FPGA_COMPATIBLE_DIR)/npc-$(FPGA_PLATFORM).xclbin)),)
+      FPGA_ARTIFACT_DIR := $(FPGA_COMPATIBLE_DIR)
+    endif
+  else ifeq ($(FPGA_BOARD),zcu102)
+    ifneq ($(and $(wildcard $(FPGA_COMPATIBILITY_METADATA)),$(wildcard $(FPGA_COMPATIBLE_DIR)/npc.bit),$(wildcard $(FPGA_COMPATIBLE_DIR)/npc-zcu102.env)),)
+      FPGA_ARTIFACT_DIR := $(FPGA_COMPATIBLE_DIR)
+    endif
+  endif
   ifneq ($(CONFIG_FQCN),$(NPC_CONFIG_FQCN))
     $(error 构造 profile 为 $(CONFIG_FQCN)，调用方要求 $(NPC_CONFIG_FQCN))
   endif
@@ -116,7 +131,7 @@ else ifneq ($(strip $(NPC_CONSTRUCTION_DIR)),)
 		export NEMU_CAPSTONE_SO="$(NPC_CONSTRUCTION_DIR)/abi/nemu/lib/libcapstone.so.5"; \
 	fi; \
 	if test "$(SCOPE)" = fpga; then \
-		artifacts="$(NPC_CONSTRUCTION_DIR)/fpga/artifacts"; \
+		artifacts="$(FPGA_ARTIFACT_DIR)"; \
 		if test "$(FPGA_BOARD)" = u55c; then \
 			if test "$(reset)" = 1; then \
 				xbutil="$${NEMU_FPGA_XBUTIL:-$${XRT_ROOT:+$$XRT_ROOT/bin/}xbutil}"; \
@@ -137,7 +152,12 @@ else ifneq ($(strip $(NPC_CONSTRUCTION_DIR)),)
 					done; \
 					test "$$ready" = 1 || { echo "U55C reset 后未在 30 秒内恢复就绪：$$bdf" >&2; exit 1; }; \
 			fi; \
-			export NEMU_FPGA_XCLBIN="$$artifacts/npc-$(FPGA_PLATFORM).xclbin"; \
+			xclbin="$$artifacts/npc-$(FPGA_PLATFORM).xclbin"; \
+			xclbinutil="$${XCLBINUTIL:-xclbinutil}"; \
+			if command -v "$$xclbinutil" >/dev/null 2>&1 && test -x "$(NPC_HOME)/fpga/u55c/scripts/verify-data-clock.sh"; then \
+				XCLBINUTIL="$$xclbinutil" "$(NPC_HOME)/fpga/u55c/scripts/verify-data-clock.sh" "$$xclbin" "$(FPGA_PLATFORM_CLOCK_MHZ)"; \
+			fi; \
+			export NEMU_FPGA_XCLBIN="$$xclbin"; \
 		elif test "$(FPGA_BOARD)" = zcu102; then \
 			set -a; . "$$artifacts/npc-zcu102.env"; set +a; \
 		else echo "未知 FPGA 板卡：$(FPGA_BOARD)" >&2; exit 1; fi; \

@@ -56,7 +56,12 @@ record() {
 
   local version_index fqcn short runtime board log_directory detail temporary performance_report pipeline_report
   version_index=$(value "$metadata" VERSION_INDEX)
-  [[ $version_index =~ ^[1-9][0-9]*$ ]] || { echo "构造缺少有效 VERSION_INDEX：$construction" >&2; exit 1; }
+  if [[ $(value "$metadata" HOST_ONLY) == 1 ]]; then
+    # 兼容 FPGA host 没有正式版本号，汇总中用短横线明确表示外部资产运行。
+    version_index=-
+  else
+    [[ $version_index =~ ^[1-9][0-9]*$ ]] || { echo "构造缺少有效 VERSION_INDEX：$construction" >&2; exit 1; }
+  fi
   fqcn=$(value "$profile" CONFIG_FQCN)
   short=$(value "$profile" CONFIG_SHORT_NAME)
   runtime=$(value "$profile" NEMU_BACKEND)
@@ -175,7 +180,7 @@ show() {
 
 details() {
   [[ $# == 1 ]] || usage
-  local items=$1 detail rows version short test_name result performance_report
+  local items=$1 detail rows version version_key short test_name result performance_report
   [[ -d $items ]] || { echo "批次条目目录不存在：$items" >&2; exit 1; }
   rows=$(mktemp)
   trap 'rm -f "$rows"' RETURN
@@ -185,16 +190,25 @@ details() {
     test_name=$(value "$detail" TEST)
     result=$(value "$detail" RESULT)
     performance_report=$(value "$detail" PERFORMANCE_HTML)
-    [[ $version =~ ^[1-9][0-9]*$ && -n $short && -n $test_name ]] || {
+    if [[ $version =~ ^[1-9][0-9]*$ ]]; then
+      version_key=$version
+    elif [[ $version == - ]]; then
+      # 兼容 FPGA host 没有正式版本号，排序键 0 但保留展示值 `-`。
+      version_key=0
+    else
+      echo "批次条目缺少详细报告索引字段：$detail" >&2
+      exit 1
+    fi
+    [[ -n $short && -n $test_name ]] || {
       echo "批次条目缺少详细报告索引字段：$detail" >&2
       exit 1
     }
-    printf '%020d\t%s\t%s\t%s\t%s\n' "$version" "$short" "$test_name" "$result" \
+    printf '%020d\t%s\t%s\t%s\t%s\t%s\n' "$version_key" "$version" "$short" "$test_name" "$result" \
       "${performance_report:-N/A}" >> "$rows"
   done < <(find "$items" -name summary.env -type f -print | LC_ALL=C sort)
 
-  while IFS=$'\t' read -r version short test_name result performance_report; do
-    version=$((10#$version))
+  while IFS=$'\t' read -r version_key version short test_name result performance_report; do
+    if [[ $version != - ]]; then version=$((10#$version)); fi
     printf '[version=%s] %s / %s (%s)\n' "$version" "$short" "$test_name" "$result"
     printf '  详细报告：%s\n' "$performance_report"
   done < <(LC_ALL=C sort -t $'\t' -k1,1n -k2,2 -k3,3 "$rows")

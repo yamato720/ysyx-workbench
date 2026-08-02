@@ -428,9 +428,17 @@ include ./fpga/common/build.mk
 CONSTRUCTION_MANAGER := $(CURDIR)/scripts/construction-manager.sh
 HOST_BUILD_ALL := $(if $(filter 1,$(strip $(all))),1,0)
 HOST_BUILD_JOBS := $(if $(strip $(jobs)),$(strip $(jobs)),1)
+HOST_BUILD_REQUEST := $(strip $(config))
+ifneq ($(strip $(version)),)
+  HOST_BUILD_REQUEST := version=$(strip $(version))
+endif
+REBUILD_REQUEST := $(strip $(config))
+ifneq ($(strip $(version)),)
+  REBUILD_REQUEST := version=$(strip $(version))
+endif
 
 ifneq ($(strip $(rebuild)),)
-  $(error rebuild=1 已删除，请使用 make -C npc rebuild config=<Config>)
+  $(error rebuild=1 已删除，请使用 make rebuild config=<Config> 或 make rebuild version=<N>)
 endif
 
 ifneq ($(strip $(host_rebuild)),)
@@ -451,8 +459,9 @@ build:
 	@$(CONSTRUCTION_MANAGER) build "$(CURDIR)" "$(strip $(config))"
 
 rebuild:
-	@test -n "$(strip $(config))" || { echo 'rebuild 必须提供 config=<Config短名或FQCN>' >&2; exit 2; }
-	@$(CONSTRUCTION_MANAGER) rebuild "$(CURDIR)" "$(strip $(config))"
+	@test -z "$(strip $(config))" || test -z "$(strip $(version))" || { echo 'rebuild 的 config= 与 version= 不能同时使用' >&2; exit 2; }
+	@test -n "$(REBUILD_REQUEST)" || { echo 'rebuild 必须提供 config=<Config短名或FQCN> 或 version=<版本序号>' >&2; exit 2; }
+	@$(CONSTRUCTION_MANAGER) rebuild "$(CURDIR)" "$(REBUILD_REQUEST)"
 
 resume-post-link:
 	@test -n "$(strip $(config))" || { echo 'resume-post-link 必须提供 config=<Config短名或FQCN>' >&2; exit 2; }
@@ -462,11 +471,18 @@ host-config-list:
 	@$(CONSTRUCTION_MANAGER) host-catalog "$(CURDIR)"
 
 host-build:
-	@$(CONSTRUCTION_MANAGER) host-build "$(CURDIR)" "$(strip $(config))" "$(HOST_BUILD_ALL)" "$(HOST_BUILD_JOBS)"
+	@test -z "$(strip $(config))" || test -z "$(strip $(version))" || { echo 'host-build 的 config= 与 version= 不能同时使用' >&2; exit 2; }
+	@$(CONSTRUCTION_MANAGER) host-build "$(CURDIR)" "$(HOST_BUILD_REQUEST)" "$(HOST_BUILD_ALL)" "$(HOST_BUILD_JOBS)"
 
 host-rebuild:
-	@echo 'host-rebuild 已删除，请使用 host-build config=<Config> 或 host-build all=1 jobs=<N>' >&2
+	@echo 'host-rebuild 不是 Make 构造目标；请使用 build-host/rebuild-host 或 host-build config=<Config>、host-build version=<N>' >&2
 	@exit 2
+
+# 这两个名字是 host-build 的直观别名，允许脚本按 build/rebuild 对称地调用；
+# 它们仍只刷新 NEMU host，不会触发 Chisel、Vivado 或 Vitis。
+build-host: host-build
+
+rebuild-host: host-build
 
 version:
 	@if test -n "$(strip $(D))" || test -n "$(strip $(delete))"; then \
@@ -479,7 +495,7 @@ version:
 		$(CONSTRUCTION_MANAGER) list "$(CURDIR)"; \
 	fi
 
-.PHONY: config-list build rebuild resume-post-link host-config-list host-build host-rebuild version
+.PHONY: config-list build rebuild resume-post-link host-config-list host-build host-rebuild build-host rebuild-host version
 
 dpi-unit-test:
 	@mkdir -p "$(obj_dir)"; \

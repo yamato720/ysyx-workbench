@@ -138,7 +138,8 @@ class HbmJitterL2CacheSimulationCoreConfig extends ConfigBundle(
   * 命中经过 S0/S1 后在握手两拍后返回；miss、MMIO 和维护仍以按序阻塞方式完成。
   */
 class PipelinedTwoCycleWideL2SimulationCoreConfig extends ConfigBundle(
-  new WithDpiMemoryTimingConfig(DpiMemoryTimingConfig.Immediate) ++
+  new WithNpcOutstandingCompletionForwardingConfig ++
+    new WithDpiMemoryTimingConfig(DpiMemoryTimingConfig.Immediate) ++
     new WithLocalDpiCacheMemoryWidthConfig(512) ++
     new WithPipelinedTwoCycleWideHbmL2CacheConfig ++
     new Rv64IMZicsrConfig ++
@@ -146,6 +147,12 @@ class PipelinedTwoCycleWideL2SimulationCoreConfig extends ConfigBundle(
     new WithTopDebugConfig ++
     new WithFpgaMainMemoryConfig ++
     new BaseConfig
+)
+
+/** 与两拍 L1/L2 端点同层级的关闭版，用于完成表前递 A/B 对照。 */
+class PipelinedTwoCycleWideL2NoCompletionForwardingSimulationCoreConfig extends ConfigBundle(
+  new WithoutNpcOutstandingCompletionForwardingConfig ++
+    new PipelinedTwoCycleWideL2SimulationCoreConfig
 )
 
 /** ysyxSoC 使用的缓存版 RV32 外部 AXI 核心。 */

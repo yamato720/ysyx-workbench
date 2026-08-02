@@ -18,6 +18,7 @@ class HazardProducer extends Bundle {
 class ForwardingCandidate(xlen: Int) extends Bundle {
   val valid = Bool()
   val writesRd = Bool()
+  val writesFloatingRd = Bool()
   val rd = UInt(5.W)
   val data = UInt(xlen.W)
   val dataValid = Bool()
@@ -91,6 +92,15 @@ class ForwardingUnit(xlen: Int, candidateCount: Int = 7) extends Module {
     val idUsesRs2 = Input(Bool())
     val idRs1Data = Input(UInt(xlen.W))
     val idRs2Data = Input(UInt(xlen.W))
+    val idFrs1 = Input(UInt(5.W))
+    val idFrs2 = Input(UInt(5.W))
+    val idFrs3 = Input(UInt(5.W))
+    val idUsesFrs1 = Input(Bool())
+    val idUsesFrs2 = Input(Bool())
+    val idUsesFrs3 = Input(Bool())
+    val idFrs1Data = Input(UInt(xlen.W))
+    val idFrs2Data = Input(UInt(xlen.W))
+    val idFrs3Data = Input(UInt(xlen.W))
     val executeRs1 = Input(UInt(5.W))
     val executeRs2 = Input(UInt(5.W))
     val executeUsesRs1 = Input(Bool())
@@ -101,6 +111,9 @@ class ForwardingUnit(xlen: Int, candidateCount: Int = 7) extends Module {
     val executeCandidates = Input(Vec(candidateCount, new ForwardingCandidate(xlen)))
     val idRs1Forwarded = Output(UInt(xlen.W))
     val idRs2Forwarded = Output(UInt(xlen.W))
+    val idFrs1Forwarded = Output(UInt(xlen.W))
+    val idFrs2Forwarded = Output(UInt(xlen.W))
+    val idFrs3Forwarded = Output(UInt(xlen.W))
     val executeRs1Forwarded = Output(UInt(xlen.W))
     val executeRs2Forwarded = Output(UInt(xlen.W))
   })
@@ -128,6 +141,20 @@ class ForwardingUnit(xlen: Int, candidateCount: Int = 7) extends Module {
     io.idRs1, io.idUsesRs1, io.idRs1Data, io.enableIdForwarding, io.idCandidates)
   io.idRs2Forwarded := forwarded(
     io.idRs2, io.idUsesRs2, io.idRs2Data, io.enableIdForwarding, io.idCandidates)
+  private def forwardedFloating(source: UInt, used: Bool, base: UInt): UInt = {
+    val matches = io.idCandidates.map { candidate =>
+      used && source =/= 0.U && candidate.valid && candidate.writesFloatingRd &&
+        candidate.rd =/= 0.U && candidate.rd === source
+    }
+    // 新近的未完成 FPR 写者同样会阻断更老值；互锁器负责让该源保持停顿。
+    val selected = io.idCandidates.zip(matches).foldRight(base) { case ((candidate, matched), older) =>
+      Mux(matched, Mux(candidate.dataValid, candidate.data, base), older)
+    }
+    Mux(io.enableIdForwarding, selected, base)
+  }
+  io.idFrs1Forwarded := forwardedFloating(io.idFrs1, io.idUsesFrs1, io.idFrs1Data)
+  io.idFrs2Forwarded := forwardedFloating(io.idFrs2, io.idUsesFrs2, io.idFrs2Data)
+  io.idFrs3Forwarded := forwardedFloating(io.idFrs3, io.idUsesFrs3, io.idFrs3Data)
   io.executeRs1Forwarded := forwarded(
     io.executeRs1,
     io.executeUsesRs1,

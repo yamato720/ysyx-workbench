@@ -5,8 +5,8 @@ set -euo pipefail
 usage() {
   cat >&2 <<'EOF'
 用法：construction-manager.sh <命令> <npc-root> [参数]
-命令：catalog | host-catalog | resolve <config> <version> | build <config> | rebuild <config> | resume-post-link <config>
-      host-build <config> <all> <jobs> | ensure <config> <build> <host-rebuild>
+命令：catalog | host-catalog | resolve <config> <version> | build <config> | rebuild <config|version=N> | resume-post-link <config>
+      host-build <config|version=N> <all> <jobs> | ensure <config> <build> <host-rebuild>
       list [selector] | delete <versions> [delete-alias]
 
 <versions> 是由逗号或连字符分隔的正整数列表，例如 1,2,3 或 1-2-3。
@@ -28,7 +28,7 @@ build_tool="$npc_root/scripts/build-construction.sh"
 refresh_simulation_host_tool="$npc_root/scripts/refresh-simulation-host.sh"
 phase_log_tool="$npc_root/scripts/phase-log.sh"
 artifact_tool="$npc_root/fpga/common/scripts/artifact-manifest.sh"
-mkdir -p "$root/.profiles" "$root/.failed" "$root/.hosts" "$root/.locks"
+mkdir -p "$root/.profiles" "$root/.failed" "$root/.hosts" "$root/.compatible" "$root/.locks"
 catalog_ready=${NPC_CONFIG_CATALOG_READY:-0}
 profile_format=22
 profile_inputs_fingerprint_cache=''
@@ -630,6 +630,71 @@ construction_is_complete() {
   [[ -s $artifact ]]
 }
 
+compatible_directory() {
+  printf '%s/.compatible/%s\n' "$root" "$1"
+}
+
+compatible_artifact_path() {
+  local directory=$1 profile=$2 board platform
+  board=$(value "$profile" FPGA_BOARD)
+  platform=$(value "$profile" FPGA_PLATFORM)
+  case "$board" in
+    u55c) printf '%s/fpga/artifacts/npc-%s.xclbin\n' "$directory" "$platform" ;;
+    zcu102) printf '%s/fpga/artifacts/npc.bit\n' "$directory" ;;
+    *) return 1 ;;
+  esac
+}
+
+compatible_artifacts_ready() {
+  local directory=$1 profile=$2 artifact board metadata
+  [[ -f $directory/profile.env && -f $directory/construction.env &&
+    -x $directory/abi/nemu/nemu-exec ]] || return 1
+  [[ $(value "$directory/construction.env" HOST_ONLY) == 1 ]] || return 1
+  [[ $(value "$directory/profile.env" CONFIG_FQCN) == $(value "$profile" CONFIG_FQCN) ]] || return 1
+  [[ $(value "$directory/profile.env" FPGA_BOARD) == $(value "$profile" FPGA_BOARD) ]] || return 1
+  [[ $(value "$directory/profile.env" FPGA_PLATFORM) == $(value "$profile" FPGA_PLATFORM) ]] || return 1
+  [[ $(value "$directory/profile.env" HOST_ABI) == $(value "$profile" HOST_ABI) ]] || return 1
+  [[ $(value "$directory/profile.env" PROTOCOL_ABI) == $(value "$profile" PROTOCOL_ABI) ]] || return 1
+  metadata="$directory/compatibility.env"
+  [[ -f $metadata && $(value "$metadata" COMPATIBILITY_FORMAT) == 1 &&
+    $(value "$metadata" COMPATIBLE_ONLY) == 1 &&
+    $(value "$metadata" ARTIFACT_PRIORITY) == compatible ]] || return 1
+  [[ $(value "$metadata" CONFIG_FQCN) == $(value "$profile" CONFIG_FQCN) ]] || return 1
+  [[ $(value "$metadata" FPGA_BOARD) == $(value "$profile" FPGA_BOARD) ]] || return 1
+  [[ $(value "$metadata" FPGA_PLATFORM) == $(value "$profile" FPGA_PLATFORM) ]] || return 1
+  [[ $(value "$metadata" FPGA_CLOCK_MHZ) == $(value "$profile" FPGA_CLOCK_MHZ) ]] || return 1
+  [[ $(value "$metadata" FPGA_PLATFORM_CLOCK_MHZ) == $(value "$profile" FPGA_PLATFORM_CLOCK_MHZ) ]] || return 1
+  [[ $(value "$metadata" HOST_ABI) == $(value "$profile" HOST_ABI) ]] || return 1
+  [[ $(value "$metadata" PROTOCOL_ABI) == $(value "$profile" PROTOCOL_ABI) ]] || return 1
+  artifact=$(compatible_artifact_path "$directory" "$profile") || return 1
+  [[ -s $artifact ]] || return 1
+  board=$(value "$profile" FPGA_BOARD)
+  if [[ $board == zcu102 ]]; then
+    [[ -s $directory/fpga/artifacts/npc-zcu102.env ]] || return 1
+  fi
+}
+
+write_compatibility_metadata() {
+  local directory=$1 profile=$2 temporary
+  temporary=$(mktemp "$directory/.compatibility.XXXXXX")
+  {
+    echo 'COMPATIBILITY_FORMAT=1'
+    echo 'COMPATIBLE_ONLY=1'
+    echo "CONFIG_FQCN=$(value "$profile" CONFIG_FQCN)"
+    echo "CONFIG_SHORT_NAME=$(value "$profile" CONFIG_SHORT_NAME)"
+    echo "FPGA_BOARD=$(value "$profile" FPGA_BOARD)"
+    echo "FPGA_PLATFORM=$(value "$profile" FPGA_PLATFORM)"
+    echo "FPGA_CLOCK_MHZ=$(value "$profile" FPGA_CLOCK_MHZ)"
+    echo "FPGA_PLATFORM_CLOCK_MHZ=$(value "$profile" FPGA_PLATFORM_CLOCK_MHZ)"
+    echo "HOST_ABI=$(value "$profile" HOST_ABI)"
+    echo "PROTOCOL_ABI=$(value "$profile" PROTOCOL_ABI)"
+    echo 'ARTIFACT_PRIORITY=compatible'
+    echo "UPDATED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "ASSET_HINT=$(case "$(value "$profile" FPGA_BOARD)" in u55c) printf 'fpga/artifacts/npc-%s.xclbin' "$(value "$profile" FPGA_PLATFORM)" ;; zcu102) printf 'fpga/artifacts/npc.bit and fpga/artifacts/npc-zcu102.env' ;; esac)"
+  } > "$temporary"
+  mv "$temporary" "$directory/compatibility.env"
+}
+
 mark_construction_complete() {
   local directory=$1 profile scope board platform artifact='-'
   profile="$directory/profile.env"
@@ -1130,8 +1195,8 @@ final_construction_by_version() {
   printf '%s\n' "${matches[0]}"
 }
 
-verify_assets() {
-  local directory=$1 profile construction scope host_abi board platform artifacts manifest host core_clock expected_core_clock
+verify_host_assets() {
+  local directory=$1 profile construction scope host_abi host core_clock expected_core_clock
   profile="$directory/profile.env"
   construction="$directory/construction.env"
   [[ -f $profile && -f $construction ]] || {
@@ -1163,6 +1228,13 @@ verify_assets() {
       }
     fi
   fi
+}
+
+verify_assets() {
+  local directory=$1 profile scope
+  verify_host_assets "$directory"
+  profile="$directory/profile.env"
+  scope=$(value "$profile" SCOPE)
   [[ $scope == fpga ]] || return 0
   verify_fpga_artifacts "$directory" "$profile"
 }
@@ -1229,8 +1301,8 @@ write_host_refreshed_construction() {
   ' "$saved" > "$output"
 }
 
-# host-only 缓存没有硬件、RTL 或 FPGA 资产。它只保存直接执行 NEMU host 所需的
-# Config 身份和运行 ABI，因此不能被 version= 或 run 当作正式构造引用。
+# host-only 缓存没有硬件或 RTL。普通 NPC/SoC 使用 .hosts；FPGA 使用 .compatible，
+# 后者允许外部平台生成的运行资产放入固定目录，并在运行时优先于正式构造资产。
 write_host_only_construction() {
   local profile=$1 output=$2 now
   now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -1544,10 +1616,23 @@ run_prepared_build() {
 }
 
 do_build() {
-  local request=$1 force=$2 metadata_lock_fd build_lock_fd resolved fqcn
+  local request=$1 force=$2 metadata_lock_fd build_lock_fd resolved fqcn version_index directory
   exec {metadata_lock_fd}>"$root/.lock"
   flock "$metadata_lock_fd"
   migrate_version_indexes_locked
+  if [[ $request == version=* ]]; then
+    [[ $force == 1 ]] || {
+      echo 'build 不接受 version=；首次构造必须提供 config=<Config>' >&2
+      return 2
+    }
+    version_index=${request#version=}
+    directory=$(final_construction_by_version "$version_index")
+    request=$(value "$(version_info_file "$directory")" CONFIG_FQCN)
+    [[ -n $request ]] || {
+      echo "版本序号 $version_index 缺少 Config 身份" >&2
+      return 1
+    }
+  fi
   resolved=$(resolve_catalog "$request")
   IFS='|' read -r fqcn _ <<< "$resolved"
   exec {build_lock_fd}>"$root/.locks/$fqcn.lock"
@@ -1846,10 +1931,19 @@ do_host_build_directory() {
 }
 
 do_host_build() {
-  local request=$1 resolved fqcn directory cache_directory cache_stage cache_profile cache_lock_fd recovery_lock_fd
-  resolved=$(resolve_catalog "$request")
-  IFS='|' read -r fqcn _ <<< "$resolved"
-  directory="$root/$fqcn"
+  local request=$1 resolved fqcn directory cache_directory cache_stage cache_profile cache_lock_fd recovery_lock_fd version_index scope
+  if [[ $request == version=* ]]; then
+    version_index=${request#version=}
+    # host-build 的职责正是修复 host 元数据失配，因此不能先用旧 host 的状态拒绝；
+    # 只需确认该序号对应正式保存目录，再在发布前重新校验完整资产。
+    ensure_version_indexes_for_read
+    directory=$(final_construction_by_version "$version_index")
+    fqcn=$(value "$directory/profile.env" CONFIG_FQCN)
+  else
+    resolved=$(resolve_catalog "$request")
+    IFS='|' read -r fqcn _ <<< "$resolved"
+    directory="$root/$fqcn"
+  fi
   if [[ -d $directory ]]; then
     if failed_fpga_host_recovery_candidate "$directory"; then
       exec {recovery_lock_fd}>"$root/.lock"
@@ -1874,24 +1968,42 @@ do_host_build() {
     return
   fi
 
-  cache_directory="$root/.hosts/$fqcn"
-  exec {cache_lock_fd}>"$root/.hosts/.lock"
+  cache_profile=$(profile_for "$fqcn" 1)
+  scope=$(value "$cache_profile" SCOPE)
+  if [[ $scope == fpga ]]; then
+    cache_directory=$(compatible_directory "$fqcn")
+    exec {cache_lock_fd}>"$root/.compatible/.lock"
+  else
+    cache_directory="$root/.hosts/$fqcn"
+    exec {cache_lock_fd}>"$root/.hosts/.lock"
+  fi
   flock "$cache_lock_fd"
   if [[ ! -d $cache_directory ]]; then
     [[ ! -e $cache_directory ]] || {
       echo "host-only 缓存路径不是目录：$cache_directory" >&2
       return 1
     }
-    cache_profile=$(profile_for "$fqcn" 1)
-    cache_stage=$(mktemp -d "$root/.hosts/.staging.XXXXXX")
+    if [[ $scope == fpga ]]; then
+      cache_stage=$(mktemp -d "$root/.compatible/.staging.XXXXXX")
+    else
+      cache_stage=$(mktemp -d "$root/.hosts/.staging.XXXXXX")
+    fi
     mkdir -p "$cache_stage/abi" "$cache_stage/logs"
+    [[ $scope == fpga ]] && mkdir -p "$cache_stage/fpga/artifacts"
     cp "$cache_profile" "$cache_stage/profile.env"
     write_host_only_construction "$cache_stage/profile.env" "$cache_stage/construction.env"
+    if [[ $scope == fpga ]]; then
+      write_compatibility_metadata "$cache_stage" "$cache_stage/profile.env"
+    fi
     mv "$cache_stage" "$cache_directory"
   fi
   flock -u "$cache_lock_fd"
   exec {cache_lock_fd}>&-
+  [[ $scope == fpga ]] && mkdir -p "$cache_directory/fpga/artifacts"
   do_host_build_directory "$cache_directory" 1
+  if [[ $scope == fpga ]]; then
+    write_compatibility_metadata "$cache_directory" "$cache_directory/profile.env"
+  fi
 }
 
 do_host_build_all() {
@@ -1922,6 +2034,7 @@ do_host_build_all() {
 
 do_resolve() {
   local request=${1:-} version_index=${2:-} directory profile info resolved fqcn scope board target saved_fqcn saved_short saved_version
+  local compatible compatible_profile
   ensure_version_indexes_for_read
   if [[ -z $request && -z $version_index ]]; then
     echo "必须提供 config=<Config> 或 version=<版本序号>。可用 Config：" >&2
@@ -1952,6 +2065,21 @@ do_resolve() {
       profile="$directory/profile.env"
     fi
   fi
+  if [[ $(value "$profile" SCOPE) == fpga ]]; then
+    compatible=$(compatible_directory "$(value "$profile" CONFIG_FQCN)")
+    compatible_profile="$compatible/profile.env"
+    if [[ -f $compatible_profile ]] && compatible_artifacts_ready "$compatible" "$profile"; then
+      # 没有正式构造时，兼容目录本身就是可运行的 host/profile 载体；有正式
+      # 构造时保留正式目录和 version 元数据，只覆盖其 FPGA 资产根目录。
+      if [[ ! -f $directory/construction.env ]] || ! verify_host_assets "$directory" >/dev/null 2>&1; then
+        directory="$compatible"
+        profile="$compatible_profile"
+        saved_version='-'
+      fi
+    fi
+  fi
+  # 保留既有十字段接口，profile.env 始终是最后一项；兼容资产根目录由
+  # platform/nemu.mk 根据同一 FQCN 自动探测，避免破坏现有 awk -F'|' '$NF' 调用。
   printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
     "$(value "$profile" CONFIG_FQCN)" "$(value "$profile" CONFIG_SHORT_NAME)" \
     "$(value "$profile" CAPABILITY)" "$(value "$profile" TARGET)" "$(value "$profile" XLEN)" \
@@ -2010,11 +2138,11 @@ case "$command" in
     [[ $# == 3 ]] || usage
     request=$1 build_all=$2 jobs=$3
     if [[ $build_all == 1 ]]; then
-      [[ -z $request ]] || { echo 'host-build all=1 不能同时提供 config=' >&2; exit 2; }
+      [[ -z $request ]] || { echo 'host-build all=1 不能同时提供 config= 或 version=' >&2; exit 2; }
       do_host_build_all "$jobs"
     else
       [[ $build_all == 0 ]] || { echo 'host-build all 只能为 0 或 1' >&2; exit 2; }
-      [[ -n $request ]] || { echo 'host-build 必须提供 config=<硬件 Config> 或 all=1' >&2; exit 2; }
+      [[ -n $request ]] || { echo 'host-build 必须提供 config=<硬件 Config>、version=<版本序号> 或 all=1' >&2; exit 2; }
       do_host_build "$request"
     fi
     ;;
@@ -2027,12 +2155,21 @@ case "$command" in
     scope=$(value "$profile" SCOPE)
     directory="$root/$fqcn"
     if [[ ! -d $directory ]]; then
-      if [[ $scope == fpga && $allow_build != 1 ]]; then
-        echo "FPGA 构造不存在：$fqcn；首次运行请添加 build=1" >&2; exit 1
+      compatible=$(compatible_directory "$fqcn")
+      if [[ $scope == fpga && -f $compatible/profile.env ]] && compatible_artifacts_ready "$compatible" "$profile"; then
+        echo "使用兼容 FPGA 构造资产：$compatible" >&2
+      elif [[ $scope == fpga && $allow_build != 1 ]]; then
+        echo "FPGA 构造不存在：$fqcn；首次运行请添加 build=1，或执行 host-build config=$fqcn 后放入兼容比特流" >&2; exit 1
+      else
+        do_build "$fqcn" 0
       fi
-      do_build "$fqcn" 0
     elif [[ $scope == fpga ]]; then
-      verify_assets "$directory"
+      compatible=$(compatible_directory "$fqcn")
+      if [[ -f $compatible/profile.env ]] && compatible_artifacts_ready "$compatible" "$profile"; then
+        echo "使用兼容 FPGA 构造资产：$compatible" >&2
+      else
+        verify_assets "$directory"
+      fi
     else
       verify_assets "$directory"
     fi

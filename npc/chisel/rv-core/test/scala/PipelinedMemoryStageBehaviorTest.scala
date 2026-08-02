@@ -3,6 +3,7 @@ package npc
 import chisel3._
 import chisel3.simulator.EphemeralSimulator._
 import org.scalatest.flatspec.AnyFlatSpec
+import npc.protocol.ExecuteMemoryPayload
 
 import scala.collection.mutable
 
@@ -10,8 +11,7 @@ class PipelinedMemoryStageBehaviorTest extends AnyFlatSpec {
   private val cfg = ISAConfig(xlen = 64)
   private val base = BigInt("80000000", 16)
 
-  private def clearRequest(dut: PipelinedMemoryStage): Unit = {
-    val bits = dut.io.request.bits
+  private def clearPayload(bits: ExecuteMemoryPayload): Unit = {
     bits.pc.poke(0)
     bits.instruction.poke(0)
     bits.perfFetchStartCycle.poke(0)
@@ -48,6 +48,8 @@ class PipelinedMemoryStageBehaviorTest extends AnyFlatSpec {
     bits.mretEnable.poke(false)
     bits.csrReadData.poke(0)
   }
+
+  private def clearRequest(dut: PipelinedMemoryStage): Unit = clearPayload(dut.io.request.bits)
 
   private def setLoad(dut: PipelinedMemoryStage, address: BigInt, rd: Int): Unit = {
     clearRequest(dut)
@@ -89,6 +91,15 @@ class PipelinedMemoryStageBehaviorTest extends AnyFlatSpec {
 
   private def initialize(dut: PipelinedMemoryStage): Unit = {
     dut.io.request.valid.poke(false)
+    clearPayload(dut.io.arithmeticRequest.bits)
+    dut.io.arithmeticRequest.valid.poke(false)
+    dut.io.arithmeticCompletion.foreach { completion =>
+      completion.valid.poke(false)
+      completion.bits.tag.poke(0)
+      completion.bits.result.poke(0)
+      completion.bits.exceptionFlags.poke(0)
+      completion.bits.illegal.poke(false)
+    }
     dut.io.response.ready.poke(true)
     dut.io.flush.poke(false)
     dut.io.axi.aw.ready.poke(true)
@@ -225,6 +236,76 @@ class PipelinedMemoryStageBehaviorTest extends AnyFlatSpec {
       dut.io.axi.w.valid.expect(true.B)
       dut.io.axi.w.bits.data.expect((BigInt(6) << 32).U)
       dut.io.axi.w.bits.strb.expect("hf0".U)
+    }
+  }
+
+  it should "forward a completed younger arithmetic slot without retiring it before an older load" in {
+    simulate(new PipelinedMemoryStage(cfg = cfg, enableOutstandingCompletionForwarding = true)) { dut =>
+      initialize(dut)
+      dut.reset.poke(true)
+      dut.clock.step(2)
+      dut.reset.poke(false)
+      var cycle = 0L
+
+      def step(): Unit = {
+        dut.io.cycle.poke(cycle)
+        dut.clock.step()
+        cycle += 1
+      }
+
+      setLoad(dut, base, rd = 3)
+      dut.io.request.valid.poke(true)
+      dut.io.request.ready.expect(true.B)
+      step()
+      dut.io.request.valid.poke(false)
+
+      clearPayload(dut.io.arithmeticRequest.bits)
+      dut.io.arithmeticRequest.bits.pc.poke(base + 4)
+      dut.io.arithmeticRequest.bits.instruction.poke(0x02000033L)
+      dut.io.arithmeticRequest.bits.rd.poke(4)
+      dut.io.arithmeticRequest.bits.registerWriteEnable.poke(true)
+      dut.io.arithmeticRequest.valid.poke(true)
+      dut.io.arithmeticRequest.ready.expect(true.B)
+      val arithmeticTag = dut.io.arithmeticAllocateTag.peek().litValue
+      step()
+      dut.io.arithmeticRequest.valid.poke(false)
+
+      dut.io.arithmeticCompletion(0).bits.tag.poke(arithmeticTag)
+      dut.io.arithmeticCompletion(0).bits.result.poke(0x55)
+      dut.io.arithmeticCompletion(0).bits.exceptionFlags.poke(0)
+      dut.io.arithmeticCompletion(0).bits.illegal.poke(false)
+      dut.io.arithmeticCompletion(0).valid.poke(true)
+      dut.io.arithmeticCompletion(0).ready.expect(true.B)
+      step()
+      dut.io.arithmeticCompletion(0).valid.poke(false)
+
+      dut.io.completionCandidates(0).valid.expect(true.B)
+      dut.io.completionCandidates(0).rd.expect(4.U)
+      dut.io.completionCandidates(0).data.expect(0x55.U)
+      dut.io.completionCandidates(0).dataValid.expect(true.B)
+      dut.io.completionCandidates(1).valid.expect(true.B)
+      dut.io.completionCandidates(1).rd.expect(3.U)
+      dut.io.completionCandidates(1).dataValid.expect(false.B)
+      dut.io.response.valid.expect(false.B)
+
+      dut.io.axi.r.valid.poke(true)
+      dut.io.axi.r.bits.data.poke(0x1234)
+      val returnedPcs = mutable.ArrayBuffer.empty[BigInt]
+      var readSent = false
+      var guard = 0
+      while (returnedPcs.size < 2 && guard < 20) {
+        if (dut.io.response.valid.peek().litToBoolean && dut.io.response.ready.peek().litToBoolean) {
+          returnedPcs += dut.io.response.bits.pc.peek().litValue
+        }
+        val readFire = dut.io.axi.r.valid.peek().litToBoolean && dut.io.axi.r.ready.peek().litToBoolean
+        step()
+        if (readFire && !readSent) {
+          dut.io.axi.r.valid.poke(false)
+          readSent = true
+        }
+        guard += 1
+      }
+      assert(returnedPcs.toSeq == Seq(base, base + 4))
     }
   }
 }
