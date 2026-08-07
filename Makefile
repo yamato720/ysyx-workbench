@@ -47,7 +47,7 @@ WORKBENCH_ROOT_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 ifeq ($(abspath $(CURDIR)),$(WORKBENCH_ROOT_DIR))
 # 构造管理命令不依赖当前目录；从工作区根目录转发可以保持 config/version 等
 # 命令行变量由递归 make 原样传给 npc/Makefile。
-NPC_FORWARD_TARGETS = config-list host-config-list build rebuild resume-post-link host-build build-host rebuild-host version
+NPC_FORWARD_TARGETS = config-list host-config-list build rebuild resume-post-link host-build build-host rebuild-host run version
 
 $(NPC_FORWARD_TARGETS):
 	+$(MAKE) -C "$(CURDIR)/npc" "$@"

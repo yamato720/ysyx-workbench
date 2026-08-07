@@ -10,7 +10,7 @@ FPGA_NAME := u55c
 # lower entries are generated inside the kernel and cross back to DATA_CLK
 # through async AXI-channel FIFOs.  The fixed 100 MHz freerun clock is not used.
 FPGA_PLATFORM_CLOCK_MHZ := 300
-FPGA_ALLOWED_CLOCK_MHZ := 100 125 150 200 250 300
+FPGA_ALLOWED_CLOCK_MHZ := 100 125 150 200 225 250 300
 FPGA_PLATFORM_CLOCK_VERIFIER := $(U55C_CONFIG_DIR)/scripts/verify-data-clock.sh
 
 FPGA_MEMORY_BASE := 0x80000000

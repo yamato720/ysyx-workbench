@@ -25,22 +25,29 @@ object ConfigCatalogGenerator {
   private val terminalTraits = Map(
     "LocalNpcTerminal" -> ("npc", "NPC"),
     "LocalSocTerminal" -> ("soc", "SOC"),
+    "LocalSpmvSimulationTerminal" -> ("spmv", "SPMV"),
+    "LocalSpmvPerformanceMonitorTerminal" -> ("spmv", "SPMV"),
     "U55cNpcTerminal" -> ("fpga", "NPC"),
     "U55cNpcPerformanceMonitorTerminal" -> ("fpga", "NPC"),
+    "U55cSpmvSynthesisTerminal" -> ("fpga", "SPMV"),
+    "U55cSpmvBitstreamTerminal" -> ("fpga", "SPMV"),
     "U55cSocTerminal" -> ("fpga", "SOC"),
     "Zcu102NpcTerminal" -> ("fpga", "NPC"),
     "Zcu102SocTerminal" -> ("fpga", "SOC")
   )
-  private val ipTerminalForScope = Map(
-    "npc" -> "NemuSimulationIpTerminal",
-    "soc" -> "NemuSimulationIpTerminal",
-    "fpga" -> "FpgaIpTerminal"
+  private val ipTerminalForTarget = Map(
+    "NPC" -> "FpgaIpTerminal",
+    "SOC" -> "FpgaIpTerminal"
   )
   private val ipTerminalNames = Vector("NemuSimulationIpTerminal", "FpgaIpTerminal")
   private val baseConstructionTraits = Vector(
     "HostConstruction",
+    "AcceleratorHostConstruction",
+    "FpgaToolchainConstruction",
     "NemuSimulationConstruction",
     "FpgaConstruction",
+    "FpgaSynthesisConstruction",
+    "FpgaBitstreamConstruction",
     "MakeTerminal"
   )
   /** 寻找同时包含通用 Config 与 FPGA 板卡 Config 的 NPC 根目录；无法找到时返回 `None`，供安装后的
@@ -203,15 +210,22 @@ object ConfigCatalogGenerator {
     * 这与 NEMU/FPGA host 配方同样是终端 ABI 的一部分；核心和 CDE `++` 链不能
     * 隐式选择或重复挂载它。
     */
-  private def validateIpTerminal(block: ClassBlock, scope: String): Unit = {
-    val expected = ipTerminalForScope(scope)
+  private def validateIpTerminal(block: ClassBlock, scope: String, target: String): Unit = {
     val mounted = ipTerminalNames.flatMap { name =>
       val occurrences = raw"\b$name\b".r.findAllMatchIn(block.body).size
       Option.when(occurrences > 0)(name -> occurrences)
     }
-    require(mounted == Vector(expected -> 1),
-      s"Config ${block.name} 必须直接且唯一地挂载 $expected，实际为 " +
-        mounted.map { case (name, count) => s"$name x$count" }.mkString(", "))
+    if (target == "SPMV") {
+      require(mounted.isEmpty,
+        s"Config ${block.name} 的 SPMV 终端不能挂载 CPU 计算 IP terminal，实际为 " +
+          mounted.map { case (name, count) => s"$name x$count" }.mkString(", "))
+    } else {
+      val expected = if (scope == "npc" || scope == "soc") "NemuSimulationIpTerminal"
+        else ipTerminalForTarget(target)
+      require(mounted == Vector(expected -> 1),
+        s"Config ${block.name} 必须直接且唯一地挂载 $expected，实际为 " +
+          mounted.map { case (name, count) => s"$name x$count" }.mkString(", "))
+    }
     val nested = ipTerminalNames.filter { name =>
       raw"(?s)\bnew\s+[^()]*?\bwith\s+$name\b".r.findFirstIn(block.body).nonEmpty
     }
@@ -234,7 +248,7 @@ object ConfigCatalogGenerator {
       )
       require(scope == expectedScope,
         s"Config ${block.name} 的终端 trait 作用域 $scope 与目录 $directory 不一致")
-      validateIpTerminal(block, scope)
+      validateIpTerminal(block, scope, target)
       val expectedParent = if (scope == "npc") "ConstructionConfig" else "CDEConfig"
       require(block.parent == expectedParent,
         s"Config ${block.name} 的终端 trait 要求继承 $expectedParent，实际为 ${block.parent}")
@@ -253,6 +267,9 @@ object ConfigCatalogGenerator {
 
   private def discoverSoc(configRoot: Path): Vector[ConfigCatalog.Entry] =
     discoverTerminals(configRoot.resolve("ysyx"), "soc", None)
+
+  private def discoverSpmv(configRoot: Path): Vector[ConfigCatalog.Entry] =
+    discoverTerminals(configRoot.resolve("spmv"), "spmv", None)
 
   private def boardMetadata(boardDirectory: Path, configDirectory: Path): String = {
     val source = scalaFiles(configDirectory).map(read).mkString("\n")
@@ -290,7 +307,7 @@ object ConfigCatalogGenerator {
     require(duplicateClassNames.isEmpty, s"Duplicate generated Config class names: ${duplicateClassNames.toSeq.sorted.mkString(", ")}")
     require(entries.nonEmpty, s"No Make-selectable Configs found below $ConfigRelativePath")
 
-    val scopeOrder = Map("npc" -> 0, "soc" -> 1, "fpga" -> 2)
+    val scopeOrder = Map("npc" -> 0, "soc" -> 1, "spmv" -> 2, "fpga" -> 3)
     entries.sortBy(entry => (scopeOrder.getOrElse(entry.scope, Int.MaxValue), entry.shortName))
   }
 
@@ -298,7 +315,7 @@ object ConfigCatalogGenerator {
   def discover(npcRoot: Path): Vector[ConfigCatalog.Entry] = {
     val configRoot = npcRoot.resolve(ConfigRelativePath)
     require(Files.isDirectory(configRoot), s"Missing Scala Config root $configRoot")
-    validate(discoverNpc(configRoot) ++ discoverSoc(configRoot) ++ discoverFpga(npcRoot))
+    validate(discoverNpc(configRoot) ++ discoverSoc(configRoot) ++ discoverSpmv(configRoot) ++ discoverFpga(npcRoot))
   }
 
   private def render(entries: Vector[ConfigCatalog.Entry]): String = {

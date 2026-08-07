@@ -2,7 +2,7 @@
 # 不提供 fpga=、soc=、VERSION、SIM_FPGA_CONFIG 或结构参数兼容。
 FPGA_COMMON_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 FPGA_ROOT := $(abspath $(FPGA_COMMON_DIR)/..)
-FPGA_BUILD_REQUESTED := $(if $(filter fpga-check fpga-config fpga-plan fpga-elaborate fpga-ip fpga-synth fpga-link,$(MAKECMDGOALS)),1,)
+FPGA_BUILD_REQUESTED := $(if $(filter fpga-check fpga-config fpga-plan fpga-elaborate fpga-ip fpga-synth fpga-link spmv-check spmv-elaborate spmv-ooc-synth spmv-link,$(MAKECMDGOALS)),1,)
 fpga_normalize_number = $(shell printf '%d' '$(strip $(1))' 2>/dev/null)
 
 ifeq ($(FPGA_BUILD_REQUESTED),1)
@@ -70,6 +70,7 @@ ifeq ($(FPGA_BUILD_REQUESTED),1)
     ifeq ($(shell test "$(FPGA_CLOCK_MHZ)" -le "$(FPGA_PLATFORM_CLOCK_MHZ)" && echo yes),)
       $(error Scala FPGA_CLOCK_MHZ=$(FPGA_CLOCK_MHZ) 超过 platform clock $(FPGA_PLATFORM_CLOCK_MHZ))
     endif
+    ifneq ($(TARGET),SPMV)
     ifneq ($(call fpga_normalize_number,$(BOARD_CONFIG_FPGA_MEMORY_BASE)),$(call fpga_normalize_number,$(MEMORY_BASE)))
       $(error Scala memory base $(MEMORY_BASE) 与板卡 config.mk 的 $(BOARD_CONFIG_FPGA_MEMORY_BASE) 不一致)
     endif
@@ -162,6 +163,7 @@ ifeq ($(FPGA_BUILD_REQUESTED),1)
     override NPC_FCMP_II := $(FCMP_II)
     override FPGA_MEMORY_BASE := $(MEMORY_BASE)
     override FPGA_MEMORY_SIZE := $(MEMORY_SIZE)
+    endif
   endif
   FPGA_BOARD_DIR := $(FPGA_ROOT)/$(FPGA_CONFIG_NAME)
 

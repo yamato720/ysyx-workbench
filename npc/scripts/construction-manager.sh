@@ -6,7 +6,8 @@ usage() {
   cat >&2 <<'EOF'
 用法：construction-manager.sh <命令> <npc-root> [参数]
 命令：catalog | host-catalog | resolve <config> <version> | build <config> | rebuild <config|version=N> | resume-post-link <config>
-      host-build <config|version=N> <all> <jobs> | ensure <config> <build> <host-rebuild>
+      host-build <config|version=N> <all> <jobs> | accelerator-run <config|version=N> <mainargs>
+      ensure <config> <build> <host-rebuild>
       list [selector] | delete <versions> [delete-alias]
 
 <versions> 是由逗号或连字符分隔的正整数列表，例如 1,2,3 或 1-2-3。
@@ -49,7 +50,7 @@ matching_mark() {
 valid_protocol_abi() {
   local scope=$1 board=${2:-} abi=$3
   case "$scope:$board:$abi" in
-    fpga:u55c:npc-fpga-runtime-v11|fpga:u55c:npc-fpga-runtime-v13-performance-monitor|fpga:zcu102:npc-fpga-runtime-v7|npc::npc-dpi-v1|soc::ysyx-dpi-v1) return 0 ;;
+    fpga:u55c:npc-fpga-runtime-v11|fpga:u55c:npc-fpga-runtime-v13-performance-monitor|fpga:u55c:spmv-resource-probe-v1|fpga:u55c:spmv-resource-probe-v2|fpga:zcu102:npc-fpga-runtime-v7|npc::npc-dpi-v1|soc::ysyx-dpi-v1|spmv::spmv-one-hbm-csr5-mul-v1|spmv::spmv-one-hbm-csr5-mul-v2|spmv::spmv-one-hbm-csr5-mul-v3) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -159,6 +160,9 @@ migrate_profile_mode() {
   capability=$(value "$file" CAPABILITY)
   scope=$(value "$file" SCOPE)
   board=$(value "$file" FPGA_BOARD)
+  [[ $capability != synthesize-only && $capability != bitstream-only ]] || return 0
+  # 独立 SPMV profile 从未包含 NEMU 字段，也不存在需要迁移的旧 CPU host 模式。
+  [[ $scope != spmv ]] || return 0
   replacement=$(normalize_capability "$capability")
   normalized_scope=$(normalize_scope "$scope")
   case "$replacement:$normalized_scope:$board" in
@@ -606,7 +610,7 @@ final_construction_environments() {
 }
 
 construction_is_complete() {
-  local directory=$1 profile scope board platform artifact host_abi
+  local directory=$1 profile scope board platform artifact host_abi capability
   case "$(basename "$directory")" in
     .staging-*|staging-*|.previous-*) return 1 ;;
   esac
@@ -617,9 +621,27 @@ construction_is_complete() {
 
   profile="$directory/profile.env"
   host_abi=$(value "$profile" HOST_ABI)
-  [[ $host_abi == none || -x $directory/abi/nemu/nemu-exec ]] || return 1
   scope=$(value "$profile" SCOPE)
+  if [[ $scope == spmv ]]; then
+    verify_host_assets "$directory" >/dev/null 2>&1
+    return
+  fi
+  [[ $host_abi == none || -x $directory/abi/nemu/nemu-exec ]] || return 1
   [[ $scope == fpga ]] || return 0
+  capability=$(value "$profile" CAPABILITY)
+  if [[ $capability == synthesize-only ]]; then
+    for artifact in spmv-resource-probe.xo spmv-resource-probe.dcp spmv-utilization.rpt \
+      spmv-utilization-hierarchical.rpt spmv-timing-summary.rpt; do
+      [[ -s $directory/fpga/artifacts/$artifact ]] || return 1
+    done
+    verify_fpga_artifacts "$directory" "$profile" >/dev/null 2>&1
+    return
+  fi
+  if [[ $capability == bitstream-only ]]; then
+    [[ -s $directory/fpga/artifacts/spmv-resource-probe.xclbin ]] || return 1
+    verify_fpga_artifacts "$directory" "$profile" >/dev/null 2>&1
+    return
+  fi
   board=$(value "$profile" FPGA_BOARD)
   platform=$(value "$profile" FPGA_PLATFORM)
   case "$board" in
@@ -696,15 +718,18 @@ write_compatibility_metadata() {
 }
 
 mark_construction_complete() {
-  local directory=$1 profile scope board platform artifact='-'
+  local directory=$1 profile scope board platform artifact='-' capability
   profile="$directory/profile.env"
   scope=$(value "$profile" SCOPE)
   if [[ $scope == fpga ]]; then
     board=$(value "$profile" FPGA_BOARD)
     platform=$(value "$profile" FPGA_PLATFORM)
-    case "$board" in
-      u55c) artifact="fpga/artifacts/npc-$platform.xclbin" ;;
-      zcu102) artifact='fpga/artifacts/npc.bit' ;;
+    capability=$(value "$profile" CAPABILITY)
+    case "$board:$capability" in
+      u55c:synthesize-only) artifact='fpga/artifacts/spmv-resource-probe.xo' ;;
+      u55c:bitstream-only) artifact='fpga/artifacts/spmv-resource-probe.xclbin' ;;
+      u55c:*) artifact="fpga/artifacts/npc-$platform.xclbin" ;;
+      zcu102:*) artifact='fpga/artifacts/npc.bit' ;;
       *) echo "无法标记未知 FPGA 板卡构造完成：$board" >&2; return 1 ;;
     esac
     [[ -s $directory/$artifact ]] || {
@@ -776,11 +801,13 @@ write_version_info() {
   case "$target" in
     NPC) arch=NPC ;;
     SOC) arch=SoC ;;
+    SPMV) arch=SpMV ;;
     *) echo "构造 TARGET 非法：$profile（$target）" >&2; exit 1 ;;
   esac
-  case "$scope" in
-    fpga) running_time=FPGA ;;
-    npc|soc) running_time=SIM ;;
+  case "$scope:$target" in
+    fpga:SPMV) running_time=SYNTH ;;
+    fpga:*) running_time=FPGA ;;
+    npc:*|soc:*|spmv:SPMV) running_time=SIM ;;
     *) echo "构造 SCOPE 非法：$profile（$scope）" >&2; exit 1 ;;
   esac
   xlen=$(value "$profile" XLEN)
@@ -794,12 +821,21 @@ write_version_info() {
     echo "CONFIG_SHORT_NAME=$short"
     echo "RV32=$rv32"
     echo "RV64=$rv64"
-    echo "M=$(value "$profile" M)"
-    echo "F=$(value "$profile" F)"
-    echo "ZICSR=$(value "$profile" ZICSR)"
-    echo "PIPE=$(value "$profile" PIPELINE)"
-    echo "ID=$(value "$profile" ID_FWD)"
-    echo "EX=$(value "$profile" EX_FWD)"
+    if [[ $target == SPMV ]]; then
+      echo 'M='
+      echo 'F='
+      echo 'ZICSR='
+      echo 'PIPE='
+      echo 'ID='
+      echo 'EX='
+    else
+      echo "M=$(value "$profile" M)"
+      echo "F=$(value "$profile" F)"
+      echo "ZICSR=$(value "$profile" ZICSR)"
+      echo "PIPE=$(value "$profile" PIPELINE)"
+      echo "ID=$(value "$profile" ID_FWD)"
+      echo "EX=$(value "$profile" EX_FWD)"
+    fi
     echo "ARCH=$arch"
     echo "RUNNING_TIME=$running_time"
   } > "$temporary"
@@ -813,11 +849,13 @@ write_pending_version_info() {
   case "$target" in
     NPC) arch=NPC ;;
     SOC) arch=SoC ;;
+    SPMV) arch=SpMV ;;
     *) echo "构造 TARGET 非法：$fqcn（$target）" >&2; exit 1 ;;
   esac
-  case "$scope" in
-    fpga) running_time=FPGA ;;
-    npc|soc) running_time=SIM ;;
+  case "$scope:$target" in
+    fpga:SPMV) running_time=SYNTH ;;
+    fpga:*) running_time=FPGA ;;
+    npc:*|soc:*|spmv:SPMV) running_time=SIM ;;
     *) echo "构造 SCOPE 非法：$fqcn（$scope）" >&2; exit 1 ;;
   esac
   temporary=$(mktemp "$directory/.version.info.XXXXXX")
@@ -1086,7 +1124,7 @@ resolve_catalog() {
     "$npc_root/scripts/generate-config-catalog.sh" "$npc_root"
     catalog_ready=1
   fi
-  resolved=$("$npc_root/scripts/resolve-config.sh" "$catalog" "$request" 'npc,soc,fpga')
+  resolved=$("$npc_root/scripts/resolve-config.sh" "$catalog" "$request" 'npc,soc,spmv,fpga')
   [[ $resolved != !* ]] || { echo "${resolved#!}" >&2; exit 2; }
   printf '%s\n' "$resolved"
 }
@@ -1129,7 +1167,7 @@ profile_inputs_fingerprint() {
       for input in scripts/generate-config-profile.sh build.sbt chisel/ysyxSoC/build.sc; do
         [[ -f $input ]] && printf '%s\0' "$input"
       done
-      find chisel/configs fpga/common/scala fpga/u55c/scala fpga/zcu102/scala \
+      find chisel/configs chisel/accelerators fpga/common/scala fpga/u55c/scala fpga/zcu102/scala \
         chisel/rv-core/main/scala chisel/ysyxSoC/src \
         -type f -name '*.scala' -print0
     } | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | awk '{print $1}'
@@ -1147,6 +1185,65 @@ write_profile_inputs_fingerprint() {
   mv "$temporary" "$file"
 }
 
+profile_cache_valid() {
+  local file=$1 fqcn=$2 scope=$3 board=$4 capability target x_mode x_replicas
+  [[ -f $file && $(value "$file" CONFIG_FQCN) == "$fqcn" &&
+    $(value "$file" PROFILE_FORMAT) == "$profile_format" ]] || return 1
+  valid_protocol_abi "$scope" "$board" "$(value "$file" PROTOCOL_ABI)" || return 1
+  capability=$(value "$file" CAPABILITY)
+  target=$(value "$file" TARGET)
+  if [[ $scope == spmv ]]; then
+    [[ $capability == run && $target == SPMV && $(value "$file" HOST_ABI) == none &&
+      $(value "$file" ACCELERATOR_HOST_KIND) == spmv &&
+      $(value "$file" ACCELERATOR_HOST_ABI) == spmv-csr5-verilator-v3 &&
+      -z $(value "$file" XLEN) && -z $(value "$file" ISA_STRING) &&
+      -z $(value "$file" NEMU_PRESET) && -z $(value "$file" NEMU_BACKEND) &&
+      $(value "$file" SPMV_HBM_PC_COUNT) == 1 &&
+      $(value "$file" SPMV_AXI_ADDR_WIDTH) == 64 &&
+      $(value "$file" SPMV_AXI_DATA_WIDTH) == 512 &&
+      $(value "$file" SPMV_A_WIDTH) == 32 && $(value "$file" SPMV_X_WIDTH) == 32 &&
+      $(value "$file" SPMV_PRODUCT_WIDTH) == 32 && $(value "$file" SPMV_OMEGA) == 8 &&
+      $(value "$file" SPMV_SIGMA) == 16 && $(value "$file" SPMV_MAX_BLOCK_ROWS) == 8192 &&
+      $(value "$file" SPMV_MAX_BLOCK_COLS) == 8192 &&
+      $(value "$file" SPMV_X_READ_LANES) == 8 && $(value "$file" SPMV_MULTIPLIER_COUNT) == 8 &&
+      $(value "$file" SPMV_MULTIPLIER_LATENCY) == 4 && $(value "$file" SPMV_MULTIPLIER_II) == 1 &&
+      $(value "$file" SPMV_BURST_BEATS) == 64 && $(value "$file" SPMV_OUTSTANDING_BURSTS) == 2 &&
+      $(value "$file" SPMV_INPUT_FIFO_DEPTH) == 128 &&
+      ($(value "$file" SPMV_PERFORMANCE_HTML) == 0 || $(value "$file" SPMV_PERFORMANCE_HTML) == 1) &&
+      ($(value "$file" SPMV_PIPELINE_HTML) == 0 || $(value "$file" SPMV_PIPELINE_HTML) == 1) &&
+      ($(value "$file" SPMV_PIPELINE_HTML) == 0 || $(value "$file" SPMV_PERFORMANCE_HTML) == 1) &&
+      ($(value "$file" SPMV_PERFORMANCE_HTML) == 0 ||
+        $(value "$file" SPMV_PERFORMANCE_FIRST_SUBCONFIG) == mul-add-pipeline-html) &&
+      ($(value "$file" SPMV_PERFORMANCE_HTML) == 1 ||
+        $(value "$file" SPMV_PERFORMANCE_FIRST_SUBCONFIG) == none) ]] || return 1
+    x_mode=$(value "$file" SPMV_X_MODE)
+    x_replicas=$(value "$file" SPMV_X_REPLICAS)
+    [[ $x_mode == paired && $x_replicas == 0 || $x_mode == cached && $x_replicas == 4 ]] || return 1
+    return 0
+  fi
+  case "$capability" in
+    run|batch)
+      [[ -n $(value "$file" XLEN) && -n $(value "$file" NEMU_PRESET) ]] || return 1
+      if [[ $scope == fpga ]]; then
+        [[ -n $(value "$file" FPGA_PLATFORM_CLOCK_MHZ) &&
+          -n $(value "$file" FPGA_RUNTIME_SDB) && -n $(value "$file" FPGA_RUNTIME_TRACE) ]] || return 1
+      fi
+      ;;
+    synthesize-only|bitstream-only)
+      [[ $scope == fpga && $board == u55c && $target == SPMV &&
+        $(value "$file" HOST_ABI) == none && -z $(value "$file" XLEN) &&
+        $(value "$file" ACCELERATOR_HOST_KIND) == spmv &&
+        $(value "$file" ACCELERATOR_HOST_ABI) == spmv-golden-v1 &&
+        -n $(value "$file" FPGA_PART) && -n $(value "$file" FPGA_PLATFORM_CLOCK_MHZ) &&
+        -n $(value "$file" SPMV_HBM_PC_COUNT) && -n $(value "$file" SPMV_AXI_DATA_WIDTH) &&
+        -n $(value "$file" SPMV_ELEMENT_WIDTH) && -n $(value "$file" SPMV_X_ELEMENTS_PER_PC) &&
+        -n $(value "$file" SPMV_X_STORAGE) && -n $(value "$file" SPMV_BURST_BEATS) &&
+        -n $(value "$file" SPMV_BASE_ALIGNMENT_BYTES) ]] || return 1
+      ;;
+    *) return 1 ;;
+  esac
+}
+
 profile_for() {
   local request=$1 refresh=${2:-0} resolved fqcn scope board target output inputs_fingerprint inputs_file cached_fingerprint
   resolved=$(resolve_catalog "$request")
@@ -1162,9 +1259,8 @@ profile_for() {
   # 自动目录只包含挂载一个 terminal 层 trait 的完整终端，这些 trait 已组合 NEMU
   # 运行行为、scope 和 target。旧缓存里的 generate-only/check-only profile
   # 不能继续代表同名终端，必须从当前 Scala Config 重建。
-  if [[ $refresh == 1 || ! -f $output || $cached_fingerprint != "$inputs_fingerprint" || $(value "$output" CONFIG_FQCN) != "$fqcn" || $(value "$output" PROFILE_FORMAT) != "$profile_format" || ! $(value "$output" CAPABILITY) =~ ^(run|batch)$ ]] || ! valid_protocol_abi "$scope" "$board" "$(value "$output" PROTOCOL_ABI)" || {
-    [[ $scope != fpga ]] || [[ -z $(value "$output" FPGA_PLATFORM_CLOCK_MHZ) || -z $(value "$output" FPGA_RUNTIME_SDB) || -z $(value "$output" FPGA_RUNTIME_TRACE) ]]
-  }; then
+  if [[ $refresh == 1 || ! -f $output || $cached_fingerprint != "$inputs_fingerprint" ]] ||
+    ! profile_cache_valid "$output" "$fqcn" "$scope" "$board"; then
     NPC_CONFIG_CATALOG_READY=1 "$profile_tool" "$npc_root" "$fqcn" "$output"
     write_profile_inputs_fingerprint "$inputs_file" "$inputs_fingerprint"
   fi
@@ -1195,6 +1291,58 @@ final_construction_by_version() {
   printf '%s\n' "${matches[0]}"
 }
 
+verify_spmv_model_assets() {
+  local directory=$1 profile="$1/profile.env" accelerator_abi
+  accelerator_abi=$(value "$profile" ACCELERATOR_HOST_ABI)
+  [[ -f $profile && $(value "$profile" SCOPE) == spmv &&
+    $(value "$profile" HOST_ABI) == none &&
+    ($accelerator_abi == spmv-csr5-verilator-v1 ||
+      $accelerator_abi == spmv-csr5-verilator-v2 ||
+      $accelerator_abi == spmv-csr5-verilator-v3) ]] || {
+    echo "构造不是独立 SPMV Verilator ABI：$directory" >&2; return 1;
+  }
+  [[ ! -e $directory/abi/nemu ]] || {
+    echo "独立 SPMV 构造不能包含 abi/nemu：$directory" >&2; return 1;
+  }
+  local asset
+  for asset in \
+    abi/rtl/SpmvOneHbmCsr5MulSimulationTop.sv \
+    abi/verilator/VSpmvOneHbmCsr5MulSimulationTop.h \
+    abi/verilator/libVSpmvOneHbmCsr5MulSimulationTop.a \
+    abi/verilator/libverilated.a \
+    abi/softfloat/softfloat.a; do
+    [[ -s $directory/$asset ]] || {
+      echo "独立 SPMV 构造缺少资产：$directory/$asset" >&2; return 1;
+    }
+  done
+}
+
+verify_spmv_host_assets() {
+  local directory=$1 profile="$1/profile.env" host="$1/abi/spmv/host.env"
+  [[ -x $directory/abi/spmv/spmv-host && -f $host ]] || {
+    echo "独立 SPMV 构造缺少可执行 host 或 host.env：$directory/abi/spmv" >&2; return 1;
+  }
+  local key
+  for key in CONFIG_FQCN ACCELERATOR_HOST_KIND ACCELERATOR_HOST_ABI PROTOCOL_ABI; do
+    [[ $(value "$host" "$key") == $(value "$profile" "$key") ]] || {
+      echo "独立 SPMV host 元数据与 profile 不匹配：$directory（$key）" >&2; return 1;
+    }
+  done
+  if [[ $(value "$profile" ACCELERATOR_HOST_ABI) == spmv-csr5-verilator-v3 &&
+    $(value "$host" SPMV_X_MODE) != $(value "$profile" SPMV_X_MODE) ]]; then
+    echo "独立 SPMV host 的 X 模式与 profile 不匹配：$directory" >&2; return 1
+  fi
+  local key expected actual
+  for key in SPMV_PERFORMANCE_HTML SPMV_PIPELINE_HTML SPMV_PERFORMANCE_FIRST_SUBCONFIG; do
+    expected=$(value "$profile" "$key")
+    [[ -z $expected ]] && continue
+    actual=$(value "$host" "$key")
+    [[ $actual == "$expected" ]] || {
+      echo "独立 SPMV host 的性能报告设置与 profile 不匹配：$directory（$key）" >&2; return 1;
+    }
+  done
+}
+
 verify_host_assets() {
   local directory=$1 profile construction scope host_abi host core_clock expected_core_clock
   profile="$directory/profile.env"
@@ -1207,6 +1355,11 @@ verify_host_assets() {
   }
   scope=$(value "$profile" SCOPE)
   host_abi=$(value "$profile" HOST_ABI)
+  if [[ $scope == spmv ]]; then
+    verify_spmv_model_assets "$directory" || return 1
+    verify_spmv_host_assets "$directory" || return 1
+    return 0
+  fi
   if [[ $host_abi != none ]]; then
     [[ -x $directory/abi/nemu/nemu-exec ]] || {
       echo "构造缺少可执行 NEMU host：$directory/abi/nemu/nemu-exec" >&2; return 1;
@@ -1257,7 +1410,7 @@ verify_fpga_artifacts() {
   "$artifact_tool" verify --directory "$artifacts" --board "$board" --platform "${platform:-none}" \
     --config-fqcn "$(value "$profile" CONFIG_FQCN)" \
     --host-abi "$(value "$profile" HOST_ABI)" \
-    --protocol-abi "$(value "$profile" PROTOCOL_ABI)"
+    --protocol-abi "$(value "$profile" PROTOCOL_ABI)" || return 1
   [[ $(value "$manifest" FPGA_TYPE) == "$(value "$profile" FPGA_TYPE)" ]] || {
     echo "FPGA manifest 类型与 Config 不匹配" >&2; return 1;
   }
@@ -1326,24 +1479,30 @@ write_host_only_construction() {
 }
 
 write_formal_construction() {
-  local directory=$1 profile=$2 construction_id=$3 version_index=$4 created=$5 rebuild_count=$6 source_rev=$7 now temporary
+  local directory=$1 profile=$2 construction_id=$3 version_index=$4 created=$5 rebuild_count=$6 source_rev=$7 now temporary capability scope
   now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  capability=$(value "$profile" CAPABILITY)
+  scope=$(value "$profile" SCOPE)
   temporary=$(mktemp "$directory/.construction.XXXXXX")
   {
     echo 'CONSTRUCTION_FORMAT=1'
     echo "CONSTRUCTION_ID=$construction_id"
     echo "VERSION_INDEX=$version_index"
     echo "CONFIG_FQCN=$(value "$profile" CONFIG_FQCN)"
-    echo "CAPABILITY=$(value "$profile" CAPABILITY)"
+    echo "CAPABILITY=$capability"
     echo "HOST_ABI=$(value "$profile" HOST_ABI)"
-    echo "NEMU_PRESET=$(value "$profile" NEMU_PRESET)"
-    echo "NEMU_BACKEND=$(value "$profile" NEMU_BACKEND)"
     echo "PROTOCOL_ABI=$(value "$profile" PROTOCOL_ABI)"
     echo "TARGET=$(value "$profile" TARGET)"
-    echo "XLEN=$(value "$profile" XLEN)"
-    echo "ISA_STRING=$(value "$profile" ISA_STRING)"
-    echo "FPGA_BOARD=$(value "$profile" FPGA_BOARD)"
-    echo "FPGA_PLATFORM=$(value "$profile" FPGA_PLATFORM)"
+    if [[ $scope != spmv && $capability != synthesize-only && $capability != bitstream-only ]]; then
+      echo "NEMU_PRESET=$(value "$profile" NEMU_PRESET)"
+      echo "NEMU_BACKEND=$(value "$profile" NEMU_BACKEND)"
+      echo "XLEN=$(value "$profile" XLEN)"
+      echo "ISA_STRING=$(value "$profile" ISA_STRING)"
+    fi
+    if [[ $scope == fpga ]]; then
+      echo "FPGA_BOARD=$(value "$profile" FPGA_BOARD)"
+      echo "FPGA_PLATFORM=$(value "$profile" FPGA_PLATFORM)"
+    fi
     echo "CREATED_AT=$created"
     echo "UPDATED_AT=$now"
     echo "REBUILD_COUNT=$rebuild_count"
@@ -1930,8 +2089,171 @@ do_host_build_directory() {
   return 1
 }
 
+do_spmv_simulation_host_build_directory() {
+  local directory=$1 profile="$1/profile.env" fqcn host_root host_stage log_stage failed_dir
+  local previous_host previous_logs host_lock_fd key
+  [[ -f $directory/construction.env && -f $(version_tag_file "$directory") &&
+    $(version_state_from_tag "$directory") == complete ]] || {
+    echo "独立 SPMV build-host 需要已保存的完整构造：$directory" >&2; return 1;
+  }
+  verify_spmv_model_assets "$directory" || return 1
+  [[ $(value "$profile" ACCELERATOR_HOST_ABI) == spmv-csr5-verilator-v3 ]] || {
+    echo "保存构造仍是冻结的 SPMV v1/v2 ABI，不能用当前 host 刷新；请先执行 make -C $npc_root rebuild version=$(version_index_from_tag "$directory")" >&2
+    return 1
+  }
+  fqcn=$(value "$profile" CONFIG_FQCN)
+  host_root="$workspace/accelerator-sim/spmv"
+  [[ -f $host_root/Makefile && -f $host_root/host.cpp ]] || {
+    echo "SPMV accelerator host 目录不完整：$host_root" >&2; return 1;
+  }
+
+  exec {host_lock_fd}>"$directory/abi/.host-refresh.lock"
+  flock "$host_lock_fd"
+  host_stage="$directory/abi/.spmv-host-staging.$$"
+  log_stage="$directory/logs/.host-staging-$$"
+  previous_host="$directory/abi/.spmv-host-previous.$$"
+  previous_logs="$directory/logs/.host-previous-$$"
+  rm -rf "$host_stage" "$log_stage" "$previous_host" "$previous_logs"
+  mkdir -p "$host_stage" "$log_stage"
+  if ! "$phase_log_tool" run "$log_stage" accelerator-host 1 1 -- \
+    make --no-print-directory -C "$host_root" build-simulation-host \
+      CONSTRUCTION_DIR="$directory" BUILD_DIR="$host_stage"; then
+    failed_dir="$root/.failed/$fqcn/host"
+    rm -rf "$failed_dir"
+    mkdir -p "$failed_dir"
+    cp -a "$log_stage/." "$failed_dir/" 2>/dev/null || true
+    rm -rf "$host_stage" "$log_stage"
+    echo "独立 SPMV host 重新生成失败：$fqcn" >&2
+    failure_excerpt "$failed_dir/all.log"
+    echo "完整日志目录：$failed_dir" >&2
+    return 1
+  fi
+  [[ -x $host_stage/spmv-host && $(value "$host_stage/host.env" HOST_FORMAT) == 1 ]] || {
+    rm -rf "$host_stage" "$log_stage"
+    echo "新 SPMV host 资产不完整：$fqcn" >&2
+    return 1
+  }
+  for key in CONFIG_FQCN ACCELERATOR_HOST_KIND ACCELERATOR_HOST_ABI PROTOCOL_ABI; do
+    [[ $(value "$host_stage/host.env" "$key") == $(value "$profile" "$key") ]] || {
+      rm -rf "$host_stage" "$log_stage"
+      echo "新 SPMV host 元数据与保存 profile 不匹配：$fqcn（$key）" >&2
+      return 1
+    }
+  done
+  [[ $(value "$host_stage/host.env" SPMV_X_MODE) == $(value "$profile" SPMV_X_MODE) ]] || {
+    rm -rf "$host_stage" "$log_stage"
+    echo "新 SPMV host 的 X 模式与保存 profile 不匹配：$fqcn" >&2
+    return 1
+  }
+
+  local report_key
+  for report_key in SPMV_PERFORMANCE_HTML SPMV_PIPELINE_HTML SPMV_PERFORMANCE_FIRST_SUBCONFIG; do
+    [[ $(value "$host_stage/host.env" "$report_key") == $(value "$profile" "$report_key") ]] || {
+      rm -rf "$host_stage" "$log_stage"
+      echo "新 SPMV host 的性能报告设置与 profile 不匹配：$fqcn（$report_key）" >&2
+      return 1
+    }
+  done
+
+  [[ ! -e $directory/abi/spmv ]] || mv "$directory/abi/spmv" "$previous_host"
+  if ! mv "$host_stage" "$directory/abi/spmv"; then
+    [[ ! -e $previous_host ]] || mv "$previous_host" "$directory/abi/spmv"
+    rm -rf "$log_stage"
+    echo "发布独立 SPMV host 失败，已恢复原构造：$fqcn" >&2
+    return 1
+  fi
+  [[ ! -d $directory/logs/host ]] || mv "$directory/logs/host" "$previous_logs"
+  if ! mv "$log_stage" "$directory/logs/host"; then
+    rm -rf "$directory/abi/spmv"
+    [[ ! -e $previous_host ]] || mv "$previous_host" "$directory/abi/spmv"
+    [[ ! -e $previous_logs ]] || mv "$previous_logs" "$directory/logs/host"
+    echo "发布独立 SPMV host 日志失败，已恢复原构造：$fqcn" >&2
+    return 1
+  fi
+  rm -rf "$previous_host" "$previous_logs"
+  verify_host_assets "$directory"
+  echo "已更新独立 SPMV host：$fqcn"
+}
+
+do_accelerator_host_build() {
+  local profile=$1 directory=${2:-} kind abi host_root
+  kind=$(value "$profile" ACCELERATOR_HOST_KIND)
+  abi=$(value "$profile" ACCELERATOR_HOST_ABI)
+  case "$kind:$abi" in
+    spmv:spmv-golden-v1)
+      host_root="$workspace/accelerator-sim/spmv"
+      [[ -f $host_root/Makefile ]] || {
+        echo "SPMV accelerator host 目录不完整：$host_root" >&2
+        return 1
+      }
+      make --no-print-directory -C "$host_root" build-host
+      ;;
+    spmv:spmv-csr5-verilator-v3)
+      [[ -n $directory ]] || {
+        echo "独立 SPMV host 必须绑定已保存的 Verilator 构造" >&2
+        return 1
+      }
+      do_spmv_simulation_host_build_directory "$directory"
+      ;;
+    :)
+      echo "$(value "$profile" CONFIG_FQCN) 未挂载 accelerator host" >&2
+      return 2
+      ;;
+    *)
+      echo "$(value "$profile" CONFIG_FQCN) 的 accelerator host 合同不受支持：$kind/$abi" >&2
+      return 2
+      ;;
+  esac
+}
+
+do_accelerator_run() {
+  local request=$1 mainargs=$2 version_index directory fqcn resolved profile kind abi host_root host report_dir
+  if [[ $request == version=* ]]; then
+    version_index=${request#version=}
+    ensure_version_indexes_for_read
+    directory=$(construction_by_version "$version_index")
+    fqcn=$(value "$directory/profile.env" CONFIG_FQCN)
+    profile="$directory/profile.env"
+  else
+    resolved=$(resolve_catalog "$request")
+    IFS='|' read -r fqcn _ <<< "$resolved"
+    profile=$(profile_for "$fqcn")
+    if [[ $(value "$profile" ACCELERATOR_HOST_ABI) == spmv-csr5-verilator-v3 ]]; then
+      directory="$root/$fqcn"
+      if [[ ! -d $directory ]] || ! version_directory_is_valid "$directory"; then
+        do_build "$fqcn" 0
+      fi
+      profile="$directory/profile.env"
+    fi
+  fi
+  kind=$(value "$profile" ACCELERATOR_HOST_KIND)
+  abi=$(value "$profile" ACCELERATOR_HOST_ABI)
+  case "$kind:$abi" in
+    spmv:spmv-golden-v1)
+      do_accelerator_host_build "$profile"
+      host_root="$workspace/accelerator-sim/spmv"
+      make --no-print-directory -C "$host_root" run "mainargs=$mainargs"
+      ;;
+    spmv:spmv-csr5-verilator-v1|spmv:spmv-csr5-verilator-v2|spmv:spmv-csr5-verilator-v3)
+      verify_assets "$directory"
+      host="$directory/abi/spmv/spmv-host"
+      if [[ $(value "$profile" SPMV_PERFORMANCE_HTML) == 1 ]]; then
+        report_dir="$directory/runtime/spmv/$(date +%s%N)-$$"
+        mkdir -p "$report_dir"
+        SPMV_REPORT_DIR="$report_dir" "$host" "$mainargs"
+      else
+        "$host" "$mainargs"
+      fi
+      ;;
+    *)
+      echo "$fqcn 不能通过 accelerator run 入口执行" >&2
+      return 2
+      ;;
+  esac
+}
+
 do_host_build() {
-  local request=$1 resolved fqcn directory cache_directory cache_stage cache_profile cache_lock_fd recovery_lock_fd version_index scope
+  local request=$1 resolved fqcn directory cache_directory cache_stage cache_profile cache_lock_fd recovery_lock_fd version_index scope target selected_profile current_profile
   if [[ $request == version=* ]]; then
     version_index=${request#version=}
     # host-build 的职责正是修复 host 元数据失配，因此不能先用旧 host 的状态拒绝；
@@ -1939,10 +2261,45 @@ do_host_build() {
     ensure_version_indexes_for_read
     directory=$(final_construction_by_version "$version_index")
     fqcn=$(value "$directory/profile.env" CONFIG_FQCN)
+    target=$(value "$directory/profile.env" TARGET)
   else
     resolved=$(resolve_catalog "$request")
-    IFS='|' read -r fqcn _ <<< "$resolved"
+    IFS='|' read -r fqcn scope _ target <<< "$resolved"
     directory="$root/$fqcn"
+  fi
+  if [[ $target == SPMV ]]; then
+    if [[ -f $directory/profile.env ]]; then selected_profile="$directory/profile.env"
+    else selected_profile=$(profile_for "$fqcn" 1)
+    fi
+    case "$(value "$selected_profile" ACCELERATOR_HOST_ABI)" in
+      spmv-csr5-verilator-v1|spmv-csr5-verilator-v2)
+        echo "保存构造仍是冻结的 SPMV v1/v2 ABI，不能只刷新 host；请先执行 make -C $npc_root rebuild version=$(version_index_from_tag "$directory")" >&2
+        return 1
+        ;;
+      spmv-csr5-verilator-v3)
+        [[ -d $directory ]] || {
+          echo "独立 SPMV build-host 找不到保存构造：$fqcn；请先执行 make -C $npc_root build config=$(config_short_name "$fqcn")" >&2
+          return 1
+        }
+        do_accelerator_host_build "$selected_profile" "$directory"
+        return
+        ;;
+      spmv-golden-v1)
+        current_profile=$(profile_for "$fqcn" 1)
+        do_accelerator_host_build "$current_profile"
+        return
+        ;;
+    esac
+  fi
+  if [[ -f $directory/profile.env ]]; then
+    selected_profile="$directory/profile.env"
+  else
+    selected_profile=$(profile_for "$fqcn" 1)
+  fi
+  if [[ $(value "$selected_profile" CAPABILITY) == synthesize-only ||
+        $(value "$selected_profile" CAPABILITY) == bitstream-only ]]; then
+    echo "$fqcn 是无 host 的 FPGA 资产 Config，不能执行 host-build" >&2
+    return 2
   fi
   if [[ -d $directory ]]; then
     if failed_fpga_host_recovery_candidate "$directory"; then
@@ -2007,7 +2364,7 @@ do_host_build() {
 }
 
 do_host_build_all() {
-  local jobs=$1 directory env capability active=0 status=0
+  local jobs=$1 directory env capability accelerator_abi active=0 status=0
   [[ $jobs == -1 || $jobs =~ ^[1-9][0-9]*$ ]] || {
     echo "jobs 只能为正整数或 -1" >&2; return 2;
   }
@@ -2016,8 +2373,15 @@ do_host_build_all() {
     directory=$(dirname "$env")
     capability=$(value "$directory/profile.env" CAPABILITY)
     [[ $capability == run || $capability == batch ]] || continue
+    accelerator_abi=$(value "$directory/profile.env" ACCELERATOR_HOST_ABI)
     (
-      do_host_build_directory "$directory"
+      case "$accelerator_abi" in
+        spmv-csr5-verilator-v3) do_spmv_simulation_host_build_directory "$directory" ;;
+        spmv-csr5-verilator-v1|spmv-csr5-verilator-v2)
+          echo "跳过冻结的 SPMV v1/v2 构造 host 刷新：$(value "$directory/profile.env" CONFIG_FQCN)" >&2
+          ;;
+        *) do_host_build_directory "$directory" ;;
+      esac
     ) &
     active=$((active + 1))
     if [[ $jobs != -1 && $active -ge $jobs ]]; then
@@ -2084,7 +2448,7 @@ do_resolve() {
     "$(value "$profile" CONFIG_FQCN)" "$(value "$profile" CONFIG_SHORT_NAME)" \
     "$(value "$profile" CAPABILITY)" "$(value "$profile" TARGET)" "$(value "$profile" XLEN)" \
     "$(value "$profile" SCOPE)" "$(value "$profile" FPGA_BOARD)" "$saved_version" "$directory" "$profile" |
-    awk -F'|' 'BEGIN { OFS="|" } { if ($7 == "") $7="-"; print }'
+    awk -F'|' 'BEGIN { OFS="|" } { if ($5 == "") $5="-"; if ($7 == "") $7="-"; print }'
 }
 
 case "$command" in
@@ -2103,7 +2467,8 @@ case "$command" in
       # The Scala profile generator may probe inherited file descriptors.  Keep
       # the catalog reader private to this shell so every terminal is listed.
       profile=$( (exec 8<&-; profile_for "$fqcn") )
-      printf '%-34s %-8s %-5s %s\n' "$short" "$scope" "$(value "$profile" XLEN)" "$board"
+      xlen=$(value "$profile" XLEN)
+      printf '%-34s %-8s %-5s %s\n' "$short" "$scope" "${xlen:--}" "$board"
     done
     exec 8<&-
     ;;
@@ -2146,6 +2511,11 @@ case "$command" in
       do_host_build "$request"
     fi
     ;;
+  accelerator-run)
+    [[ $# == 2 ]] || usage
+    [[ -n $1 ]] || { echo 'run 必须提供 config=<Config> 或 version=<版本序号>' >&2; exit 2; }
+    do_accelerator_run "$1" "$2"
+    ;;
   ensure)
     [[ $# == 3 ]] || usage
     request=$1 allow_build=$2 host_rebuild=$3
@@ -2153,6 +2523,11 @@ case "$command" in
     profile=$(profile_for "$request")
     fqcn=$(value "$profile" CONFIG_FQCN)
     scope=$(value "$profile" SCOPE)
+    if [[ $(value "$profile" CAPABILITY) == synthesize-only ||
+          $(value "$profile" CAPABILITY) == bitstream-only ]]; then
+      echo "$fqcn 是无 host 的 FPGA 资产 Config，不能执行 run 或 host 准备" >&2
+      exit 2
+    fi
     directory="$root/$fqcn"
     if [[ ! -d $directory ]]; then
       compatible=$(compatible_directory "$fqcn")

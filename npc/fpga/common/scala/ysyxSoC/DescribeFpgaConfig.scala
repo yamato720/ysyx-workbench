@@ -9,7 +9,12 @@ import _root_.npc.fpga.FpgaConfigParameters
 object DescribeFpgaConfig extends App {
   require(args.length == 1, "usage: ysyx.DescribeFpgaConfig <profile.env>")
   val (entry, construction) = CdeConfigResolver.resolve("", Set("fpga"))
-  val metadata: HostConstruction = construction
+  require(entry.target == "NPC" || entry.target == "SOC",
+    s"${entry.className} 不是 CPU FPGA 终端")
+  val metadata: HostConstruction = construction match {
+    case host: HostConstruction => host
+    case _ => throw new IllegalArgumentException(s"${entry.className} 未挂载 FPGA 运行宿主")
+  }
   implicit val parameters: Parameters = construction
   val platform = FpgaConfigParameters.platform
   val performanceMonitor = FpgaConfigParameters.performanceMonitor

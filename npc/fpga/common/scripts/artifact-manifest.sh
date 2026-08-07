@@ -228,9 +228,21 @@ verify_manifest() {
       [[ $asset_names == 'npc.bit npc.xsa system-user.dtsi npc-zcu102.env' ]] ||
         fail 'ZCU102 package has an unexpected required asset set'
       ;;
-    u55c)
-      [[ $platform != none && $asset_names == "npc-$platform.xclbin" ]] ||
-        fail 'U55C package must contain one platform-qualified xclbin'
+	  u55c)
+	      case "$(env_value "$manifest" PROTOCOL_ABI)" in
+	      spmv-resource-probe-v1)
+	        [[ $platform != none && $asset_names == 'spmv-resource-probe.xo spmv-resource-probe.dcp spmv-utilization.rpt spmv-utilization-hierarchical.rpt spmv-timing-summary.rpt' ]] ||
+	          fail 'SPMV probe package must contain XO, DCP, utilization, hierarchical utilization, and timing reports'
+	        ;;
+	      spmv-resource-probe-v2)
+	        [[ $platform != none && $asset_names == 'spmv-resource-probe.xclbin spmv-resource-probe.xo spmv-resource-probe.dcp spmv-utilization.rpt spmv-utilization-hierarchical.rpt spmv-timing-summary.rpt' ]] ||
+	          fail 'SPMV bitstream package must contain xclbin, XO, DCP, utilization, hierarchical utilization, and timing reports'
+	        ;;
+	      *)
+	        [[ $platform != none && $asset_names == "npc-$platform.xclbin" ]] ||
+	          fail 'U55C package must contain one platform-qualified xclbin'
+	        ;;
+	      esac
       ;;
     *) fail "unsupported board: $board" ;;
   esac

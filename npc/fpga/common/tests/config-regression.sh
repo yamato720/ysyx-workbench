@@ -105,6 +105,8 @@ for name in U55cNpcFpgaConfig U55cCacheNpcFpgaConfig U55cRv64NpcFpgaConfig \
   U55cRv64Npc100MHzPerformanceMonitorFpgaConfig U55cRv64Npc125MHzPerformanceMonitorFpgaConfig \
   U55cRv64Npc150MHzPerformanceMonitorFpgaConfig U55cRv64Npc200MHzPerformanceMonitorFpgaConfig \
   U55cRv64Npc250MHzPerformanceMonitorFpgaConfig U55cRv64Npc300MHzPerformanceMonitorFpgaConfig \
+  U55cSpmv32PcFp32X8192UramResourceProbeConfig \
+  U55cSpmv32PcFp64X8192UramBitstreamConfig \
   U55cYsyxSocFpgaConfig U55cCacheYsyxSocFpgaConfig \
   Zcu102NpcFpgaConfig Zcu102YsyxSocFpgaConfig; do
   grep -Eq "^${name}[[:space:]]" "$catalog" || fail "自动目录缺少 $name"
@@ -115,6 +117,50 @@ done
   fail 'FQCN 解析结果错误'
 if $resolver "$catalog" U55cYsyxSocFpgaConfig npc >/dev/null 2>&1; then fail '作用域错误未被拒绝'; fi
 if $resolver "$catalog" UnknownConfig fpga >/dev/null 2>&1; then fail '未知 Config 未被拒绝'; fi
+
+spmv_config=U55cSpmv32PcFp32X8192UramResourceProbeConfig
+spmv_resolution=$($manager resolve "$npc_root" "$spmv_config" '')
+spmv_profile=${spmv_resolution##*|}
+[[ $(printf '%s\n' "$spmv_resolution" | cut -d'|' -f4-7) == 'SPMV|-|fpga|u55c' ]] ||
+  fail 'SPMV resolve 没有保留 XLEN 占位符或 U55C 目标字段'
+for expected in \
+  CAPABILITY=synthesize-only HOST_ABI=none ACCELERATOR_HOST_KIND=spmv \
+  ACCELERATOR_HOST_ABI=spmv-golden-v1 PROTOCOL_ABI=spmv-resource-probe-v1 \
+  SPMV_HBM_PC_COUNT=32 SPMV_AXI_DATA_WIDTH=512 SPMV_ELEMENT_WIDTH=32 \
+  SPMV_X_ELEMENTS_PER_PC=8192 SPMV_X_STORAGE=uram SPMV_BURST_BEATS=64 \
+  SPMV_BASE_ALIGNMENT_BYTES=4096 SPMV_OUTSTANDING_BURSTS_PER_PC=1; do
+  grep -qx "$expected" "$spmv_profile" || fail "SPMV profile 缺少 $expected"
+done
+if grep -Eq '^(XLEN|ISA_STRING|NEMU_.*|PIPELINE|ICACHE_.*|DCACHE_.*|L2CACHE_.*)=' "$spmv_profile"; then
+  fail 'SPMV profile 意外包含 CPU 或 NEMU 字段'
+fi
+make --no-print-directory -s -C "$npc_root" spmv-check INTERNAL_CONSTRUCTION=1 \
+  config="$spmv_config" CONSTRUCTION_PROFILE="$spmv_profile"
+grep -Eq '^  CTRL[[:space:]]+0x000 read-write$' "$npc_root/fpga/u55c/tcl/spmv/package-ooc-xo.tcl" &&
+  grep -q 'ipx::add_register -quiet \$register_name' "$npc_root/fpga/u55c/tcl/spmv/package-ooc-xo.tcl" ||
+  fail 'SPMV XO 的 IP-XACT 元数据缺少 ap_ctrl_hs CTRL 寄存器'
+
+spmv_bitstream_config=U55cSpmv32PcFp64X8192UramBitstreamConfig
+spmv_bitstream_resolution=$($manager resolve "$npc_root" "$spmv_bitstream_config" '')
+spmv_bitstream_profile=${spmv_bitstream_resolution##*|}
+[[ $(printf '%s\n' "$spmv_bitstream_resolution" | cut -d'|' -f4-7) == 'SPMV|-|fpga|u55c' ]] ||
+  fail 'SPMV bitstream resolve 没有保留 XLEN 占位符或 U55C 目标字段'
+for expected in \
+  CAPABILITY=bitstream-only HOST_ABI=none ACCELERATOR_HOST_KIND=spmv \
+  ACCELERATOR_HOST_ABI=spmv-golden-v1 PROTOCOL_ABI=spmv-resource-probe-v2 \
+  SPMV_HBM_PC_COUNT=32 SPMV_AXI_DATA_WIDTH=512 SPMV_ELEMENT_WIDTH=64 \
+  SPMV_X_ELEMENTS_PER_PC=8192 SPMV_X_STORAGE=uram SPMV_URAM_BANKS_PER_PC=4 \
+  SPMV_URAM_BANK_DEPTH=2048 SPMV_PARALLEL_READ_LANES=8 SPMV_PARALLEL_WRITE_LANES=8 \
+  SPMV_X_READ_ELEMENTS_PER_CYCLE=8 SPMV_X_WRITE_ELEMENTS_PER_CYCLE=8 \
+  SPMV_BURST_BEATS=64 SPMV_BASE_ALIGNMENT_BYTES=4096 SPMV_OUTSTANDING_BURSTS_PER_PC=1 \
+  SPMV_CLOCK_MHZ=225 FPGA_VITIS_TARGET=hw; do
+  grep -qx "$expected" "$spmv_bitstream_profile" || fail "SPMV bitstream profile 缺少 $expected"
+done
+if grep -Eq '^(XLEN|ISA_STRING|NEMU_.*|PIPELINE|ICACHE_.*|DCACHE_.*|L2CACHE_.*)=' "$spmv_bitstream_profile"; then
+  fail 'SPMV bitstream profile 意外包含 CPU 或 NEMU 字段'
+fi
+make --no-print-directory -s -C "$npc_root" spmv-check INTERNAL_CONSTRUCTION=1 \
+  config="$spmv_bitstream_config" CONSTRUCTION_PROFILE="$spmv_bitstream_profile"
 
 check_terminal() {
   local config=$1 expected_board=$2 expected_target=$3 expected_xlen=$4 expected_clock=$5 expected_xrt_mode expected_protocol_abi expected_capability=run expected_sdb=1 expected_trace=0 expected_integer_execute_stages=1 expected_serial_execute_stages=1 expected_register_initial_fetch_request=0 expected_separate_serial_integer_alu=0 expected_serial_execute_result_forwarding=1 expected_divider_non_blocking=0 expected_memory_data_width expected_cache_line_bytes resolved profile output

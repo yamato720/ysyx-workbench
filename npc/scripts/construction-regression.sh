@@ -403,6 +403,146 @@ fi
 [[ -s $u55c/fpga/ip-generated/logs/npc_int_multiplier_ip.log && -s $u55c/fpga/ip-generated/logs/npc_int_divider_ip.log ]] ||
   fail 'FPGA dry-run 未生成逐 IP 日志'
 
+# SPMV 的正式 FPGA 构造不含 NEMU/XRT host：FP32 版本只综合，FP64 版本还执行 link；
+# 独立软件 golden host 由同一 Config 分发，但不会写入正式构造目录。
+spmv_fqcn=npc.fpga.u55c.U55cSpmv32PcFp32X8192UramResourceProbeConfig
+spmv="$CONSTRUCTION_TEST_ROOT/$spmv_fqcn"
+"$manager" build "$npc_root" U55cSpmv32PcFp32X8192UramResourceProbeConfig
+spmv_version=$(value "$spmv/version.tag" VERSION_INDEX)
+[[ $spmv_version == 4 && $(value "$spmv/version.tag" STATE) == complete &&
+  $(value "$spmv/version.info" ARCH) == SpMV && $(value "$spmv/version.info" RUNNING_TIME) == SYNTH &&
+  $(value "$spmv/construction.env" CAPABILITY) == synthesize-only &&
+  $(value "$spmv/.complete" FPGA_ARTIFACT) == fpga/artifacts/spmv-resource-probe.xo ]] ||
+  fail 'SPMV 构造没有发布正确的只综合版本元数据'
+for asset in spmv-resource-probe.xo spmv-resource-probe.dcp spmv-utilization.rpt \
+  spmv-utilization-hierarchical.rpt spmv-timing-summary.rpt; do
+  [[ -s $spmv/fpga/artifacts/$asset ]] || fail "SPMV dry-run 缺少资产 $asset"
+done
+[[ -s $spmv/fpga/artifacts/artifact-manifest.env && -s $spmv/fpga/artifacts/SHA256SUMS &&
+  -s $spmv/logs/build/elaborate.log && -s $spmv/logs/build/ooc-synth.log &&
+  ! -e $spmv/logs/build/ip.log && ! -e $spmv/logs/build/link.log && ! -e $spmv/logs/build/nemu-host.log &&
+  ! -e $spmv/abi && ! -e $spmv/fpga/ip-generated && ! -e $spmv/fpga/link ]] ||
+  fail 'SPMV dry-run 没有严格保持两个综合阶段'
+if find "$spmv" -type f -name '*.xclbin' -print -quit | grep -q .; then
+  fail 'SPMV 只综合构造意外生成 xclbin'
+fi
+spmv_host_build="$work/spmv-host-build"
+spmv_fixture="$work/accelerator-data"
+mkdir -p "$spmv_fixture/generated/cgsolver/tiny"
+printf '0\n1\n' > "$spmv_fixture/generated/cgsolver/tiny/row_ptr.txt"
+printf '0\n' > "$spmv_fixture/generated/cgsolver/tiny/col_idx.txt"
+printf '2\n' > "$spmv_fixture/generated/cgsolver/tiny/values.txt"
+printf '3\n' > "$spmv_fixture/generated/cgsolver/tiny/b.txt"
+BUILD_DIR="$spmv_host_build" make --no-print-directory -s -C "$npc_root/.." build-host \
+  config=U55cSpmv32PcFp32X8192UramResourceProbeConfig
+[[ -x $spmv_host_build/spmv-host && ! -e $spmv/abi ]] ||
+  fail 'SPMV build-host 没有生成独立 host，或污染了正式 FPGA 构造'
+spmv_host_output=$(BUILD_DIR="$spmv_host_build" ACCELERATOR_DATA_ROOT="$spmv_fixture" \
+  make --no-print-directory -s -C "$npc_root/.." run \
+    config=U55cSpmv32PcFp32X8192UramResourceProbeConfig mainargs=tiny)
+[[ $spmv_host_output == *'[spmv-host] scale=tiny'* &&
+  -s $spmv_host_build/golden/tiny.txt &&
+  $(cat "$spmv_host_build/golden/tiny.txt") == 6 ]] ||
+  fail 'SPMV 全局 run 没有执行软件 golden host'
+spmv_host_list=$(BUILD_DIR="$spmv_host_build" ACCELERATOR_DATA_ROOT="$spmv_fixture" \
+  make --no-print-directory -s -C "$npc_root/.." run \
+    config=U55cSpmv32PcFp32X8192UramResourceProbeConfig)
+[[ $spmv_host_list == *'Available scales'* && $spmv_host_list == *'tiny'* ]] ||
+  fail 'SPMV 全局 run 缺少 mainargs 时没有列出可用规模'
+printf 'tampered\n' > "$spmv/fpga/artifacts/spmv-utilization.rpt"
+if "$manager" resolve "$npc_root" '' "$spmv_version" >/dev/null 2>&1; then
+  fail 'SPMV 报告校验和损坏后仍可按版本解析'
+fi
+"$manager" rebuild "$npc_root" U55cSpmv32PcFp32X8192UramResourceProbeConfig
+spmv_bitstream_fqcn=npc.fpga.u55c.U55cSpmv32PcFp64X8192UramBitstreamConfig
+spmv_bitstream="$CONSTRUCTION_TEST_ROOT/$spmv_bitstream_fqcn"
+"$manager" build "$npc_root" U55cSpmv32PcFp64X8192UramBitstreamConfig
+spmv_bitstream_version=$(value "$spmv_bitstream/version.tag" VERSION_INDEX)
+[[ $spmv_bitstream_version == 5 && $(value "$spmv_bitstream/version.tag" STATE) == complete &&
+  $(value "$spmv_bitstream/version.info" ARCH) == SpMV &&
+  $(value "$spmv_bitstream/version.info" RUNNING_TIME) == SYNTH &&
+  $(value "$spmv_bitstream/construction.env" CAPABILITY) == bitstream-only &&
+  $(value "$spmv_bitstream/.complete" FPGA_ARTIFACT) == fpga/artifacts/spmv-resource-probe.xclbin ]] ||
+  fail 'SPMV bitstream 构造没有发布正确的无 host 版本元数据'
+for asset in spmv-resource-probe.xclbin spmv-resource-probe.xo spmv-resource-probe.dcp \
+  spmv-utilization.rpt spmv-utilization-hierarchical.rpt spmv-timing-summary.rpt; do
+  [[ -s $spmv_bitstream/fpga/artifacts/$asset ]] || fail "SPMV bitstream dry-run 缺少资产 $asset"
+done
+[[ -s $spmv_bitstream/fpga/artifacts/artifact-manifest.env &&
+  -s $spmv_bitstream/fpga/artifacts/SHA256SUMS &&
+  -s $spmv_bitstream/logs/build/elaborate.log &&
+  -s $spmv_bitstream/logs/build/ooc-synth.log &&
+  -s $spmv_bitstream/logs/build/link.log && ! -e $spmv_bitstream/abi &&
+  ! -e $spmv_bitstream/fpga/ip-generated ]] ||
+  fail 'SPMV bitstream dry-run 没有保留正确的三阶段资产边界'
+BUILD_DIR="$spmv_host_build" make --no-print-directory -s -C "$npc_root/.." build-host \
+  config=U55cSpmv32PcFp64X8192UramBitstreamConfig
+[[ -x $spmv_host_build/spmv-host && ! -e $spmv_bitstream/abi ]] ||
+  fail 'SPMV bitstream Config 没有复用独立软件 host，或污染了正式 FPGA 构造'
+"$manager" delete "$npc_root" "$spmv_bitstream_version" >/dev/null
+[[ ! -d $spmv_bitstream ]] || fail 'SPMV bitstream 回归构造没有从隔离版本库清理'
+"$manager" delete "$npc_root" "$spmv_version" >/dev/null
+[[ ! -d $spmv ]] || fail 'SPMV 回归构造没有从隔离版本库清理'
+
+# 本地 CSR5 仿真是独立正式构造：四阶段产物全部保存在 abi 下，不能生成 NEMU、
+# CPU 或 FPGA 元数据；run 必须直接执行冻结的 Verilator host。
+spmv_sim_fqcn=npc.spmv.SpmvOneHbmCsr5MulSimulationConfig
+spmv_sim="$CONSTRUCTION_TEST_ROOT/$spmv_sim_fqcn"
+"$manager" build "$npc_root" SpmvOneHbmCsr5MulSimulationConfig
+spmv_sim_version=$(value "$spmv_sim/version.tag" VERSION_INDEX)
+[[ $(value "$spmv_sim/version.tag" STATE) == complete &&
+  $(value "$spmv_sim/version.info" ARCH) == SpMV &&
+  $(value "$spmv_sim/version.info" RUNNING_TIME) == SIM &&
+  $(value "$spmv_sim/construction.env" CAPABILITY) == run &&
+  $(value "$spmv_sim/.complete" FPGA_ARTIFACT) == - ]] ||
+  fail '独立 SPMV 仿真没有发布正确的版本元数据'
+for asset in \
+  abi/rtl/SpmvOneHbmCsr5MulSimulationTop.sv \
+  abi/verilator/VSpmvOneHbmCsr5MulSimulationTop.h \
+  abi/verilator/libVSpmvOneHbmCsr5MulSimulationTop.a \
+  abi/verilator/libverilated.a abi/softfloat/softfloat.a \
+  abi/spmv/spmv-host abi/spmv/host.env; do
+  [[ -s $spmv_sim/$asset ]] || fail "独立 SPMV dry-run 缺少资产 $asset"
+done
+[[ -x $spmv_sim/abi/spmv/spmv-host && ! -e $spmv_sim/abi/nemu &&
+  -s $spmv_sim/logs/build/elaborate.log && -s $spmv_sim/logs/build/softfloat.log &&
+  -s $spmv_sim/logs/build/verilator.log && -s $spmv_sim/logs/build/accelerator-host.log ]] ||
+  fail '独立 SPMV dry-run 的阶段或 host 边界不正确'
+[[ $(value "$spmv_sim/profile.env" ACCELERATOR_HOST_ABI) == spmv-csr5-verilator-v3 &&
+  $(value "$spmv_sim/profile.env" PROTOCOL_ABI) == spmv-one-hbm-csr5-mul-v3 &&
+  $(value "$spmv_sim/profile.env" SPMV_X_MODE) == paired &&
+  $(value "$spmv_sim/profile.env" SPMV_X_REPLICAS) == 0 &&
+  $(value "$spmv_sim/profile.env" SPMV_OUTSTANDING_BURSTS) == 2 &&
+  $(value "$spmv_sim/profile.env" SPMV_INPUT_FIFO_DEPTH) == 128 ]] ||
+  fail '独立 SPMV paired v3 profile 不完整'
+if rg -q '^(XLEN|ISA_STRING|NEMU_|PIPELINE|ICACHE|DCACHE|L2CACHE|FPGA_)' \
+    "$spmv_sim/profile.env" "$spmv_sim/construction.env"; then
+  fail '独立 SPMV 构造泄漏了 CPU、NEMU 或 FPGA 字段'
+fi
+spmv_sim_output=$("$manager" accelerator-run "$npc_root" "version=$spmv_sim_version" n512)
+[[ $spmv_sim_output == *'SPMV construction dry-run host'* ]] ||
+  fail '独立 SPMV run 没有执行冻结构造中的 host'
+"$manager" delete "$npc_root" "$spmv_sim_version" >/dev/null
+[[ ! -d $spmv_sim ]] || fail '独立 SPMV 回归构造没有从隔离版本库清理'
+
+spmv_cached_fqcn=npc.spmv.SpmvOneHbmCsr5MulCachedXSimulationConfig
+spmv_cached="$CONSTRUCTION_TEST_ROOT/$spmv_cached_fqcn"
+"$manager" build "$npc_root" SpmvOneHbmCsr5MulCachedXSimulationConfig
+spmv_cached_version=$(value "$spmv_cached/version.tag" VERSION_INDEX)
+[[ $(value "$spmv_cached/profile.env" ACCELERATOR_HOST_ABI) == spmv-csr5-verilator-v3 &&
+  $(value "$spmv_cached/profile.env" PROTOCOL_ABI) == spmv-one-hbm-csr5-mul-v3 &&
+  $(value "$spmv_cached/profile.env" SPMV_X_MODE) == cached &&
+  $(value "$spmv_cached/profile.env" SPMV_X_REPLICAS) == 4 &&
+  $(value "$spmv_cached/profile.env" SPMV_OUTSTANDING_BURSTS) == 2 &&
+  $(value "$spmv_cached/profile.env" SPMV_INPUT_FIFO_DEPTH) == 128 &&
+  -x $spmv_cached/abi/spmv/spmv-host && ! -e $spmv_cached/abi/nemu ]] ||
+  fail '独立 SPMV cached v3 dry-run 资产或 profile 不完整'
+spmv_cached_output=$("$manager" accelerator-run "$npc_root" "version=$spmv_cached_version" n512)
+[[ $spmv_cached_output == *'SPMV construction dry-run host'* ]] ||
+  fail '独立 SPMV cached run 没有执行冻结构造中的 host'
+"$manager" delete "$npc_root" "$spmv_cached_version" >/dev/null
+[[ ! -d $spmv_cached ]] || fail '独立 SPMV cached 回归构造没有从隔离版本库清理'
+
 # Vitis may have already completed implementation and xclbin packaging when a
 # post-link validator fails.  Resume must validate that saved xclbin, produce
 # its manifest, and build the host without rerunning the hardware phases.

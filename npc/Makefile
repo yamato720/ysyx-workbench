@@ -11,6 +11,7 @@ CHISEL_SOURCE_MANIFEST := $(CHISEL_OUT)/ip-sources.manifest
 CHISEL_DPI_SOURCE_MANIFEST := $(CHISEL_DPI_OUT)/ip-sources.manifest
 include ./config-catalog.mk
 include ./fpga/common/config-select.mk
+include ./fpga/common/spmv-build.mk
 
 # 统一构造器把 Scala 生成的 profile 作为底层 recipe 的唯一结构输入。变量名
 # `NPC_*` 仅保留为本 Makefile 内部适配层，不再接受公开命令行覆盖。
@@ -55,6 +56,9 @@ endif
 LEGACY_PUBLIC_GOALS := cpu run-cpu all check sim create gtk chisel chisel-dpi chisel-module \
 	chisel-cpu chisel-cpu-lib run-chisel run-difftest soc-sim-verilog soc-nemu-lib \
 	fpga-build fpga-check fpga-config fpga-plan fpga-elaborate fpga-ip fpga-synth fpga-link
+
+LEGACY_PUBLIC_GOALS += spmv-check spmv-elaborate spmv-ooc-synth spmv-link
+LEGACY_PUBLIC_GOALS += spmv-sim-elaborate spmv-sim-verilator
 LEGACY_STRUCTURE_VARS := S D VERSION fpga soc fpga-build SIM_FPGA_CONFIG FPGA_SCALA_PROPS \
 	NPC_XLEN NPC_TARGET NPC_PIPELINE NPC_INTERLOCK NPC_ID_FWD NPC_EX_FWD NPC_F \
 	NPC_ARITH_BACKEND NPC_ARITH_OUTPUT_FIFO NPC_MUL_CYCLES NPC_MUL_II NPC_DIV_CYCLES NPC_DIV_II \
@@ -108,12 +112,12 @@ NPC_FCVT_II ?= 1
 NPC_FCMP_CYCLES ?= 3
 NPC_FCMP_II ?= 1
 
-# Non-FPGA Make targets select a registered complete NPC or SoC Config.  FPGA
-# targets resolve their terminal Config earlier in fpga/common/config-select.mk.
+# 非 FPGA 内部目标从目录选择完整 NPC、SoC 或独立 SPMV Config；FPGA 目标更早在
+# fpga/common/config-select.mk 中解析其终端 Config。
 ifeq ($(INTERNAL_CONSTRUCTION),1)
 ifneq ($(FPGA_BUILD_REQUESTED),1)
 ifneq ($(strip $(config)),)
-  NPC_CONFIG_SCOPE := $(if $(filter SOC,$(NPC_TARGET)),soc,npc)
+  NPC_CONFIG_SCOPE := $(if $(filter SPMV,$(NPC_TARGET)),spmv,$(if $(filter SOC,$(NPC_TARGET)),soc,npc))
   NPC_CONFIG_RESOLVED := $(call npc_config_resolve,$(config),$(NPC_CONFIG_SCOPE))
   ifneq ($(call npc_config_error,$(NPC_CONFIG_RESOLVED)),)
     $(error $(patsubst !%,%,$(call npc_config_error,$(NPC_CONFIG_RESOLVED))))
@@ -198,6 +202,39 @@ fp-dpi-test: softfloat-lib
 		./csrc/fp_dpi.cpp ./csrc/fp_dpi_test.cpp "$(SOFTFLOAT_LIB_ABS)" \
 		-o "$(obj_dir)/fp-dpi-test/fp-dpi-test"
 	@"$(obj_dir)/fp-dpi-test/fp-dpi-test"
+
+# 独立 SPMV 仿真只生成自己的顶层与 Verilator 模型，不进入 NPC/NEMU 构造。
+SPMV_SIM_OUT ?= $(CURDIR)/generated-spmv-simulation
+SPMV_SIM_MODEL_DIR ?= $(obj_dir)/spmv-simulation
+SPMV_SIM_TOP := SpmvOneHbmCsr5MulSimulationTop
+
+spmv-sim-elaborate:
+	@set -e; \
+	rm -rf "$(SPMV_SIM_OUT)"; \
+	mkdir -p "$(SPMV_SIM_OUT)"; \
+	cd "$(CURDIR)"; \
+	NPC_SCALA_CONFIG="$(CONFIG_FQCN)" SPMV_ELABORATE_OUTPUT_DIR="$(SPMV_SIM_OUT)" \
+		sbt -Dnpc.config="$(CONFIG_FQCN)" "root/runMain spmv.ElaborateSpmvOneHbmCsr5MulSimulation"; \
+	test -s "$(SPMV_SIM_OUT)/$(SPMV_SIM_TOP).sv"; \
+	test -s "$(SPMV_SIM_OUT)/SpmvHbmDpiReadSlave.sv"; \
+	test -s "$(SPMV_SIM_OUT)/SpmvF32MulDpi.sv"
+
+spmv-sim-verilator: $(if $(filter 1,$(CONSTRUCTION_PHASE_PREREQUISITES)),spmv-sim-elaborate)
+	@set -e; \
+	rm -rf "$(SPMV_SIM_MODEL_DIR)"; \
+	mkdir -p "$(SPMV_SIM_MODEL_DIR)"; \
+	cd "$(SPMV_SIM_OUT)"; \
+	verilator -Wall -Wno-fatal --quiet --quiet-stats --sv --cc --no-timing -j $(shell nproc) \
+		--top-module "$(SPMV_SIM_TOP)" \
+		-Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-CASEINCOMPLETE -Wno-WIDTH \
+		-Wno-UNOPTFLAT -Wno-LATCH -Wno-DECLFILENAME -Wno-PINCONNECTEMPTY \
+		-Wno-TIMESCALEMOD -Wno-UNDRIVEN -Wno-EOFNEWLINE -Wno-BLKSEQ \
+		-Mdir "$(SPMV_SIM_MODEL_DIR)" -f filelist.f -f firrtl_black_box_resource_files.f; \
+	$(MAKE) -s -C "$(SPMV_SIM_MODEL_DIR)" -f "V$(SPMV_SIM_TOP).mk" -j $(shell nproc); \
+	test -s "$(SPMV_SIM_MODEL_DIR)/libV$(SPMV_SIM_TOP).a"; \
+	test -s "$(SPMV_SIM_MODEL_DIR)/libverilated.a"
+
+.PHONY: spmv-sim-elaborate spmv-sim-verilator
 
 # ============== Chisel Build ==============
 
@@ -436,6 +473,10 @@ REBUILD_REQUEST := $(strip $(config))
 ifneq ($(strip $(version)),)
   REBUILD_REQUEST := version=$(strip $(version))
 endif
+ACCELERATOR_RUN_REQUEST := $(strip $(config))
+ifneq ($(strip $(version)),)
+  ACCELERATOR_RUN_REQUEST := version=$(strip $(version))
+endif
 
 ifneq ($(strip $(rebuild)),)
   $(error rebuild=1 已删除，请使用 make rebuild config=<Config> 或 make rebuild version=<N>)
@@ -479,10 +520,15 @@ host-rebuild:
 	@exit 2
 
 # 这两个名字是 host-build 的直观别名，允许脚本按 build/rebuild 对称地调用；
-# 它们仍只刷新 NEMU host，不会触发 Chisel、Vivado 或 Vitis。
+# 它们刷新 NEMU 或独立 accelerator host，不会触发 Chisel、Vivado 或 Vitis。
 build-host: host-build
 
 rebuild-host: host-build
+
+run:
+	@test -z "$(strip $(config))" || test -z "$(strip $(version))" || { echo 'run 的 config= 与 version= 不能同时使用' >&2; exit 2; }
+	@test -n "$(ACCELERATOR_RUN_REQUEST)" || { echo 'run 必须提供 config=<Accelerator Config> 或 version=<版本序号>' >&2; exit 2; }
+	@$(CONSTRUCTION_MANAGER) accelerator-run "$(CURDIR)" "$(ACCELERATOR_RUN_REQUEST)" "$(strip $(mainargs))"
 
 version:
 	@if test -n "$(strip $(D))" || test -n "$(strip $(delete))"; then \
@@ -495,7 +541,7 @@ version:
 		$(CONSTRUCTION_MANAGER) list "$(CURDIR)"; \
 	fi
 
-.PHONY: config-list build rebuild resume-post-link host-config-list host-build host-rebuild build-host rebuild-host version
+.PHONY: config-list build rebuild resume-post-link host-config-list host-build host-rebuild build-host rebuild-host run version
 
 dpi-unit-test:
 	@mkdir -p "$(obj_dir)"; \

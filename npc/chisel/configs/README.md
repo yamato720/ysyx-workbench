@@ -4,9 +4,10 @@
 Scala 检查分层并只扫描各终端领域根部的 `Configs.scala`；组合片段和 `check-only` 检查构造均不进入
 公开目录。
 
-`config=` 不提供 NEMU、DPI 或 Verilator 的可选模式。所有可发现终端都是 `run`，并绑定保存的 NEMU
-运行宿主；本地仿真的 DPI 只是该宿主连接 Verilator 的内部实现。未传 `config=` 的 AM 命令仍保持原有
-`ARCH` 驱动的普通 NEMU 路径。
+`config=` 不提供 NEMU、DPI 或 Verilator 的可选模式。NPC/SoC 终端以 `run` 或 `batch` 能力绑定保存的
+NEMU 运行宿主；本地仿真的 DPI 只是该宿主连接 Verilator 的内部实现。`synthesize-only`/`bitstream-only`
+只描述加速器 FPGA 资产阶段；SPMV 终端另挂载独立软件 golden host，仍不投影 CPU/NEMU 字段。
+未传 `config=` 的 AM 命令保持原有 `ARCH` 驱动的普通 NEMU 路径。
 
 ## 层级
 
@@ -15,6 +16,7 @@ Scala 检查分层并只扫描各终端领域根部的 `Configs.scala`；组合�
 | 公共底层 | `common/base/` | 通用 IP 数据、计算单元选择、FPGA IP attachment、工具链字段模型和不可由终端直挂的构造接口 | 始终编译，不独立生成 | `OperatorIpConfigs.scala`、`IpComputeSelectionTraits.scala`、`FpgaIpAttachmentTraits.scala`、`FpgaToolchainConfigModels.scala`、`ConstructionTraits.scala` |
 | 构造配方 | `common/core/`、`nemu/core/` | 终端直接子项集群、检查 trait、NEMU host 与 FPGA 工具链 case class；不定义硬件 ABI | 所有 Make 终端必需 | `TerminalCoreTraits.scala`、`IpTerminalCoreTraits.scala`、`CheckTraits.scala`、`NemuHostConfig.scala`、`FpgaToolchainConfig.scala` |
 | 终端 trait | `common/TerminalTraits.scala`、`common/IpTerminalTraits.scala` | 前者提供完整 NEMU/FPGA 默认配方、目录身份、scope 和 target；后者只提供 FPGA/NEMU 两种计算单元终端 | 前者为所有 Make 终端必需；后者不进入 Make 目录 | 根部直挂文件 |
+| SPMV 加速器 | `spmv/`、`../accelerators/spmv/` | 独立参数键、CPU-free profile、CSR5 仿真与资源探针 RTL | SPMV 才需要 | `base/SpmvAcceleratorConfig.scala`、`base/SpmvCsr5MulConfig.scala`、`core/SpmvConstructionProfile.scala`、`core/SpmvSimulationProfile.scala` |
 | L1 NPC | `npc/` | 仅依赖 CDE 参数库，不依赖 Rocket/板卡 | 必需 | `core/` 成品与终端 `Configs.scala` |
 | L2 SoC | `ysyx/` | 依赖 L1 与 Rocket CDE | SoC 才需要 | `core/YsyxCore.scala` 与终端 `Configs.scala` |
 | L3 FPGA | `npc/chisel/configs/fpga/common/` | 把 L1/L2 接入 FPGA CDE | FPGA 才需要 | `base/` 与公共 resolver |
@@ -28,12 +30,13 @@ Scala 检查分层并只扫描各终端领域根部的 `Configs.scala`；组合�
   不引用 `core/`，也不直接表达某个可运行目标。
 - `core/` 调用 `base/`，把 ISA、流水线、接口、内存、SoC 或板卡策略组合成名称直观、含义完整的
   成品。终端必须直接引用这些成品，不能在终端文件里重新展开底层片段。
-- 终端级文件与 `base/`、`core/` 文件夹分离，直接位于领域根部。当前六种共享 Make 终端预设 trait
+- 终端级文件与 `base/`、`core/` 文件夹分离，直接位于领域根部。当前十一种共享 Make 终端预设 trait
   统一位于 `common/TerminalTraits.scala`；`common/IpTerminalTraits.scala` 只定义非 Make 的
   `FpgaIpTerminal` 与 `NemuSimulationIpTerminal`。通用计算单元合同位于
-  `common/base/IpComputeSelectionTraits.scala`，让两种终端消费同一组时序属性。每个运行 terminal Config
-  必须显式混入对应 IP terminal；不得把 IP 作为 `ConstructionConfig`/SoC Config 的构造参数，或在
-  CDE `++` 链中重新选择后端。
+  `common/base/IpComputeSelectionTraits.scala`，让两种终端消费同一组时序属性。每个 CPU 运行 terminal
+  Config 必须显式混入对应 IP terminal；`U55cSpmvSynthesisTerminal` 与
+  `U55cSpmvBitstreamTerminal` 都不挂载 CPU 算子 terminal。
+  不得把 IP 作为 `ConstructionConfig`/SoC Config 的构造参数，或在 CDE `++` 链中重新选择后端。
 - 根部终端文件只能声明可直接挂载的终端 trait。终端直接包含的子项和子项集群放入 `core/`，每个子项
   的基础依赖、数据模型和原子片段放入 `base/`；终端不能直接拼接多个 base trait。
 - 领域根部的 `Configs.scala` 是唯一终端 Config 文件，只包含公共无参终端类。每个类只挂载一个 terminal 层
@@ -54,7 +57,8 @@ classpath、Make 和 construction manager 在启动前解析公开终端。该�
 
 ## 可直接选择的 Config
 
-下表所有 Config 都可以传给 `make ... config=<名称>`，能力均为 `run`。短名和 FQCN 均可用；每个类
+下表所有 Config 都可以传给 `make ... config=<名称>`，能力可以是 `run`、`batch` 或
+`synthesize-only` 或 `bitstream-only`。短名和 FQCN 均可用；每个类
 必须有公共无参构造器，并分别满足 `ConstructionConfig` 或 CDE `Config` 类型约束。
 
 | 名称 | 作用域 | 用途 |
@@ -88,6 +92,10 @@ classpath、Make 和 construction manager 在启动前解析公开终端。该�
 | `U55cRv64Hbm512L2CacheNpc150MHzPerformanceMonitorFpgaConfig` | FPGA（`TARGET=NPC`） | 上述宽 HBM L1 基线加统一 256 KiB/8-way/64-byte write-back L2；需独立 rebuild |
 | `U55cYsyxSocFpgaConfig` | FPGA（`TARGET=SOC`） | U55C ysyxSoC 上板运行 |
 | `U55cCacheYsyxSocFpgaConfig` | FPGA（`TARGET=SOC`） | U55C ysyxSoC 教学缓存版本 |
+| `U55cSpmv32PcFp32X8192UramResourceProbeConfig` | FPGA（`TARGET=SPMV`） | 32 路 HBM、每路 8192 项 FP32 UltraRAM X cache 的只综合资源探针 |
+| `U55cSpmv32PcFp64X8192UramBitstreamConfig` | FPGA（`TARGET=SPMV`） | 32 路 HBM、每路四 bank 双端口 FP64 X cache 的 bitstream 压力探针 |
+| `SpmvOneHbmCsr5MulSimulationConfig` | SPMV | 单 PC 公平共享 A/X 的 paired-X CSR5 v3 Verilator 仿真，无宽 X cache |
+| `SpmvOneHbmCsr5MulCachedXSimulationConfig` | SPMV | 同一 PC/延迟/FIFO 规则下，四份宽 X cache 的 CSR5 v3 对照仿真 |
 | `Zcu102NpcFpgaConfig` | FPGA（`TARGET=NPC`） | ZCU102 裸 NPC 上板运行 |
 | `Zcu102YsyxSocFpgaConfig` | FPGA（`TARGET=SOC`） | ZCU102 ysyxSoC 上板运行 |
 
@@ -109,6 +117,7 @@ classpath、Make 和 construction manager 在启动前解析公开终端。该�
 | `YsyxSocConfig` | L2 | ysyxSoC 的默认组合图 |
 | `YsyxElaborateConfig` | L2 | 供板卡或直接 Scala elaboration 叠加的 ysyxSoC 图 |
 | `PipelineCheckConfig`、`FloatingCheckConfig`、`MulDivCheckConfig` | L1 | 仅供 Scala/RTL 检查的 `check-only` 构造 |
+| `SpmvAcceleratorConfig`、`WithSpmvAcceleratorConfig` | SPMV | 可支持 32/64-bit element 的参数模型与 CDE 绑定片段，供 FP32/FP64 终端使用 |
 
 运行终端同样继承 CDE `Config`，因此类型上也能放入更高层 `++` 链；但这不是默认复用方式。它会完整
 带入自己的 AXI、主存和算子 ABI，只有这些接口与目标系统兼容时才可覆盖上层默认核。常规 SoC/FPGA
@@ -162,10 +171,10 @@ DPI 时序参数与前者一致。由于 VCD 要求 Verilator 在生成时带 `-
 `make -C npc build config=HbmJitterCacheVcdSimulationConfig`，已有构造更新时使用 `rebuild`，不能以
 `host-build` 把无 VCD 的 Verilator 库升级为可追踪版本。运行目录中的 VCD 由 SDB `start`/`stop` 分段产生。
 
-`HostConstruction`、`NemuSimulationConstruction`、`FpgaConstruction` 和 `MakeTerminal` 是
+`HostConstruction`、`AcceleratorHostConstruction`、`NemuSimulationConstruction`、`FpgaConstruction` 和 `MakeTerminal` 是
 `common/base/ConstructionTraits.scala` 中的底层接口，只供 terminal 层组合，终端不能直接混入。
 `LocalNpcTerminal`、`LocalSocTerminal`、`U55cNpcTerminal`、`U55cSocTerminal`、`Zcu102NpcTerminal`、
-`Zcu102SocTerminal` 是 `common/TerminalTraits.scala` 中仅有的六种 Make 终端预设；每个终端只挂载其中一个。
+`Zcu102SocTerminal` 是 `common/TerminalTraits.scala` 中十一种 Make 终端预设之一；每个终端只挂载其中一个。
 工具链按 `device`、`flow`、`reports`、`runtime` 分组。显式自定义终端
 可通过嵌套 `copy(...)` 局部重载 NEMU/FPGA 配方；重复使用或需要进入普通示例的配方应提升为 `core/`
 中的具名完整 preset，必要时再增加根部 terminal trait。`CheckOnlyConstruction` 是检查构造直接挂载的
@@ -187,6 +196,12 @@ IP provider、M 路由和时序合同。L4 板卡 Config 选择 attachment，NPC
 make -C npc config-list
 make -C npc build config=SimulationConfig
 make -C npc build config=U55cYsyxSocFpgaConfig
+make -C npc build config=U55cSpmv32PcFp32X8192UramResourceProbeConfig
+make -C npc build config=U55cSpmv32PcFp64X8192UramBitstreamConfig
+make -C npc build-host config=U55cSpmv32PcFp64X8192UramBitstreamConfig
+make -C npc run config=U55cSpmv32PcFp64X8192UramBitstreamConfig mainargs=n512
+make -C npc build config=SpmvOneHbmCsr5MulSimulationConfig
+make -C npc build config=SpmvOneHbmCsr5MulCachedXSimulationConfig
 make -C npc host-build config=U55cRv64Npc300MHzFpgaConfig
 make -C npc host-build version=1
 make -C npc rebuild config=U55cRv64Npc300MHzFpgaConfig
@@ -204,6 +219,36 @@ HBM[1]、8 MiB、200000 条 32-byte 记录、2048-record URAM FIFO、256-bit tra
 校验这一接口频率。profile 另以 `FPGA_CLOCK_MHZ` 冻结核心目标频率，低于 300 MHz 时 wrapper 使用 MMCM 和
 逐通道异步 FIFO，确保核心不超过该值。每个频点必须完整 `rebuild`，host-only 构造不能为外部 v11 xclbin 提供硬件记录。
 Make/Tcl 只做映射与一致性检查，不能覆盖这些值。
+SPMV profile 以 `HOST_ABI=none` 表示正式 FPGA 资产不含 NEMU/XRT runtime host，并独立记录
+`ACCELERATOR_HOST_KIND=spmv`、`ACCELERATOR_HOST_ABI=spmv-golden-v1`、32 路 HBM AXI 几何、X cache 容量/存储风格、burst/outstanding
+和并行读写带宽，不生成 XLEN、ISA、流水线或 CPU cache 层级字段。FP32 终端使用
+`PROTOCOL_ABI=spmv-resource-probe-v1`，只有 elaboration 与 OOC synthesis 两阶段；FP64 终端使用
+`spmv-resource-probe-v2`，增加 Vitis link 并发布 xclbin。两者都不构造 NEMU/XRT host；`build-host`
+分发到 `accelerator-sim/spmv`，全局 `run mainargs=<规模>` 读取 `accelerator-sim/data` 并只执行
+CPU golden，不要求 RTL/xclbin。共享数据由 `make -C accelerator-sim/data` 下载或生成，
+`ACCELERATOR_DATA_ROOT` 可覆盖默认目录。
+
+本地 `SpmvOneHbmCsr5MulSimulationConfig` 与 `SpmvOneHbmCsr5MulCachedXSimulationConfig` 使用独立
+`scope=spmv` 和
+`LocalSpmvSimulationTerminal`，不继承 NPC/SoC/NEMU 构造。其 profile 固定
+`ACCELERATOR_HOST_ABI=spmv-csr5-verilator-v3`、`PROTOCOL_ABI=spmv-one-hbm-csr5-mul-v3`，
+记录单 HBM、512-bit beat、CSR5 `OMEGA=8/SIGMA=16`、全局两个 outstanding credit、128-beat A/X
+FIFO 与八个 latency=4/II=1 FP32 multiplier。paired 构造不实例化 X cache；cached 构造静态实例化
+四份宽 cache。不生成 XLEN、ISA、NEMU、CPU cache 或 FPGA 字段。正式构造严格执行
+`elaborate -> softfloat -> verilator -> accelerator-host`，并只发布到 `abi/{rtl,verilator,softfloat,spmv}`。
+
+`SpmvOneHbmCsr5MulPerformanceMonitorSimulationConfig` 是 paired-X 的性能监测对照端点，使用
+`LocalSpmvPerformanceMonitorTerminal`。它的 host trait 开启 `SPMV_PERFORMANCE_HTML=1` 与
+`SPMV_PIPELINE_HTML=1`；性能监测 Config 的首个子配置固定为
+`SpmvMulAddPipelineHtmlConfig`，因此一次 `run` 会在该构造的 `runtime/spmv/<run>/` 下写出
+`performance.html` 和 `pipeline.html`。流水线页沿用 NPC 的逐条时间线交互，但只覆盖 RTL：按 ProductBeat
+显示 HBM、CSR5 decode、paired-X join、8 路 FP32 DPI SoftFloat 乘法的 S0-S3（四级、II=1）、ProductBeat
+FIFO 和 ProductBeat 握手；HBM beat 使用 DPI 周期观测，四级 MUL 使用冻结 latency 推导。host 侧 FP32
+行归约不进入阶段数组、RTL 周期或 `WAIT` 计算；当前 RTL 没有浮点 reduction/FMA IP，报告不会把 host
+归约描述成硬件 FMA。MUL 前无法由当前 host ABI 观测的间隔标为 `UNOBSERVED / 未观测`，不宣称是硬件
+stall。普通 paired/cached Config 的 host 报告开关保持关闭，也不会生成空 HTML。
+`build-host` 必须复用保存的 v3 Verilator/SoftFloat 资产，只替换 `abi/spmv`；旧 v1/v2 构造需要完整
+`rebuild version=<编号>`，不能只刷新当前 host。
 缓存 profile 还会写入 `CACHE_ACCESS_MODE` 与四项 `CACHE_*_QUEUE_DEPTH`。缓存 FPGA 终端会把相同的
 `ICACHE_*`、`DCACHE_*`、`L2CACHE_*`、`INSTRUCTION_BUFFER_*` 和 `NPC_ZIFENCEI`
 写入 elaboration manifest。任何几何、策略或存储风格变化都必须完整 `rebuild`；普通无缓存终端的字段
