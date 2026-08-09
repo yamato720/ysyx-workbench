@@ -9,7 +9,14 @@ private[npc] object ConstructionValidation {
     config
   }
 
+  def fpgaToolchain(fpga: FpgaToolchainConfig): FpgaToolchainConfig = {
+    require(Set("u55c", "zcu102").contains(fpga.device.board),
+      s"不支持的 FPGA 工具链板卡：${fpga.device.board}")
+    fpga
+  }
+
   def fpga(nemu: NemuHostConfig, fpga: FpgaToolchainConfig): FpgaToolchainConfig = {
+    fpgaToolchain(fpga)
     val expectedBackend = fpga.device.board match {
       case "u55c" => NemuBackend.U55c
       case "zcu102" => NemuBackend.Zcu102
@@ -22,14 +29,109 @@ private[npc] object ConstructionValidation {
   }
 }
 
+/** profile 与反射解析器共享的最小构造接口。 */
+trait Construction {
+  protected def configuredCapability: String
+
+  final def capability: String = configuredCapability
+}
+
 /** profile 与反射解析器共享的最小运行构造接口。 */
-trait HostConstruction {
+trait HostConstruction extends Construction {
   protected def configuredNemu: NemuHostConfig
   protected def configuredCapability: String = "run"
 
-  final def capability: String = configuredCapability
   def nemuConfig: NemuHostConfig = configuredNemu
   final def nemuPreset: String = NemuHostConfig.presetName(nemuConfig)
+}
+
+/** 与 FPGA 资产能力正交的软件加速器宿主合同。 */
+final case class AcceleratorHostConfig(kind: String, abi: String) {
+  require(kind.matches("[a-z][a-z0-9-]*"), s"非法 accelerator host 类型：$kind")
+  require(abi.matches("[a-z][a-z0-9-]*-v[1-9][0-9]*"), s"非法 accelerator host ABI：$abi")
+}
+
+object AcceleratorHostConfig {
+  val SpmvGolden: AcceleratorHostConfig = AcceleratorHostConfig(
+    kind = "spmv",
+    abi = "spmv-golden-v1"
+  )
+
+  val SpmvCsr5Verilator: AcceleratorHostConfig = AcceleratorHostConfig(
+    kind = "spmv",
+    abi = "spmv-csr5-verilator-v3"
+  )
+}
+
+/** SPMV 性能页的可组合子配置；启用监测时首个子配置固定为乘加流水线页。 */
+sealed trait SpmvPerformanceSubConfig {
+  def name: String
+}
+
+case object SpmvMulAddPipelineHtmlConfig extends SpmvPerformanceSubConfig {
+  override val name: String = "mul-add-pipeline-html"
+}
+
+/** 独立 SPMV host 的报告开关，不改变 CSR5 RTL 或 Verilator ABI。 */
+final case class SpmvPerformanceMonitorConfig(
+  enabled: Boolean = false,
+  subConfigs: Vector[SpmvPerformanceSubConfig] = Vector.empty
+) {
+  require(!enabled || subConfigs.nonEmpty,
+    "SPMV 性能监测启用时至少需要一个 report 子配置")
+  require(!enabled || subConfigs.head == SpmvMulAddPipelineHtmlConfig,
+    "SPMV 性能监测的第一个子配置必须是乘加流水线 HTML")
+  require(!subConfigs.contains(SpmvMulAddPipelineHtmlConfig) || enabled,
+    "SPMV 乘加流水线 HTML 子配置必须随性能监测一起启用")
+
+  val performanceHtml: Boolean = enabled
+  val pipelineHtml: Boolean = subConfigs.contains(SpmvMulAddPipelineHtmlConfig)
+  val firstSubConfig: String = subConfigs.headOption.map(_.name).getOrElse("none")
+}
+
+object SpmvPerformanceMonitorConfig {
+  val Disabled: SpmvPerformanceMonitorConfig = SpmvPerformanceMonitorConfig()
+
+  /** 乘法、四级乘积流水线和 host 侧行归约的首个性能报告。 */
+  val MulAddPipelineHtml: SpmvPerformanceMonitorConfig = SpmvPerformanceMonitorConfig(
+    enabled = true,
+    subConfigs = Vector(SpmvMulAddPipelineHtmlConfig)
+  )
+}
+
+/** 与 NEMU host 配方同名风格的 SPMV host preset 入口。 */
+object SpmvHostConfig {
+  val Disabled: SpmvPerformanceMonitorConfig = SpmvPerformanceMonitorConfig.Disabled
+  val MulAddPipelineHtml: SpmvPerformanceMonitorConfig =
+    SpmvPerformanceMonitorConfig.MulAddPipelineHtml
+}
+
+/** SPMV host trait 的报告开关；默认不写 HTML，终端可通过受保护配置启用。 */
+trait SpmvHostConstruction extends Construction {
+  protected def configuredSpmvPerformanceMonitor: SpmvPerformanceMonitorConfig =
+    SpmvPerformanceMonitorConfig.Disabled
+
+  protected def configuredSpmvHost: SpmvPerformanceMonitorConfig =
+    configuredSpmvPerformanceMonitor
+
+  final def spmvPerformanceMonitorConfig: SpmvPerformanceMonitorConfig =
+    configuredSpmvHost
+
+  final def performanceHtml: Boolean = spmvPerformanceMonitorConfig.performanceHtml
+
+  final def pipelineHtml: Boolean = spmvPerformanceMonitorConfig.pipelineHtml
+}
+
+/** 终端可在综合或 bitstream 能力之外独立挂载纯软件 accelerator host。 */
+trait AcceleratorHostConstruction extends Construction {
+  protected def configuredAcceleratorHost: AcceleratorHostConfig
+
+  final def acceleratorHostConfig: AcceleratorHostConfig = configuredAcceleratorHost
+}
+
+/** 独立于 NEMU 的本地 SPMV Verilator 构造。 */
+trait SpmvSimulationConstruction extends AcceleratorHostConstruction with SpmvHostConstruction {
+  final override protected def configuredCapability: String = "run"
 }
 
 /** 与运行宿主平行的计算 IP 挂载合同。
@@ -63,22 +165,35 @@ trait NemuSimulationConstruction extends HostConstruction {
   final override def nemuConfig: NemuHostConfig = ConstructionValidation.localNemu(configuredNemu)
 }
 
-/** FPGA 底层行为；完整终端预设必须同时提供 NEMU 与 FPGA 工具链配方。 */
-trait FpgaConstruction extends HostConstruction {
+/** 不依赖运行宿主的 FPGA 工具链合同。 */
+trait FpgaToolchainConstruction {
   protected def configuredFpga: FpgaToolchainConfig
 
-  final override def nemuConfig: NemuHostConfig = {
-    fpgaToolchainConfig
-    configuredNemu
-  }
+  final def fpgaToolchainConfig: FpgaToolchainConfig =
+    ConstructionValidation.fpgaToolchain(configuredFpga)
+}
 
-  final def fpgaToolchainConfig: FpgaToolchainConfig = {
-    ConstructionValidation.fpga(configuredNemu, configuredFpga)
+/** FPGA 运行构造；完整终端预设必须同时提供 NEMU 与 FPGA 工具链配方。 */
+trait FpgaConstruction extends HostConstruction with FpgaToolchainConstruction {
+
+  final override def nemuConfig: NemuHostConfig = {
+    ConstructionValidation.fpga(configuredNemu, fpgaToolchainConfig)
+    configuredNemu
   }
 }
 
-/** 自动目录用于识别可由 Make 直接选择、且必定经 NEMU 运行的完整终端。 */
-trait MakeTerminal { self: HostConstruction =>
+/** 只生成 FPGA 综合资产、不挂载运行宿主的构造。 */
+trait FpgaSynthesisConstruction extends Construction with FpgaToolchainConstruction {
+  final override protected def configuredCapability: String = "synthesize-only"
+}
+
+/** 只生成 FPGA bitstream/XCLBIN，不挂载 NEMU 或 XRT host 的构造。 */
+trait FpgaBitstreamConstruction extends Construction with FpgaToolchainConstruction {
+  final override protected def configuredCapability: String = "bitstream-only"
+}
+
+/** 自动目录用于识别可由 Make 直接选择的完整终端。 */
+trait MakeTerminal { self: Construction =>
   def constructionScope: String
   def constructionTarget: String
 }

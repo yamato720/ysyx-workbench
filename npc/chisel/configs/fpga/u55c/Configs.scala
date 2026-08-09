@@ -8,10 +8,12 @@ import _root_.npc.{
   WideHbmL2CacheRv64PipelineDualForwardingTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecuteFpgaConfig,
   FpgaConfig,
   FpgaIpTerminal,
+  SpmvAcceleratorConfig,
+  WithSpmvAcceleratorConfig,
   Rv64PipelineDualForwardingFpgaConfig,
   Rv64PipelineDualForwardingTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecuteFpgaConfig
 }
-import _root_.npc.{U55cNpcPerformanceMonitorTerminal, U55cNpcTerminal, U55cSocTerminal}
+import _root_.npc.{U55cNpcPerformanceMonitorTerminal, U55cNpcTerminal, U55cSocTerminal, U55cSpmvBitstreamTerminal, U55cSpmvSynthesisTerminal}
 import _root_.ysyx.YsyxElaborateConfig
 
 /** U55C 的所有可运行终端构造。
@@ -163,3 +165,15 @@ class U55cCacheYsyxSocFpgaConfig extends CDEConfig(
     new CacheFpgaConfig ++
     new YsyxElaborateConfig
 ) with U55cSocTerminal with FpgaIpTerminal
+
+/** 32 路 HBM、每路 8192 项 FP32 UltraRAM X cache 的只综合资源探针。 */
+class U55cSpmv32PcFp32X8192UramResourceProbeConfig extends CDEConfig(
+  new WithSpmvAcceleratorConfig(SpmvAcceleratorConfig.U55c32PcFp32X8192Uram) ++
+    new U55cSpmvBoardConfig
+) with U55cSpmvSynthesisTerminal
+
+/** 32 路 HBM、每路 8192 项 FP64 X cache 的 bitstream 资源探针。 */
+class U55cSpmv32PcFp64X8192UramBitstreamConfig extends CDEConfig(
+  new WithSpmvAcceleratorConfig(SpmvAcceleratorConfig.U55c32PcFp64X8192Uram8Lane) ++
+    new U55cSpmvBoardConfig(coreClockMHz = 225)
+) with U55cSpmvBitstreamTerminal

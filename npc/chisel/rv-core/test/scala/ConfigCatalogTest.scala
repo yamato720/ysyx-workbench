@@ -55,6 +55,10 @@ class ConfigCatalogTest extends AnyFlatSpec {
     assert(names.contains("U55cRv64Npc300MHzPerformanceMonitorFpgaConfig"))
     assert(names.contains("U55cRv64CacheNpc300MHzPerformanceMonitorFpgaConfig"))
     assert(names.contains("U55cRv64CacheNpc150MHzPerformanceMonitorFpgaConfig"))
+    assert(names.contains("U55cSpmv32PcFp32X8192UramResourceProbeConfig"))
+    assert(names.contains("SpmvOneHbmCsr5MulSimulationConfig"))
+    assert(names.contains("SpmvOneHbmCsr5MulCachedXSimulationConfig"))
+    assert(names.contains("SpmvOneHbmCsr5MulPerformanceMonitorSimulationConfig"))
     assert(names.contains("U55cCacheNpcFpgaConfig"))
     assert(names.contains("U55cRv64CacheNpc300MHzFpgaConfig"))
     assert(names.contains("U55cCacheYsyxSocFpgaConfig"))
@@ -68,6 +72,18 @@ class ConfigCatalogTest extends AnyFlatSpec {
     assert(!names.contains("YsyxElaborateConfig"))
     assert(!names.contains("PipelineCheckConfig"))
     assert(generated.exists(_.shortName == "PipelineSimulationConfig"))
+    assert(generated.exists(entry =>
+      entry.shortName == "U55cSpmv32PcFp32X8192UramResourceProbeConfig" &&
+        entry.scope == "fpga" && entry.board.contains("u55c") && entry.target == "SPMV"))
+    assert(generated.exists(entry =>
+      entry.shortName == "SpmvOneHbmCsr5MulSimulationConfig" && entry.scope == "spmv" &&
+        entry.board.isEmpty && entry.target == "SPMV"))
+    assert(generated.exists(entry =>
+      entry.shortName == "SpmvOneHbmCsr5MulCachedXSimulationConfig" && entry.scope == "spmv" &&
+        entry.board.isEmpty && entry.target == "SPMV"))
+    assert(generated.exists(entry =>
+      entry.shortName == "SpmvOneHbmCsr5MulPerformanceMonitorSimulationConfig" &&
+        entry.scope == "spmv" && entry.board.isEmpty && entry.target == "SPMV"))
   }
 
   it should "keep directly mountable terminal traits in their own layer" in {

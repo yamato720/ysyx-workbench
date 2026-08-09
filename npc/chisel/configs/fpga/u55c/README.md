@@ -6,7 +6,7 @@
 | 文件 | 职责 | 是否可被更高层复用或覆盖 |
 | --- | --- | --- |
 | `core/U55cBoardConfig.scala` | 板卡标识、核心/平台时钟与 U55C Xilinx IP 合同 | 是；`U55cBoardConfig`、`U55c300MHzBoardConfig` 与 `U55cPerformanceMonitorBoardConfig` 是可叠加的 L4 板卡策略 |
-| `Configs.scala` | U55C 裸 NPC、RV64IM 裸 NPC、性能监测频点与 ysyxSoC 的所有终端构造 | 是；根部只放终端 |
+| `Configs.scala` | U55C 裸 NPC、RV64IM 裸 NPC、性能监测频点、SPMV 资源探针与 ysyxSoC 的所有终端构造 | 是；根部只放终端 |
 
 `U55cNpcFpgaConfig` 直接组合 `U55cBoardConfig ++ FpgaConfig`。
 `U55cYsyxSocFpgaConfig` 以 `U55cBoardConfig ++ FpgaConfig ++ YsyxElaborateConfig` 覆盖通用 SoC
@@ -24,9 +24,11 @@
 | U55C RV64IM 300 MHz 时序实验终端 | `new U55cRv64Npc300MHzFpgaConfig` | `Configs.scala` | 是；F/D 禁用 |
 | U55C RV64IM 性能监测终端 | `new U55cRv64Npc{100,125,150,200,250,300}MHzPerformanceMonitorFpgaConfig` | `Configs.scala` | 是；仅 `run-bat`，v13 HBM trace ABI，SDB 硬件关闭 |
 | U55C RV64 缓存性能监测终端 | `new U55cRv64CacheNpc{150,300}MHzPerformanceMonitorFpgaConfig` | `Configs.scala` | 是；仅 `run-bat`，教学 I$/D$，v13 trace 加 mailbox cache 状态 |
+| U55C SPMV FP32 资源探针 | `new U55cSpmv32PcFp32X8192UramResourceProbeConfig` | `Configs.scala` | 是；`synthesize-only` 资产，另挂载软件 golden host |
+| U55C SPMV FP64/8-lane bitstream 探针 | `new U55cSpmv32PcFp64X8192UramBitstreamConfig` | `Configs.scala` | 是；`bitstream-only` 资产，另挂载软件 golden host |
 | U55C SoC 终端 | `new U55cYsyxSocFpgaConfig` | `Configs.scala` | 是 |
 | U55C 板卡标识 | `new WithFpgaBoardConfig(FpgaBoard.U55c)` | L3 `common/base/FpgaConfigFragments.scala` | U55C 目标必需 |
-| U55C 时钟 | `new U55cBoardConfig(coreClockMHz = ...)` | `core/U55cBoardConfig.scala` | U55C 目标必需；核心允许 100/125/150/200/250/300 MHz，platform HBM data kernel 固定为 300 MHz |
+| U55C 时钟 | `new U55cBoardConfig(coreClockMHz = ...)` | `core/U55cBoardConfig.scala` | U55C 目标必需；核心允许 100/125/150/200/225/250/300 MHz，platform HBM data kernel 固定为 300 MHz |
 | U55C 地址与时钟 | `new WithFpgaPlatformConfig(FpgaPlatformSettings(...))` | `core/U55cBoardConfig.scala` | U55C 目标必需 |
 | U55C 整数 IP | `U55cXilinxIpAttachment(...)` | `core/U55cBoardConfig.scala` | U55C 目标必需；同一 attachment 同时挂接 NPC 与 SoC |
 | U55C 器件与实现策略 | `FpgaToolchainConfig.U55cBase` | 根部 U55C terminal 预设 | U55C 目标必需；不进入 CDE |

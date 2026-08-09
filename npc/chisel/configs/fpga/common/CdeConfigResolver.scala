@@ -8,7 +8,7 @@ object CdeConfigResolver {
   def resolve(
     defaultShortName: String,
     allowedScopes: Set[String]
-  ): (ConfigCatalog.Entry, CDEConfig with HostConstruction with MakeTerminal) = {
+  ): (ConfigCatalog.Entry, CDEConfig with Construction with MakeTerminal) = {
     val requested = ConfigCatalog.selectedName(defaultShortName)
     val entry = ConfigCatalog.resolve(requested, allowedScopes)
     val instance = try {
@@ -18,30 +18,46 @@ object CdeConfigResolver {
         throw new IllegalArgumentException(s"Cannot construct CDE configuration ${entry.className}: ${error.getMessage}", error)
     }
     instance match {
-      case config: CDEConfig with MakeTerminal with HostConstruction =>
+      case config: CDEConfig with MakeTerminal with Construction =>
         require(config.constructionScope == entry.scope && config.constructionTarget == entry.target,
           s"CDE configuration ${entry.className} terminal trait conflicts with catalog metadata")
         entry.scope match {
-          case "soc" => require(config.isInstanceOf[LocalSocTerminal] &&
+          case "soc" => require(config.isInstanceOf[HostConstruction] &&
+            config.isInstanceOf[LocalSocTerminal] &&
             config.isInstanceOf[NemuSimulationIpTerminal],
             s"SoC configuration ${entry.className} must directly mount LocalSocTerminal and NemuSimulationIpTerminal")
+          case "spmv" => require((config.isInstanceOf[LocalSpmvSimulationTerminal] ||
+            config.isInstanceOf[LocalSpmvPerformanceMonitorTerminal]) &&
+            config.isInstanceOf[SpmvSimulationConstruction] &&
+            config.isInstanceOf[AcceleratorHostConstruction] &&
+            !config.isInstanceOf[HostConstruction] && !config.isInstanceOf[IpConstruction],
+            s"SPMV configuration ${entry.className} must directly mount LocalSpmvSimulationTerminal")
           case "fpga" =>
             val matchesPreset = (entry.board, entry.target) match {
               case (Some("u55c"), "NPC") => config.isInstanceOf[U55cNpcTerminal] ||
                 config.isInstanceOf[U55cNpcPerformanceMonitorTerminal]
               case (Some("u55c"), "SOC") => config.isInstanceOf[U55cSocTerminal]
+              case (Some("u55c"), "SPMV") =>
+                config.isInstanceOf[U55cSpmvSynthesisTerminal] ||
+                  config.isInstanceOf[U55cSpmvBitstreamTerminal]
               case (Some("zcu102"), "NPC") => config.isInstanceOf[Zcu102NpcTerminal]
               case (Some("zcu102"), "SOC") => config.isInstanceOf[Zcu102SocTerminal]
               case _ => false
             }
-            require(config.isInstanceOf[FpgaConstruction] && matchesPreset &&
-              config.isInstanceOf[FpgaIpTerminal],
-              s"FPGA configuration ${entry.className} must mount its matching board/target terminal preset and FpgaIpTerminal")
+            val validConstruction = entry.target match {
+              case "SPMV" => (config.isInstanceOf[FpgaSynthesisConstruction] ||
+                config.isInstanceOf[FpgaBitstreamConstruction]) &&
+                config.isInstanceOf[AcceleratorHostConstruction] &&
+                !config.isInstanceOf[HostConstruction] && !config.isInstanceOf[IpConstruction]
+              case _ => config.isInstanceOf[FpgaConstruction] && config.isInstanceOf[FpgaIpTerminal]
+            }
+            require(validConstruction && matchesPreset,
+              s"FPGA configuration ${entry.className} must mount the construction terminal required by target ${entry.target}")
           case scope => throw new IllegalArgumentException(s"Unsupported CDE terminal scope $scope")
         }
         entry -> config
       case _ => throw new IllegalArgumentException(
-        s"CDE configuration ${entry.className} must be a NEMU-running CDE Config terminal"
+        s"CDE configuration ${entry.className} must be a complete CDE Config terminal"
       )
     }
   }

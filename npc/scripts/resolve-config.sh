@@ -34,6 +34,6 @@ esac
 [[ $class_name =~ ^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)+$ ]] || {
   echo "!invalid class name $class_name"; exit 2;
 }
-[[ $target == NPC || $target == SOC ]] || { echo "!invalid target $target"; exit 2; }
+[[ $target == NPC || $target == SOC || $target == SPMV ]] || { echo "!invalid target $target"; exit 2; }
 [[ $board == - || $board == zcu102 || $board == u55c ]] || { echo "!invalid board $board"; exit 2; }
 printf '%s|%s|%s|%s\n' "$class_name" "$scope" "$board" "$target"

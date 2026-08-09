@@ -18,6 +18,36 @@ trait U55cPerformanceMonitorFpgaTerminalCore extends FpgaConstruction with MakeT
   override protected def configuredCapability: String = "batch"
 }
 
+/** U55C SPMV 资源探针的只综合终端集群，并挂载独立软件 golden host。 */
+trait U55cSpmvSynthesisTerminalCore
+    extends FpgaSynthesisConstruction with AcceleratorHostConstruction with MakeTerminal {
+  override protected def configuredFpga: FpgaToolchainConfig = FpgaToolchainConfig.U55cBase
+  override protected def configuredAcceleratorHost: AcceleratorHostConfig = AcceleratorHostConfig.SpmvGolden
+}
+
+/** U55C SPMV bitstream 构造集群，FPGA 资产与软件 golden host 保持正交。 */
+trait U55cSpmvBitstreamTerminalCore
+    extends FpgaBitstreamConstruction with AcceleratorHostConstruction with MakeTerminal {
+  override protected def configuredFpga: FpgaToolchainConfig = FpgaToolchainConfig.U55cBase
+  override protected def configuredAcceleratorHost: AcceleratorHostConfig = AcceleratorHostConfig.SpmvGolden
+}
+
+/** 单 HBM CSR5 乘法器的本地 Verilator 终端集群。 */
+trait LocalSpmvSimulationTerminalCore
+    extends SpmvSimulationConstruction with MakeTerminal {
+  override protected def configuredAcceleratorHost: AcceleratorHostConfig =
+    AcceleratorHostConfig.SpmvCsr5Verilator
+}
+
+/** 单 HBM CSR5 仿真的性能监测终端，首个 report 子配置为乘加流水线 HTML。 */
+trait LocalSpmvPerformanceMonitorTerminalCore
+    extends SpmvSimulationConstruction with MakeTerminal {
+  override protected def configuredAcceleratorHost: AcceleratorHostConfig =
+    AcceleratorHostConfig.SpmvCsr5Verilator
+  override protected def configuredSpmvPerformanceMonitor: SpmvPerformanceMonitorConfig =
+    SpmvPerformanceMonitorConfig.MulAddPipelineHtml
+}
+
 /** ZCU102 终端直接包含的 FPGA 运行集群。 */
 trait Zcu102FpgaTerminalCore extends FpgaConstruction with MakeTerminal {
   override protected def configuredNemu: NemuHostConfig = NemuHostConfig.Zcu102Base

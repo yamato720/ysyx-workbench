@@ -7,9 +7,12 @@ NPC 使用命名 Scala Config 固定硬件 ABI、运行宿主和 FPGA 实现策�
 Chisel；rv-core 保留 ISA 译码与操作码映射，ysyxSoC 保留 Diplomacy node 和地址映射，`fpga/` 只绑定
 板卡 provider 与物理工程，`fpga-ip-generator/` 保存厂商 IP 配方。
 
-`config=` 只选择硬件终端，不选择 NEMU、DPI 或 Verilator 模式。除只供 Scala/RTL 测试使用的
-`check-only` Config 外，每个可选择终端都绑定一套保存的 NEMU 运行宿主；本地仿真的 DPI 只是该宿主
-连接 Verilator 模型的内部桥接。
+`config=` 只选择硬件终端，不选择 NEMU、DPI 或 Verilator 模式。NPC/SoC 的 `run`、`batch` 终端绑定
+一套保存的 NEMU 运行宿主；本地仿真的 DPI 只是该宿主连接 Verilator 模型的内部桥接。
+SPMV 的 `synthesize-only` 和 `bitstream-only` 只描述 FPGA 资产阶段；终端另以
+`AcceleratorHostConstruction` 挂载纯软件 golden host，不构造或运行 NEMU/XRT host，也不进入 Chisel RTL 仿真。
+两个 `SpmvOneHbmCsr5Mul*SimulationConfig` 则是独立的 `scope=spmv` 本地构造，直接冻结 CSR5 RTL、
+512-bit HBM DPI、Verilator 模型、SoftFloat 和对应 host，同样不依赖 NEMU。
 
 ## 常用命令
 
@@ -27,6 +30,17 @@ make -C npc build config=PipelinedTwoCycleWideL2SimulationConfig
 make -C npc build config=PipelinedTwoCycleWideL2NoCompletionForwardingSimulationConfig
 make -C npc build config=U55cYsyxSocFpgaConfig
 make -C npc rebuild config=U55cYsyxSocFpgaConfig
+make -C npc build config=U55cSpmv32PcFp32X8192UramResourceProbeConfig
+make -C npc rebuild config=U55cSpmv32PcFp32X8192UramResourceProbeConfig
+make -C npc build config=U55cSpmv32PcFp64X8192UramBitstreamConfig
+make -C npc rebuild config=U55cSpmv32PcFp64X8192UramBitstreamConfig
+make -C npc build config=SpmvOneHbmCsr5MulSimulationConfig
+make -C npc build-host config=SpmvOneHbmCsr5MulSimulationConfig
+make -C npc run config=SpmvOneHbmCsr5MulSimulationConfig mainargs=n512
+make -C npc build config=SpmvOneHbmCsr5MulCachedXSimulationConfig
+make -C npc run config=SpmvOneHbmCsr5MulCachedXSimulationConfig mainargs=n512
+make -C npc build config=SpmvOneHbmCsr5MulPerformanceMonitorSimulationConfig
+make -C npc run config=SpmvOneHbmCsr5MulPerformanceMonitorSimulationConfig mainargs=n512
 make -C npc rebuild version=1
 make -C npc resume-post-link config=U55cRv64CacheNpc150MHzPerformanceMonitorFpgaConfig
 make -C npc host-config-list
@@ -35,6 +49,8 @@ make -C npc build-host config=U55cRv64Npc300MHzFpgaConfig
 make -C npc rebuild-host version=1
 make -C npc host-build version=1
 make -C npc host-build all=1 jobs=-1
+make -C npc build-host config=U55cSpmv32PcFp64X8192UramBitstreamConfig
+make -C npc run config=U55cSpmv32PcFp64X8192UramBitstreamConfig mainargs=n512
 
 make -C npc version
 make -C npc version config=SimulationConfig
@@ -71,11 +87,76 @@ make -C am-kernels/tests/cpu-tests run-bat ALL="forwarding matrix-mul fpu" \
 
 `make version` 只读取构造目录中的 `version.tag` 和 `version.info`，不会刷新或解析 Scala catalog。
 它显示已有的 `constructions/<FQCN>/` 构造，不罗列尚未构造的 Config。属性位图固定为
-`Version RV32 RV64 M F Zicsr Pipe ID EX valid?`；`Arch` 以 `NPC`/`SoC` 显示，`RunningTime` 以
-`SIM`/`FPGA` 显示，最右侧 `Config` 为对应保存构造的短名。`valid?` 为 `+` 时该正式构造当前可运行；进行中的构造和缺少必要资产的构造保留显示
+`Version RV32 RV64 M F Zicsr Pipe ID EX valid?`；`Arch` 以 `NPC`/`SoC`/`SpMV` 显示，
+`RunningTime` 以 `SIM`/`FPGA`/`SYNTH` 显示，最右侧 `Config` 为对应保存构造的短名。
+`valid?` 为 `+` 时该正式构造当前资产完整；进行中的构造和缺少必要资产的构造保留显示
 但为空。`D=<序号列表>` 与 `delete=<序号列表>` 都会删除对应构造并紧凑重映射后续序号。列表可用逗号或
 连字符分隔，例如 `D=1,2,3` 与 `D=1-2-3`；所有目标都按删除前的同一张版本表先解析，最后才统一删除和
 重编号，不需要根据中途变化的编号重复执行。两个别名同时给出时必须表示同一集合，顺序与分隔符可以不同。
+
+## 独立 SPMV CSR5 仿真
+
+`SpmvOneHbmCsr5MulSimulationConfig` 与 `SpmvOneHbmCsr5MulCachedXSimulationConfig` 固定同一套单路
+64-bit 地址、512-bit 数据的只读 HBM AXI，
+每次 DPI 调用原子传输一个 64-byte beat。host 自动把矩阵切成不超过 `8192 x 8192` 的二维块并按
+列块分组；同组非空行块合成一条 CSR5 stream。每个块内每 128 个
+CSR 非零元打成 Metadata v2 加 16 个转置 payload beat，不足 128 的 tail 保持块内 CSR 顺序。
+v3 host 把 A 与 X 放在同一 128 MiB backing memory 的两个 4 KiB 分隔区域；配置握手后显式 `start`
+同时启动 A/X。共享 scheduler 以 AXI ID 0/1 区分来源，以全局 `SPMV_HBM_OUTSTANDING=1|2` 控制
+credit，默认 2，并按 burst 公平轮转。paired Config 每个 X beat 提供两个八路 group，完全不实例化
+X cache；cached Config 每 beat 装入连续 16 个 FP32，并使用四份 `512 x 512-bit` 双端口宽 cache。
+multiplier 输出带行边界与 tile context 的 `ProductBeat`，RTL 不做行归约或 Y 写回。
+
+正式构造只有 `elaborate -> softfloat -> verilator -> accelerator-host` 四阶段，资产位于
+`abi/rtl`、`abi/verilator`、`abi/softfloat` 和 `abi/spmv`，不会创建 `abi/nemu`。其 profile 固定
+`HOST_ABI=none`、`ACCELERATOR_HOST_ABI=spmv-csr5-verilator-v3` 和
+`PROTOCOL_ABI=spmv-one-hbm-csr5-mul-v3`，不包含 XLEN、ISA、NEMU 或 CPU cache 字段。
+`build-host` 只用保存构造中的模型与 SoftFloat 重新链接 host；RTL 或协议变化必须执行 `rebuild`。
+`SPMV_DISABLE_OUTPUT_STALLS=1` 用于无输出反压的周期对比；`SPMV_HBM_NO_JITTER=1` 将每个 AR 的首个
+beat 固定为 77 拍，burst 内仍每拍返回一个 512-bit beat。旧 v1/v2 构造仍可用其冻结 host 运行，
+但不能用当前 host-only 流程刷新，必须先完整 `rebuild version=<编号>`。
+
+运行时 host 跳过空块和空列组，以固定种子施加输出反压，逐 lane 用 SoftFloat 核对乘积和异常标志，
+再通过全局 NNZ 下标恢复原 CSR 顺序，执行 FP32 RNE 行归约并与独立 golden 逐位比较。不传
+`mainargs` 会列出共享数据目录中的规模并正常退出。
+已有构造优先按 `make -C npc version config=<Spmv Config>` 查到的版本运行。
+
+## U55C SPMV 资源探针
+
+`U55cSpmv32PcFp32X8192UramResourceProbeConfig` 是 `TARGET=SPMV`、
+`CAPABILITY=synthesize-only` 的正式构造。它在 U55C 300 MHz `ap_clk` 上暴露
+`m_axi_pc00` 至 `m_axi_pc31` 共 32 个 64-bit 地址、512-bit 数据、4-bit ID 的只读 AXI4 master；
+每路读取自己的 32 KiB X 区，共 8 个 64-beat burst。每个返回 beat 拆成 16 个 FP32 bit pattern，
+写入独立 `8192 x 32` UltraRAM，再按 1 element/cycle 扫描 XOR。该构造只执行
+`elaborate -> ooc-synth`，发布 XO、DCP、两份 utilization report、timing summary 和 SHA-256。
+
+`U55cSpmv32PcFp64X8192UramBitstreamConfig` 是 `CAPABILITY=bitstream-only` 的进一步压力探针：
+每个 PC 存放 8192 个 64-bit X（每路 64 KiB，32 路合计 2 MiB），拆成四个独立的
+`2048 x 64` 双端口 UltraRAM bank。加载一个 512-bit beat 时，四个 bank 的 A/B 端口同时写入
+8 个 FP64；加载完成后每拍从每个 bank 读两个地址，八个 X 同时进入 XOR 汇总。因而这里的“8 路”
+是缓存读写带宽，不是八个浮点运算单元；探针仍不实例化 FP add、mul 或 FMA。
+
+该构造的阶段为 `elaborate -> ooc-synth -> Vitis link`，只发布 XO、DCP、普通/层次化 utilization、
+timing summary、xclbin 和 SHA-256，不生成 NEMU/XRT host。AXI-Lite 仍使用 `ap_ctrl_hs`，32 个基地址
+位于 `0x010 + 8*i`，聚合 checksum、done mask 和 error mask 位于 `0x110`、`0x114`、`0x118`；
+两种 Config 都可通过 `build-host` 构建 `accelerator-sim/spmv` 的纯 CPU host，并通过全局
+`run mainargs=<规模>` 读取 `accelerator-sim/data` 的共享 CSR 数据、计算 FP64 `Y=A*X` golden。
+数据由独立的 `make -C accelerator-sim/data` 下载或生成，也可用 `ACCELERATOR_DATA_ROOT` 覆盖。
+该入口不要求先完成
+FPGA 构造，不加载 xclbin，也不启动 Chisel RTL 仿真；`run-bat` 仍只服务 NPC/SoC AM 用例。
+
+2026-08-04 在 `xcu55c-fsvh2892-2L-e`、Vivado/Vitis 2022.2 上对 FP64/8-lane 版本的压力结果如下。
+OOC 综合得到 128 个 URAM288、15619 LUT、22279 FF、288 个 CARRY8、0 DSP；`ap_clk=225 MHz`
+的 OOC setup WNS 为 +1.705 ns，但 hold WHS 为 -0.074 ns。接入 U55C 平台并完成 synthesis、placement、
+routing 后，kernel 本身使用 128/960 URAM（13.33%）、15622 LUT（1.47%）和 22279 FF（0.98%）；
+全设计包含平台互连后为 254284 LUT（19.51%）、350924 FF（13.46%）、200 个 Block RAM Tile（9.92%）
+和 128 URAM（13.33%），32 路 HBM 互连另占 197 个 RAMB36/FIFO。URAM 集中在单个 SLR 时该 SLR
+达到 40%，这是比总量更值得关注的放置压力。
+
+该次 225 MHz routed timing 的最差 setup 为 `clk_out1_ulp_clk_wiz_0 -> ap_clk` 的 -1.516 ns；
+`ap_clk` 内部高扇出控制寄存器路径为 -0.928 ns，反向时钟路径为 -1.242 ns，HBM 互连自身的
+`hbm_aclk` 最差为 -0.130 ns。因此 Vitis 完成布局布线但没有接受最终 xclbin；这组数据回答的是
+32-PC/8-lane 设计的资源和实现压力，不宣称 225 MHz 已经实现 bitstream closure。
 
 ## 可配置缓存
 
@@ -159,8 +240,10 @@ printf 'start\nsi 40\nstop\nc\n' | \
 | 构造能力 | 由 `scope` 区分的目标 | 缺失时 | 已有构造的更新方式 |
 | --- | --- | --- | --- |
 | `check-only` | 只做 Scala/RTL 检查 | 不进入公开 Make 构造或运行入口 | 由测试直接调用 |
-| `run` | `npc`/`soc` 为本地仿真，`fpga` 为上板运行（由 `TARGET` 选择裸核或 SoC） | NPC/SoC 首次运行自动生成；FPGA 需 `build` | `rebuild` 在同一 FQCN 目录重构硬件与运行宿主；仅更新 C/C++ 宿主用 `host-build` |
+| `run` | `npc`/`soc` 为 CPU 本地仿真，`spmv` 为独立加速器仿真，`fpga` 为上板运行 | NPC/SoC/SPMV 首次运行自动生成；FPGA 需 `build` | `rebuild` 在同一 FQCN 目录重构硬件与运行宿主；仅更新 C/C++ 宿主用 `host-build` |
 | `batch` | 只允许批处理的 FPGA 运行终端 | FPGA 需 `build` | 与 `run` 相同；`run` 会被拒绝 |
+| `synthesize-only` | `fpga` 下不含 CPU/NEMU 的加速器资源探针 | FPGA 资产需显式 `build`；软件 host 可独立构建 | `rebuild` 替换 XO、DCP 和报告；SPMV 可通过独立 accelerator host 执行 golden |
+| `bitstream-only` | `fpga` 下不含 CPU/NEMU 的加速器 bitstream 压力探针 | FPGA 资产需显式 `build`；软件 host 可独立构建 | `rebuild` 替换 XO、DCP、报告和 xclbin；SPMV 可通过独立 accelerator host 执行 golden |
 
 FPGA 的首次构造需显式执行 `build`；已有 FPGA 构造不会因源码、Config 或工具变化自动重建，需要新硬件时
 必须显式执行 `rebuild`。`build` 和 `rebuild` 都直接使用稳定的 FQCN 目录，开始时会清理该目录中旧 ABI、
@@ -241,6 +324,13 @@ constructions/
     abi/{nemu,protocol}/
     fpga/{rtl,ip-generated,synth,link,artifacts}/
     logs/
+  npc.fpga.u55c.U55cSpmv32PcFp32X8192UramResourceProbeConfig/
+    construction.env
+    profile.env
+    version.tag
+    version.info
+    fpga/{rtl,synth,artifacts}/
+    logs/build/{elaborate.log,ooc-synth.log}
 ```
 
 首次构造开始时分配从 `1` 开始的连续版本序号，并以 `version.tag` 的 `building` 状态立即可见。同一个
@@ -264,8 +354,9 @@ U55C 平台限定 `xclbin`、ZCU102 `npc.bit` 或保存 host 的构造显示为�
 `build` 和按当前 Config 解析的运行仍会刷新 Scala 目录。
 
 版本主表用 `+`/空白属性位图代替长 Config 名称：XLEN 分为 RV32/RV64，ISA 显示 M/F/Zicsr，流水线
-固定显示 Pipe/ID/EX 三格，随后显示 `valid?`。`Arch` 和 `RunningTime` 使用文本，分别表达 NPC/SoC 与
-SIM/FPGA；最右侧 `Config` 显示保存的 Config 短名，不再输出额外名称映射或可构造 Config 表。
+固定显示 Pipe/ID/EX 三格，随后显示 `valid?`。`Arch` 和 `RunningTime` 使用文本，分别表达
+NPC/SoC/SpMV 与 SIM/FPGA/SYNTH；最右侧 `Config` 显示保存的 Config 短名，不再输出额外名称映射或
+可构造 Config 表。
 
 NEMU host 的 `performanceHtml` 可选项会在运行结束时写入
 `runtime/<test>/<timestamp-ns>-<pid>/performance.html`。它是报告主页，包含总体 CPI/IPC/MIPS、宿主耗时、
@@ -298,6 +389,7 @@ Config 启用 VCD，则在同一运行目录依次写 `wave-001.vcd`、`wave-002
 | 层级 | 目录 | 职责 | 是否可选 |
 | --- | --- | --- | --- |
 | 公共运行宿主 | `chisel/configs/common/`、`chisel/configs/nemu/` | 运行 trait 与内部 NEMU menuconfig 预设 | 运行终端必需 |
+| 加速器参数 | `chisel/configs/spmv/`、`chisel/accelerators/spmv/` | SPMV 参数/profile 与独立资源探针 RTL | SPMV 才需要 |
 | L1 | `chisel/configs/npc/` | 完整 NPC 成品与 Make 反射解析器 | 必需 |
 | L2 | `chisel/configs/ysyx/` | Rocket/ysyxSoC CDE 图与运行平台 | SoC 才需要 |
 | L3 | `chisel/configs/fpga/common/` | NPC/SoC 接入 FPGA 的公共 CDE 键 | FPGA 才需要 |
@@ -329,11 +421,12 @@ FPGA 分支的唯一来源，无需重复叠加平台标签。
 `ConfigResolver` 得到 `ConstructionConfig`；SoC/FPGA 入口通过 `CdeConfigResolver` 得到 CDE
 `Config`，并从 `NpcCoreConfigKey` 取得完成的 L1 `NpcConfig`。每个运行终端只挂载一个与本地/板卡及
 NPC/SoC 目标精确匹配的 `LocalNpcTerminal`、`LocalSocTerminal`、`U55cNpcTerminal`、
-`U55cSocTerminal`、`Zcu102NpcTerminal` 或 `Zcu102SocTerminal`。这些预设已经提供完整
+`U55cSocTerminal`、`Zcu102NpcTerminal` 或 `Zcu102SocTerminal`。这些运行预设已经提供完整
 `NemuHostConfig` 默认值，FPGA 预设同时提供分组式 `FpgaToolchainConfig` 默认值；当前内置
-`Configs.scala` 均一步挂载，不重复展开配方。每个 Config 显式混入一个计算 IP terminal，绝不通过
+`Configs.scala` 均一步挂载，不重复展开配方。每个 CPU Config 显式混入一个计算 IP terminal，绝不通过
 Config 构造参数或 CDE `++` 链单独选择。显式自定义终端仍可在保持 scope、target 与板卡匹配的
-前提下重载配方。profile 据此渲染保存的 `host.defconfig` 和现有
+前提下重载配方。SPMV 是不带 CPU 算子 terminal 的独立 `U55cSpmvSynthesisTerminal` 与
+`U55cSpmvBitstreamTerminal`，只消费 U55C FPGA 工具链。profile 据此渲染保存的 `host.defconfig` 和现有
 `FPGA_*` 字段。Chisel
 elaboration 生成按模块拆分的 SystemVerilog 和显式 IP source manifest；Verilator 或 Vivado/Vitis 只消费
 清单列出的 RTL/XCI 与同一份 profile。综合清单会硬拒绝 DPI、NEMU MMIO 和其他仅仿真模型。

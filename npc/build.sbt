@@ -38,14 +38,17 @@ lazy val root = (project in file("./chisel"))
     Test / scalaSource := baseDirectory.value / "rv-core/test/scala",
     Test / resourceDirectory := baseDirectory.value / "rv-core/test/resources",
     Compile / unmanagedSourceDirectories ++= Seq(
+      baseDirectory.value / "accelerators/spmv/main/scala",
       baseDirectory.value / "configs/parameters",
       baseDirectory.value / "configs/common",
       baseDirectory.value / "configs/nemu",
       baseDirectory.value / "configs/npc",
+      baseDirectory.value / "configs/spmv",
       baseDirectory.value / "ysyxSoC/rocket-chip/dependencies/cde/cde/src",
       (ThisBuild / baseDirectory).value / "chisel/ysyxSoC/rocket-chip/dependencies/hardfloat/hardfloat/src/main/scala"
     ),
-    Compile / unmanagedResourceDirectories += baseDirectory.value / "configs/resources"
+    Compile / unmanagedResourceDirectories += baseDirectory.value / "configs/resources",
+    Test / unmanagedSourceDirectories += baseDirectory.value / "accelerators/spmv/test/scala"
   )
   .settings(chiselSettings)
 

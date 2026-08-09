@@ -26,7 +26,7 @@ object U55cXilinxIpAttachment {
 object U55cBoardConfig {
   /** The stock shell clock that drives the Vitis RTL-kernel interfaces. */
   val PlatformDataClockMHz = 300
-  val SupportedCoreClockMHz: Set[Int] = Set(100, 125, 150, 200, 250, 300)
+  val SupportedCoreClockMHz: Set[Int] = Set(100, 125, 150, 200, 225, 250, 300)
 
   def checkedCoreClockMHz(coreClockMHz: Int): Int = {
     require(SupportedCoreClockMHz.contains(coreClockMHz),
@@ -51,6 +51,20 @@ class U55cBoardConfig(
       memoryHostBase = 0x00000000L,
       controlBase = 0xa0000000L,
       mailboxBase = 0xa0010000L
+    )) ++
+    new WithFpgaBoardConfig(FpgaBoard.U55c)
+)
+
+/** SPMV 资源探针只需要 U55C 板卡、地址和可选的 kernel 时钟。 */
+class U55cSpmvBoardConfig(coreClockMHz: Int = U55cBoardConfig.PlatformDataClockMHz) extends CDEConfig(
+  new WithFpgaClockMHzConfig(U55cBoardConfig.checkedCoreClockMHz(coreClockMHz)) ++
+    new WithFpgaPlatformConfig(FpgaPlatformSettings(
+      board = FpgaBoard.U55c,
+      clockMHz = U55cBoardConfig.checkedCoreClockMHz(coreClockMHz),
+      platformClockMHz = U55cBoardConfig.PlatformDataClockMHz,
+      memoryHostBase = 0x00000000L,
+      controlBase = 0x00000000L,
+      mailboxBase = 0x00000000L
     )) ++
     new WithFpgaBoardConfig(FpgaBoard.U55c)
 )

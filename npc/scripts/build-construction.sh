@@ -31,9 +31,15 @@ while IFS='=' read -r key value; do
   export "$key"
 done < "$profile"
 
-mkdir -p "$stage/abi/rtl" "$stage/abi/verilator" "$stage/abi/nemu" \
-  "$stage/abi/softfloat" "$stage/abi/glue/include" "$stage/abi/glue/src" \
-  "$stage/logs/build"
+mkdir -p "$stage/logs/build"
+if [[ $SCOPE == spmv ]]; then
+  mkdir -p "$stage/abi/rtl" "$stage/abi/verilator" "$stage/abi/softfloat" "$stage/abi/spmv"
+elif [[ $CAPABILITY == synthesize-only || $CAPABILITY == bitstream-only ]]; then
+  mkdir -p "$stage/fpga"
+else
+  mkdir -p "$stage/abi/rtl" "$stage/abi/verilator" "$stage/abi/nemu" \
+    "$stage/abi/softfloat" "$stage/abi/glue/include" "$stage/abi/glue/src"
+fi
 
 phase_logs="$stage/logs/build"
 printf 'BUILD_DRIVER_SNAPSHOT=%s\n' "$script_dir" >> "$phase_logs/all.log"
@@ -44,12 +50,14 @@ local_chisel_dpi_out="$local_work_dir/generated-dpi"
 local_soc_sim_dir="$local_work_dir/soc-sim"
 
 root_construction_work_args() {
-  if [[ $SCOPE == npc || $SCOPE == soc ]]; then
+  if [[ $SCOPE == npc || $SCOPE == soc || $SCOPE == spmv ]]; then
     printf '%s\0' \
       "obj_dir=$local_obj_dir" \
       "CHISEL_OUT=$local_chisel_out" \
       "CHISEL_DPI_OUT=$local_chisel_dpi_out" \
-      "SOC_SIM_DIR=$local_soc_sim_dir"
+      "SOC_SIM_DIR=$local_soc_sim_dir" \
+      "SPMV_SIM_OUT=$local_work_dir/spmv-rtl" \
+      "SPMV_SIM_MODEL_DIR=$local_work_dir/spmv-verilator"
   fi
 }
 
@@ -70,7 +78,7 @@ run_root_phase() {
   while IFS= read -r -d '' argument; do work_args+=("$argument"); done < <(root_construction_work_args)
   "$phase_log" run "$phase_logs" "$phase" "$index" "$total" -- \
     make -C "$npc_root" "$target" "$@" INTERNAL_CONSTRUCTION=1 config="$CONFIG_FQCN" \
-    CONSTRUCTION_PROFILE="$profile" NPC_VCD_TRACE="$NEMU_VCD" "${work_args[@]}"
+    CONSTRUCTION_PROFILE="$profile" NPC_VCD_TRACE="${NEMU_VCD:-0}" "${work_args[@]}"
 }
 
 run_root_phase_visible() {
@@ -80,7 +88,7 @@ run_root_phase_visible() {
   while IFS= read -r -d '' argument; do work_args+=("$argument"); done < <(root_construction_work_args)
   PHASE_LOG_PASSTHROUGH=1 "$phase_log" run "$phase_logs" "$phase" "$index" "$total" -- \
     make -C "$npc_root" "$target" "$@" INTERNAL_CONSTRUCTION=1 config="$CONFIG_FQCN" \
-    CONSTRUCTION_PROFILE="$profile" NPC_VCD_TRACE="$NEMU_VCD" "${work_args[@]}"
+    CONSTRUCTION_PROFILE="$profile" NPC_VCD_TRACE="${NEMU_VCD:-0}" "${work_args[@]}"
 }
 
 copy_glue() {
@@ -120,6 +128,13 @@ dry_run() {
       note_phase softfloat 2 "$total" 'dry-run SoftFloat 构建'
       note_phase verilator 3 "$total" 'dry-run Verilator 库构建'
       ;;
+    run:spmv)
+      total=4
+      note_phase elaborate 1 "$total" 'dry-run SPMV elaboration'
+      note_phase softfloat 2 "$total" 'dry-run SoftFloat 构建'
+      note_phase verilator 3 "$total" 'dry-run SPMV Verilator 模型构建'
+      note_phase accelerator-host 4 "$total" 'dry-run SPMV accelerator host 构建'
+      ;;
     run:fpga|batch:fpga)
       total=5
       note_phase elaborate 1 "$total" 'dry-run FPGA elaboration'
@@ -127,14 +142,100 @@ dry_run() {
       note_phase synth 3 "$total" 'dry-run FPGA 综合'
       note_phase link 4 "$total" 'dry-run FPGA 链接'
       ;;
+    synthesize-only:fpga)
+      total=2
+      note_phase elaborate 1 "$total" 'dry-run SPMV elaboration'
+      note_phase ooc-synth 2 "$total" 'dry-run SPMV OOC 综合'
+      ;;
+    bitstream-only:fpga)
+      total=3
+      note_phase elaborate 1 "$total" 'dry-run SPMV elaboration'
+      note_phase ooc-synth 2 "$total" 'dry-run SPMV OOC 综合'
+      note_phase link 3 "$total" 'dry-run SPMV Vitis link'
+      ;;
     *) echo "Config $CONFIG_FQCN 的能力/作用域不支持 dry-run：$CAPABILITY/$SCOPE" >&2; exit 2 ;;
   esac
 
-  printf 'dry-run\n' > "$stage/abi/rtl/placeholder.sv"
+  if [[ $SCOPE == spmv ]]; then
+    printf 'module SpmvOneHbmCsr5MulSimulationTop; endmodule\n' > \
+      "$stage/abi/rtl/SpmvOneHbmCsr5MulSimulationTop.sv"
+  elif [[ $CAPABILITY != synthesize-only && $CAPABILITY != bitstream-only ]]; then
+    printf 'dry-run\n' > "$stage/abi/rtl/placeholder.sv"
+  fi
+  if [[ $SCOPE == spmv ]]; then
+    printf 'dry-run header\n' > "$stage/abi/verilator/VSpmvOneHbmCsr5MulSimulationTop.h"
+    printf 'dry-run model\n' > "$stage/abi/verilator/libVSpmvOneHbmCsr5MulSimulationTop.a"
+    printf 'dry-run runtime\n' > "$stage/abi/verilator/libverilated.a"
+    printf 'dry-run softfloat\n' > "$stage/abi/softfloat/softfloat.a"
+    printf '#!/usr/bin/env bash\necho "SPMV construction dry-run host"\n' > "$stage/abi/spmv/spmv-host"
+    chmod +x "$stage/abi/spmv/spmv-host"
+    printf 'HOST_FORMAT=1\nCONFIG_FQCN=%s\nACCELERATOR_HOST_KIND=spmv\nACCELERATOR_HOST_ABI=spmv-csr5-verilator-v3\nPROTOCOL_ABI=spmv-one-hbm-csr5-mul-v3\nSPMV_X_MODE=%s\nSPMV_PERFORMANCE_HTML=%s\nSPMV_PIPELINE_HTML=%s\nSPMV_PERFORMANCE_FIRST_SUBCONFIG=%s\n' \
+      "$CONFIG_FQCN" "$SPMV_X_MODE" "$SPMV_PERFORMANCE_HTML" "$SPMV_PIPELINE_HTML" \
+      "$SPMV_PERFORMANCE_FIRST_SUBCONFIG" > "$stage/abi/spmv/host.env"
+  fi
   if [[ $SCOPE == fpga ]]; then
     local artifacts asset
     artifacts="$stage/fpga/artifacts"
-    mkdir -p "$stage/fpga/rtl" "$stage/fpga/ip-generated" "$stage/fpga/synth" "$stage/fpga/link" "$artifacts"
+    mkdir -p "$stage/fpga/rtl" "$stage/fpga/synth" "$artifacts"
+    if [[ $CAPABILITY == synthesize-only ]]; then
+      printf '%s\n' 'module SpmvResourceProbeTop; endmodule' > "$stage/fpga/rtl/SpmvResourceProbeTop.sv"
+      printf '%s\n' 'module SpmvResourceProbeKernel; endmodule' > "$stage/fpga/rtl/spmv-resource-probe-kernel.sv"
+      "$ip_source_manifest" write synthesis \
+        "$stage/fpga/synthesis-sources.manifest" "$npc_root" --absolute \
+        --rtl-dir "$stage/fpga/rtl"
+      local -a spmv_assets=(
+        spmv-resource-probe.xo
+        spmv-resource-probe.dcp
+        spmv-utilization.rpt
+        spmv-utilization-hierarchical.rpt
+        spmv-timing-summary.rpt
+      )
+      for asset in "${spmv_assets[@]}"; do printf 'dry-run %s\n' "$asset" > "$artifacts/$asset"; done
+      local -a spmv_manifest_args=()
+      for asset in "${spmv_assets[@]}"; do spmv_manifest_args+=(--asset "$asset"); done
+      "$npc_root/fpga/common/scripts/artifact-manifest.sh" write \
+        --directory "$artifacts" --source-root "$workspace" --release-tag UNRELEASED \
+        --board "$FPGA_BOARD" --variant "$CONFIG_FQCN" --type "$FPGA_TYPE" \
+        --platform "${FPGA_PLATFORM:-none}" \
+        --config-fqcn "$CONFIG_FQCN" --host-abi "$HOST_ABI" --protocol-abi "$PROTOCOL_ABI" \
+        "${spmv_manifest_args[@]}"
+      [[ ${CONSTRUCTION_TEST_FAIL:-0} != 1 ]] || {
+        printf '%s\n' '按测试请求模拟构造失败' | tee -a "$phase_logs/all.log" >&2
+        exit 1
+      }
+      return
+    fi
+    if [[ $CAPABILITY == bitstream-only ]]; then
+      printf '%s\n' 'module SpmvResourceProbeTop; endmodule' > "$stage/fpga/rtl/SpmvResourceProbeTop.sv"
+      printf '%s\n' 'module SpmvResourceProbeKernel; endmodule' > "$stage/fpga/rtl/spmv-resource-probe-kernel.sv"
+	      "$ip_source_manifest" write synthesis \
+	        "$stage/fpga/synthesis-sources.manifest" "$npc_root" --absolute \
+	        --rtl-dir "$stage/fpga/rtl"
+	      local -a spmv_assets=(
+	        spmv-resource-probe.xclbin
+	        spmv-resource-probe.xo
+	        spmv-resource-probe.dcp
+	        spmv-utilization.rpt
+	        spmv-utilization-hierarchical.rpt
+	        spmv-timing-summary.rpt
+	      )
+	      for asset in "${spmv_assets[@]}"; do printf 'dry-run %s\n' "$asset" > "$artifacts/$asset"; done
+	      printf '0.000\n' > "$artifacts/spmv-resource-probe.wns"
+	      local -a spmv_manifest_args=()
+	      for asset in "${spmv_assets[@]}"; do spmv_manifest_args+=(--asset "$asset"); done
+	      "$npc_root/fpga/common/scripts/artifact-manifest.sh" write \
+	        --directory "$artifacts" --source-root "$workspace" --release-tag UNRELEASED \
+	        --board "$FPGA_BOARD" --variant "$CONFIG_FQCN" --type "$FPGA_TYPE" \
+	        --platform "${FPGA_PLATFORM:-none}" --config-fqcn "$CONFIG_FQCN" \
+	        --host-abi "$HOST_ABI" --protocol-abi "$PROTOCOL_ABI" --timing-wns 0.000 \
+	        "${spmv_manifest_args[@]}"
+      [[ ${CONSTRUCTION_TEST_FAIL:-0} != 1 ]] || {
+        printf '%s\n' '按测试请求模拟构造失败' | tee -a "$phase_logs/all.log" >&2
+        exit 1
+      }
+      return
+    fi
+    mkdir -p "$stage/fpga/ip-generated" "$stage/fpga/link"
     printf '%s\n' 'module NpcFpgaTop; endmodule' > "$stage/fpga/rtl/NpcFpgaTop.sv"
     "$ip_source_manifest" write synthesis \
       "$stage/fpga/rtl/ip-sources.manifest" "$npc_root" --absolute \
@@ -172,20 +273,20 @@ dry_run() {
     printf '%s\n' '按测试请求模拟构造失败' | tee -a "$phase_logs/all.log" >&2
     exit 1
   }
-  if [[ $CAPABILITY == run || $CAPABILITY == batch ]]; then
+  if [[ $SCOPE != spmv && ($CAPABILITY == run || $CAPABILITY == batch) ]]; then
     refresh_host "$total" "$total"
   fi
 }
 
 if [[ ${CONSTRUCTION_DRY_RUN:-0} == 1 ]]; then
   dry_run
-  copy_glue
+  [[ $SCOPE == spmv || $CAPABILITY == synthesize-only || $CAPABILITY == bitstream-only ]] || copy_glue
   exit 0
 fi
 
 # NEMU 编译通过保存构造的 glue include 引用 NPC 调试 ABI；必须先冻结这些
 # 头文件，再进入末尾的 host 阶段。源码副本不依赖 Chisel/Verilator 产物。
-copy_glue
+[[ $SCOPE == spmv || $CAPABILITY == synthesize-only || $CAPABILITY == bitstream-only ]] || copy_glue
 
 case "$CAPABILITY:$SCOPE" in
   generate-only:npc)
@@ -221,6 +322,19 @@ case "$CAPABILITY:$SCOPE" in
     cp -a "$local_obj_dir/softfloat/." "$stage/abi/softfloat/"
     refresh_host 4 4
     ;;
+  run:spmv)
+    run_root_phase elaborate 1 4 spmv-sim-elaborate
+    run_root_phase softfloat 2 4 softfloat-lib
+    run_root_phase verilator 3 4 spmv-sim-verilator CONSTRUCTION_PHASE_PREREQUISITES=0
+    cp -a "$local_work_dir/spmv-rtl/." "$stage/abi/rtl/"
+    cp -a "$local_work_dir/spmv-verilator/." "$stage/abi/verilator/"
+    cp -a "$local_obj_dir/softfloat/." "$stage/abi/softfloat/"
+    mkdir -p "$stage/abi/softfloat/include"
+    cp "$npc_root/chisel/ysyxSoC/rocket-chip/dependencies/hardfloat/berkeley-softfloat-3/source/include/"*.h \
+      "$stage/abi/softfloat/include/"
+    run_phase accelerator-host 4 4 make --no-print-directory -C "$workspace/accelerator-sim/spmv" \
+      build-simulation-host CONSTRUCTION_DIR="$stage" BUILD_DIR="$stage/abi/spmv"
+    ;;
   run:fpga|batch:fpga)
     run_root_phase elaborate 1 5 fpga-elaborate FPGA_WORK_DIR="$stage/fpga"
     run_root_phase_visible ip 2 5 fpga-ip FPGA_WORK_DIR="$stage/fpga"
@@ -228,11 +342,23 @@ case "$CAPABILITY:$SCOPE" in
     run_root_phase_visible link 4 5 fpga-link FPGA_WORK_DIR="$stage/fpga" FPGA_PHASE_PREREQUISITES=0
     refresh_host 5 5
     ;;
-  *) echo "Config $CONFIG_FQCN 的能力/作用域不可构造：$CAPABILITY/$SCOPE" >&2; exit 2 ;;
+  synthesize-only:fpga)
+    run_root_phase elaborate 1 2 spmv-elaborate SPMV_WORK_DIR="$stage/fpga"
+    run_root_phase_visible ooc-synth 2 2 spmv-ooc-synth SPMV_WORK_DIR="$stage/fpga" \
+      SPMV_PHASE_PREREQUISITES=0
+    ;;
+	  bitstream-only:fpga)
+	    run_root_phase elaborate 1 3 spmv-elaborate SPMV_WORK_DIR="$stage/fpga"
+	    run_root_phase_visible ooc-synth 2 3 spmv-ooc-synth SPMV_WORK_DIR="$stage/fpga" \
+	      SPMV_PHASE_PREREQUISITES=0
+	    run_root_phase_visible link 3 3 spmv-link SPMV_WORK_DIR="$stage/fpga" \
+	      SPMV_PHASE_PREREQUISITES=0
+	    ;;
+	  *) echo "Config $CONFIG_FQCN 的能力/作用域不可构造：$CAPABILITY/$SCOPE" >&2; exit 2 ;;
 esac
 
 # 本地构造已把工作输出复制到冻结 ABI；成功后不把可再生的 Make 中间目录带入
 # 保存构造。失败时故意保留，便于 construction manager 归档现场。
-if [[ $SCOPE == npc || $SCOPE == soc ]]; then
+if [[ $SCOPE == npc || $SCOPE == soc || $SCOPE == spmv ]]; then
   rm -rf "$local_work_dir"
 fi
