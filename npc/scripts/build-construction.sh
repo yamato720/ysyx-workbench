@@ -33,7 +33,7 @@ done < "$profile"
 
 mkdir -p "$stage/logs/build"
 if [[ $SCOPE == spmv ]]; then
-  mkdir -p "$stage/abi/rtl" "$stage/abi/verilator" "$stage/abi/softfloat" "$stage/abi/spmv"
+  mkdir -p "$stage/abi/rtl" "$stage/abi/verilator" "$stage/abi/spmv"
 elif [[ $CAPABILITY == synthesize-only || $CAPABILITY == bitstream-only ]]; then
   mkdir -p "$stage/fpga"
 else
@@ -129,11 +129,10 @@ dry_run() {
       note_phase verilator 3 "$total" 'dry-run Verilator 库构建'
       ;;
     run:spmv)
-      total=4
+      total=3
       note_phase elaborate 1 "$total" 'dry-run SPMV elaboration'
-      note_phase softfloat 2 "$total" 'dry-run SoftFloat 构建'
-      note_phase verilator 3 "$total" 'dry-run SPMV Verilator 模型构建'
-      note_phase accelerator-host 4 "$total" 'dry-run SPMV accelerator host 构建'
+      note_phase verilator 2 "$total" 'dry-run SPMV Verilator 模型构建'
+      note_phase accelerator-host 3 "$total" 'dry-run SPMV accelerator host 构建'
       ;;
     run:fpga|batch:fpga)
       total=5
@@ -157,21 +156,23 @@ dry_run() {
   esac
 
   if [[ $SCOPE == spmv ]]; then
-    printf 'module SpmvOneHbmCsr5MulSimulationTop; endmodule\n' > \
-      "$stage/abi/rtl/SpmvOneHbmCsr5MulSimulationTop.sv"
+    printf 'module SpmvInputTop; endmodule\n' > \
+      "$stage/abi/rtl/SpmvInputTop.sv"
   elif [[ $CAPABILITY != synthesize-only && $CAPABILITY != bitstream-only ]]; then
     printf 'dry-run\n' > "$stage/abi/rtl/placeholder.sv"
   fi
   if [[ $SCOPE == spmv ]]; then
-    printf 'dry-run header\n' > "$stage/abi/verilator/VSpmvOneHbmCsr5MulSimulationTop.h"
-    printf 'dry-run model\n' > "$stage/abi/verilator/libVSpmvOneHbmCsr5MulSimulationTop.a"
+    printf 'dry-run header\n' > "$stage/abi/verilator/VSpmvInputTop.h"
+    printf 'dry-run model\n' > "$stage/abi/verilator/libVSpmvInputTop.a"
     printf 'dry-run runtime\n' > "$stage/abi/verilator/libverilated.a"
-    printf 'dry-run softfloat\n' > "$stage/abi/softfloat/softfloat.a"
     printf '#!/usr/bin/env bash\necho "SPMV construction dry-run host"\n' > "$stage/abi/spmv/spmv-host"
     chmod +x "$stage/abi/spmv/spmv-host"
-    printf 'HOST_FORMAT=1\nCONFIG_FQCN=%s\nACCELERATOR_HOST_KIND=spmv\nACCELERATOR_HOST_ABI=spmv-csr5-verilator-v3\nPROTOCOL_ABI=spmv-one-hbm-csr5-mul-v3\nSPMV_X_MODE=%s\nSPMV_PERFORMANCE_HTML=%s\nSPMV_PIPELINE_HTML=%s\nSPMV_PERFORMANCE_FIRST_SUBCONFIG=%s\n' \
-      "$CONFIG_FQCN" "$SPMV_X_MODE" "$SPMV_PERFORMANCE_HTML" "$SPMV_PIPELINE_HTML" \
-      "$SPMV_PERFORMANCE_FIRST_SUBCONFIG" > "$stage/abi/spmv/host.env"
+    printf 'HOST_FORMAT=1\nCONFIG_FQCN=%s\nACCELERATOR_HOST_KIND=spmv\nACCELERATOR_HOST_ABI=spmv-input-smoke-v1\nPROTOCOL_ABI=spmv-input-v1\nSPMV_INPUT_A_READER_COUNT=%s\nSPMV_INPUT_X_READER_COUNT=%s\nSPMV_INPUT_HBM_CHANNEL_COUNT=%s\nSPMV_INPUT_HBM_BASE=%s\nSPMV_INPUT_HBM_BYTES=%s\nSPMV_INPUT_HBM_CHANNEL_ALIGNMENT_BYTES=%s\nSPMV_INPUT_AXI_ADDR_WIDTH=%s\nSPMV_INPUT_AXI_DATA_WIDTH=%s\nSPMV_INPUT_AXI_ID_WIDTH=%s\n' \
+      "$CONFIG_FQCN" "$SPMV_INPUT_A_READER_COUNT" \
+      "$SPMV_INPUT_X_READER_COUNT" "$SPMV_INPUT_HBM_CHANNEL_COUNT" "$SPMV_INPUT_HBM_BASE" \
+      "$SPMV_INPUT_HBM_BYTES" "$SPMV_INPUT_HBM_CHANNEL_ALIGNMENT_BYTES" \
+      "$SPMV_INPUT_AXI_ADDR_WIDTH" "$SPMV_INPUT_AXI_DATA_WIDTH" "$SPMV_INPUT_AXI_ID_WIDTH" \
+      > "$stage/abi/spmv/host.env"
   fi
   if [[ $SCOPE == fpga ]]; then
     local artifacts asset
@@ -323,16 +324,11 @@ case "$CAPABILITY:$SCOPE" in
     refresh_host 4 4
     ;;
   run:spmv)
-    run_root_phase elaborate 1 4 spmv-sim-elaborate
-    run_root_phase softfloat 2 4 softfloat-lib
-    run_root_phase verilator 3 4 spmv-sim-verilator CONSTRUCTION_PHASE_PREREQUISITES=0
+    run_root_phase elaborate 1 3 spmv-sim-elaborate
+    run_root_phase verilator 2 3 spmv-sim-verilator CONSTRUCTION_PHASE_PREREQUISITES=0
     cp -a "$local_work_dir/spmv-rtl/." "$stage/abi/rtl/"
     cp -a "$local_work_dir/spmv-verilator/." "$stage/abi/verilator/"
-    cp -a "$local_obj_dir/softfloat/." "$stage/abi/softfloat/"
-    mkdir -p "$stage/abi/softfloat/include"
-    cp "$npc_root/chisel/ysyxSoC/rocket-chip/dependencies/hardfloat/berkeley-softfloat-3/source/include/"*.h \
-      "$stage/abi/softfloat/include/"
-    run_phase accelerator-host 4 4 make --no-print-directory -C "$workspace/accelerator-sim/spmv" \
+    run_phase accelerator-host 3 3 make --no-print-directory -C "$workspace/accelerator-sim/spmv" \
       build-simulation-host CONSTRUCTION_DIR="$stage" BUILD_DIR="$stage/abi/spmv"
     ;;
   run:fpga|batch:fpga)

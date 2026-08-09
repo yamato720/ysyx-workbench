@@ -50,7 +50,7 @@ matching_mark() {
 valid_protocol_abi() {
   local scope=$1 board=${2:-} abi=$3
   case "$scope:$board:$abi" in
-    fpga:u55c:npc-fpga-runtime-v11|fpga:u55c:npc-fpga-runtime-v13-performance-monitor|fpga:u55c:spmv-resource-probe-v1|fpga:u55c:spmv-resource-probe-v2|fpga:zcu102:npc-fpga-runtime-v7|npc::npc-dpi-v1|soc::ysyx-dpi-v1|spmv::spmv-one-hbm-csr5-mul-v1|spmv::spmv-one-hbm-csr5-mul-v2|spmv::spmv-one-hbm-csr5-mul-v3) return 0 ;;
+    fpga:u55c:npc-fpga-runtime-v11|fpga:u55c:npc-fpga-runtime-v13-performance-monitor|fpga:u55c:spmv-resource-probe-v1|fpga:u55c:spmv-resource-probe-v2|fpga:zcu102:npc-fpga-runtime-v7|npc::npc-dpi-v1|soc::ysyx-dpi-v1|spmv::spmv-input-v1) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -1186,7 +1186,7 @@ write_profile_inputs_fingerprint() {
 }
 
 profile_cache_valid() {
-  local file=$1 fqcn=$2 scope=$3 board=$4 capability target x_mode x_replicas
+  local file=$1 fqcn=$2 scope=$3 board=$4 capability target
   [[ -f $file && $(value "$file" CONFIG_FQCN) == "$fqcn" &&
     $(value "$file" PROFILE_FORMAT) == "$profile_format" ]] || return 1
   valid_protocol_abi "$scope" "$board" "$(value "$file" PROTOCOL_ABI)" || return 1
@@ -1195,30 +1195,20 @@ profile_cache_valid() {
   if [[ $scope == spmv ]]; then
     [[ $capability == run && $target == SPMV && $(value "$file" HOST_ABI) == none &&
       $(value "$file" ACCELERATOR_HOST_KIND) == spmv &&
-      $(value "$file" ACCELERATOR_HOST_ABI) == spmv-csr5-verilator-v3 &&
+      $(value "$file" ACCELERATOR_HOST_ABI) == spmv-input-smoke-v1 &&
       -z $(value "$file" XLEN) && -z $(value "$file" ISA_STRING) &&
       -z $(value "$file" NEMU_PRESET) && -z $(value "$file" NEMU_BACKEND) &&
-      $(value "$file" SPMV_HBM_PC_COUNT) == 1 &&
-      $(value "$file" SPMV_AXI_ADDR_WIDTH) == 64 &&
-      $(value "$file" SPMV_AXI_DATA_WIDTH) == 512 &&
-      $(value "$file" SPMV_A_WIDTH) == 32 && $(value "$file" SPMV_X_WIDTH) == 32 &&
-      $(value "$file" SPMV_PRODUCT_WIDTH) == 32 && $(value "$file" SPMV_OMEGA) == 8 &&
-      $(value "$file" SPMV_SIGMA) == 16 && $(value "$file" SPMV_MAX_BLOCK_ROWS) == 8192 &&
-      $(value "$file" SPMV_MAX_BLOCK_COLS) == 8192 &&
-      $(value "$file" SPMV_X_READ_LANES) == 8 && $(value "$file" SPMV_MULTIPLIER_COUNT) == 8 &&
-      $(value "$file" SPMV_MULTIPLIER_LATENCY) == 4 && $(value "$file" SPMV_MULTIPLIER_II) == 1 &&
-      $(value "$file" SPMV_BURST_BEATS) == 64 && $(value "$file" SPMV_OUTSTANDING_BURSTS) == 2 &&
-      $(value "$file" SPMV_INPUT_FIFO_DEPTH) == 128 &&
-      ($(value "$file" SPMV_PERFORMANCE_HTML) == 0 || $(value "$file" SPMV_PERFORMANCE_HTML) == 1) &&
-      ($(value "$file" SPMV_PIPELINE_HTML) == 0 || $(value "$file" SPMV_PIPELINE_HTML) == 1) &&
-      ($(value "$file" SPMV_PIPELINE_HTML) == 0 || $(value "$file" SPMV_PERFORMANCE_HTML) == 1) &&
-      ($(value "$file" SPMV_PERFORMANCE_HTML) == 0 ||
-        $(value "$file" SPMV_PERFORMANCE_FIRST_SUBCONFIG) == mul-add-pipeline-html) &&
-      ($(value "$file" SPMV_PERFORMANCE_HTML) == 1 ||
-        $(value "$file" SPMV_PERFORMANCE_FIRST_SUBCONFIG) == none) ]] || return 1
-    x_mode=$(value "$file" SPMV_X_MODE)
-    x_replicas=$(value "$file" SPMV_X_REPLICAS)
-    [[ $x_mode == paired && $x_replicas == 0 || $x_mode == cached && $x_replicas == 4 ]] || return 1
+      -n $(value "$file" SPMV_INPUT_A_READER_COUNT) &&
+      -n $(value "$file" SPMV_INPUT_X_READER_COUNT) &&
+      -n $(value "$file" SPMV_INPUT_HBM_CHANNEL_COUNT) &&
+      -n $(value "$file" SPMV_INPUT_HBM_BASE) &&
+      -n $(value "$file" SPMV_INPUT_HBM_BYTES) &&
+      -n $(value "$file" SPMV_INPUT_HBM_CHANNEL_ALIGNMENT_BYTES) &&
+      $(value "$file" SPMV_INPUT_A_READER_COUNT) == $(value "$file" SPMV_INPUT_HBM_CHANNEL_COUNT) &&
+      $(value "$file" SPMV_INPUT_AXI_ADDR_WIDTH) == 64 &&
+      $(value "$file" SPMV_INPUT_AXI_DATA_WIDTH) == 512 &&
+      -n $(value "$file" SPMV_INPUT_AXI_ID_WIDTH) &&
+      -z $(value "$file" XLEN) && -z $(value "$file" FPGA_BOARD) ]] || return 1
     return 0
   fi
   case "$capability" in
@@ -1296,21 +1286,19 @@ verify_spmv_model_assets() {
   accelerator_abi=$(value "$profile" ACCELERATOR_HOST_ABI)
   [[ -f $profile && $(value "$profile" SCOPE) == spmv &&
     $(value "$profile" HOST_ABI) == none &&
-    ($accelerator_abi == spmv-csr5-verilator-v1 ||
-      $accelerator_abi == spmv-csr5-verilator-v2 ||
-      $accelerator_abi == spmv-csr5-verilator-v3) ]] || {
+    $accelerator_abi == spmv-input-smoke-v1 &&
+    $(value "$profile" PROTOCOL_ABI) == spmv-input-v1 ]] || {
     echo "构造不是独立 SPMV Verilator ABI：$directory" >&2; return 1;
   }
-  [[ ! -e $directory/abi/nemu ]] || {
-    echo "独立 SPMV 构造不能包含 abi/nemu：$directory" >&2; return 1;
+  [[ ! -e $directory/abi/nemu && ! -e $directory/abi/softfloat && ! -e $directory/fpga ]] || {
+    echo "SPMV 输入 smoke 构造不能包含 NEMU、SoftFloat 或 FPGA 资产：$directory" >&2; return 1;
   }
   local asset
   for asset in \
-    abi/rtl/SpmvOneHbmCsr5MulSimulationTop.sv \
-    abi/verilator/VSpmvOneHbmCsr5MulSimulationTop.h \
-    abi/verilator/libVSpmvOneHbmCsr5MulSimulationTop.a \
-    abi/verilator/libverilated.a \
-    abi/softfloat/softfloat.a; do
+    abi/rtl/SpmvInputTop.sv \
+    abi/verilator/VSpmvInputTop.h \
+    abi/verilator/libVSpmvInputTop.a \
+    abi/verilator/libverilated.a; do
     [[ -s $directory/$asset ]] || {
       echo "独立 SPMV 构造缺少资产：$directory/$asset" >&2; return 1;
     }
@@ -1328,17 +1316,11 @@ verify_spmv_host_assets() {
       echo "独立 SPMV host 元数据与 profile 不匹配：$directory（$key）" >&2; return 1;
     }
   done
-  if [[ $(value "$profile" ACCELERATOR_HOST_ABI) == spmv-csr5-verilator-v3 &&
-    $(value "$host" SPMV_X_MODE) != $(value "$profile" SPMV_X_MODE) ]]; then
-    echo "独立 SPMV host 的 X 模式与 profile 不匹配：$directory" >&2; return 1
-  fi
-  local key expected actual
-  for key in SPMV_PERFORMANCE_HTML SPMV_PIPELINE_HTML SPMV_PERFORMANCE_FIRST_SUBCONFIG; do
-    expected=$(value "$profile" "$key")
-    [[ -z $expected ]] && continue
-    actual=$(value "$host" "$key")
-    [[ $actual == "$expected" ]] || {
-      echo "独立 SPMV host 的性能报告设置与 profile 不匹配：$directory（$key）" >&2; return 1;
+  for key in SPMV_INPUT_A_READER_COUNT SPMV_INPUT_X_READER_COUNT SPMV_INPUT_HBM_CHANNEL_COUNT \
+    SPMV_INPUT_HBM_BASE SPMV_INPUT_HBM_BYTES SPMV_INPUT_HBM_CHANNEL_ALIGNMENT_BYTES \
+    SPMV_INPUT_AXI_ADDR_WIDTH SPMV_INPUT_AXI_DATA_WIDTH SPMV_INPUT_AXI_ID_WIDTH; do
+    [[ $(value "$host" "$key") == $(value "$profile" "$key") ]] || {
+      echo "独立 SPMV host 输入布局与 profile 不匹配：$directory（$key）" >&2; return 1;
     }
   done
 }
@@ -2097,8 +2079,8 @@ do_spmv_simulation_host_build_directory() {
     echo "独立 SPMV build-host 需要已保存的完整构造：$directory" >&2; return 1;
   }
   verify_spmv_model_assets "$directory" || return 1
-  [[ $(value "$profile" ACCELERATOR_HOST_ABI) == spmv-csr5-verilator-v3 ]] || {
-    echo "保存构造仍是冻结的 SPMV v1/v2 ABI，不能用当前 host 刷新；请先执行 make -C $npc_root rebuild version=$(version_index_from_tag "$directory")" >&2
+  [[ $(value "$profile" ACCELERATOR_HOST_ABI) == spmv-input-smoke-v1 ]] || {
+    echo "保存构造不是当前 SPMV 输入 smoke ABI，不能只刷新 host；请先执行 make -C $npc_root rebuild version=$(version_index_from_tag "$directory")" >&2
     return 1
   }
   fqcn=$(value "$profile" CONFIG_FQCN)
@@ -2133,28 +2115,16 @@ do_spmv_simulation_host_build_directory() {
     echo "新 SPMV host 资产不完整：$fqcn" >&2
     return 1
   }
-  for key in CONFIG_FQCN ACCELERATOR_HOST_KIND ACCELERATOR_HOST_ABI PROTOCOL_ABI; do
+  for key in CONFIG_FQCN ACCELERATOR_HOST_KIND ACCELERATOR_HOST_ABI PROTOCOL_ABI \
+    SPMV_INPUT_A_READER_COUNT SPMV_INPUT_X_READER_COUNT SPMV_INPUT_HBM_CHANNEL_COUNT \
+    SPMV_INPUT_HBM_BASE SPMV_INPUT_HBM_BYTES SPMV_INPUT_HBM_CHANNEL_ALIGNMENT_BYTES \
+    SPMV_INPUT_AXI_ADDR_WIDTH SPMV_INPUT_AXI_DATA_WIDTH SPMV_INPUT_AXI_ID_WIDTH; do
     [[ $(value "$host_stage/host.env" "$key") == $(value "$profile" "$key") ]] || {
       rm -rf "$host_stage" "$log_stage"
       echo "新 SPMV host 元数据与保存 profile 不匹配：$fqcn（$key）" >&2
       return 1
     }
   done
-  [[ $(value "$host_stage/host.env" SPMV_X_MODE) == $(value "$profile" SPMV_X_MODE) ]] || {
-    rm -rf "$host_stage" "$log_stage"
-    echo "新 SPMV host 的 X 模式与保存 profile 不匹配：$fqcn" >&2
-    return 1
-  }
-
-  local report_key
-  for report_key in SPMV_PERFORMANCE_HTML SPMV_PIPELINE_HTML SPMV_PERFORMANCE_FIRST_SUBCONFIG; do
-    [[ $(value "$host_stage/host.env" "$report_key") == $(value "$profile" "$report_key") ]] || {
-      rm -rf "$host_stage" "$log_stage"
-      echo "新 SPMV host 的性能报告设置与 profile 不匹配：$fqcn（$report_key）" >&2
-      return 1
-    }
-  done
-
   [[ ! -e $directory/abi/spmv ]] || mv "$directory/abi/spmv" "$previous_host"
   if ! mv "$host_stage" "$directory/abi/spmv"; then
     [[ ! -e $previous_host ]] || mv "$previous_host" "$directory/abi/spmv"
@@ -2188,7 +2158,7 @@ do_accelerator_host_build() {
       }
       make --no-print-directory -C "$host_root" build-host
       ;;
-    spmv:spmv-csr5-verilator-v3)
+    spmv:spmv-input-smoke-v1)
       [[ -n $directory ]] || {
         echo "独立 SPMV host 必须绑定已保存的 Verilator 构造" >&2
         return 1
@@ -2218,7 +2188,7 @@ do_accelerator_run() {
     resolved=$(resolve_catalog "$request")
     IFS='|' read -r fqcn _ <<< "$resolved"
     profile=$(profile_for "$fqcn")
-    if [[ $(value "$profile" ACCELERATOR_HOST_ABI) == spmv-csr5-verilator-v3 ]]; then
+    if [[ $(value "$profile" ACCELERATOR_HOST_ABI) == spmv-input-smoke-v1 ]]; then
       directory="$root/$fqcn"
       if [[ ! -d $directory ]] || ! version_directory_is_valid "$directory"; then
         do_build "$fqcn" 0
@@ -2234,16 +2204,10 @@ do_accelerator_run() {
       host_root="$workspace/accelerator-sim/spmv"
       make --no-print-directory -C "$host_root" run "mainargs=$mainargs"
       ;;
-    spmv:spmv-csr5-verilator-v1|spmv:spmv-csr5-verilator-v2|spmv:spmv-csr5-verilator-v3)
+    spmv:spmv-input-smoke-v1)
       verify_assets "$directory"
       host="$directory/abi/spmv/spmv-host"
-      if [[ $(value "$profile" SPMV_PERFORMANCE_HTML) == 1 ]]; then
-        report_dir="$directory/runtime/spmv/$(date +%s%N)-$$"
-        mkdir -p "$report_dir"
-        SPMV_REPORT_DIR="$report_dir" "$host" "$mainargs"
-      else
-        "$host" "$mainargs"
-      fi
+      "$host" "$mainargs"
       ;;
     *)
       echo "$fqcn 不能通过 accelerator run 入口执行" >&2
@@ -2272,11 +2236,7 @@ do_host_build() {
     else selected_profile=$(profile_for "$fqcn" 1)
     fi
     case "$(value "$selected_profile" ACCELERATOR_HOST_ABI)" in
-      spmv-csr5-verilator-v1|spmv-csr5-verilator-v2)
-        echo "保存构造仍是冻结的 SPMV v1/v2 ABI，不能只刷新 host；请先执行 make -C $npc_root rebuild version=$(version_index_from_tag "$directory")" >&2
-        return 1
-        ;;
-      spmv-csr5-verilator-v3)
+      spmv-input-smoke-v1)
         [[ -d $directory ]] || {
           echo "独立 SPMV build-host 找不到保存构造：$fqcn；请先执行 make -C $npc_root build config=$(config_short_name "$fqcn")" >&2
           return 1
@@ -2376,10 +2336,7 @@ do_host_build_all() {
     accelerator_abi=$(value "$directory/profile.env" ACCELERATOR_HOST_ABI)
     (
       case "$accelerator_abi" in
-        spmv-csr5-verilator-v3) do_spmv_simulation_host_build_directory "$directory" ;;
-        spmv-csr5-verilator-v1|spmv-csr5-verilator-v2)
-          echo "跳过冻结的 SPMV v1/v2 构造 host 刷新：$(value "$directory/profile.env" CONFIG_FQCN)" >&2
-          ;;
+        spmv-input-smoke-v1) do_spmv_simulation_host_build_directory "$directory" ;;
         *) do_host_build_directory "$directory" ;;
       esac
     ) &

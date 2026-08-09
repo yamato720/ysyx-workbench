@@ -35,8 +35,8 @@ GoldenResult computeGolden(const CsrMatrix& matrix, const std::vector<double>& i
   if (matrix.columnIndices.size() != matrix.values.size()) {
     throw std::runtime_error("CSR column/value count mismatch");
   }
-  if (input.size() != matrix.rows) {
-    throw std::runtime_error("input vector length must equal matrix size");
+  if (input.size() != matrix.columns) {
+    throw std::runtime_error("input vector length must equal matrix column count");
   }
 
   GoldenResult result;

@@ -22,14 +22,14 @@
 
 | 名称 | 用途 | 终端可否直接挂载 |
 | --- | --- | --- |
-| `HostConstruction`、`AcceleratorHostConstruction`、`SpmvHostConstruction`、`NemuSimulationConstruction`、`FpgaConstruction`、`MakeTerminal` | 底层运行接口与约束；SPMV host 额外提供 HTML report 开关 | 否；base trait 只允许 core 组合 |
+| `HostConstruction`、`AcceleratorHostConstruction`、`NemuSimulationConstruction`、`FpgaConstruction`、`MakeTerminal` | 底层运行接口与约束；SPMV 输入 smoke host 与 CPU golden 共用 accelerator host 合同 | 否；base trait 只允许 core 组合 |
 | `CheckOnlyConstruction` | 仅检查硬件 | 不适用；由检查 Config 直接挂载 |
 | `LocalNpcTerminal`、`LocalSocTerminal` | 完整的本地 NPC/SoC 终端预设；默认 `LocalPipelineTrace` | 是；对应终端只挂载其中一个 |
 | `U55cNpcTerminal`、`U55cSocTerminal` | 完整的 U55C NPC/SoC 终端预设；默认 U55C NEMU 与工具链配方 | 是；对应终端只挂载其中一个 |
 | `U55cNpcPerformanceMonitorTerminal` | U55C 裸 NPC 的 batch-only 性能监测终端预设 | 是；只供 v13 监测 Config 挂载 |
 | `U55cSpmvSynthesisTerminal` | U55C SPMV 的 synthesize-only 资产与软件 golden host 终端预设 | 是；只供 FP32 资源探针挂载 |
 | `U55cSpmvBitstreamTerminal` | U55C SPMV 的 bitstream-only 资产与软件 golden host 终端预设 | 是；只供 FP64/8-lane 压力探针挂载 |
-| `LocalSpmvPerformanceMonitorTerminal` | 单 HBM CSR5 paired-X 的性能监测终端，首个子配置为乘加流水线 HTML | 是；只供 SPMV report Config 挂载 |
+| `LocalSpmvInputTerminal` | 16 路 A、1 路 X 输入顶层的本地 Verilator smoke 终端 | 是；只供 `SpmvInputSimulationConfig` 挂载 |
 | `Zcu102NpcTerminal`、`Zcu102SocTerminal` | 完整的 ZCU102 NPC/SoC 终端预设；默认 ZCU102 NEMU 与工具链配方 | 是；对应终端只挂载其中一个 |
 
 十一种 terminal 层预设 trait 提供运行或综合所需的 FPGA/NEMU/独立加速器配方、自动目录身份、scope 和 target；一个终端只挂载一个，且

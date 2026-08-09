@@ -32,20 +32,11 @@ trait U55cSpmvBitstreamTerminalCore
   override protected def configuredAcceleratorHost: AcceleratorHostConfig = AcceleratorHostConfig.SpmvGolden
 }
 
-/** 单 HBM CSR5 乘法器的本地 Verilator 终端集群。 */
-trait LocalSpmvSimulationTerminalCore
-    extends SpmvSimulationConstruction with MakeTerminal {
+/** Cuper 输入顶层 smoke 的本地 Verilator 终端集群。 */
+trait LocalSpmvInputTerminalCore
+    extends SpmvInputSimulationConstruction with MakeTerminal {
   override protected def configuredAcceleratorHost: AcceleratorHostConfig =
-    AcceleratorHostConfig.SpmvCsr5Verilator
-}
-
-/** 单 HBM CSR5 仿真的性能监测终端，首个 report 子配置为乘加流水线 HTML。 */
-trait LocalSpmvPerformanceMonitorTerminalCore
-    extends SpmvSimulationConstruction with MakeTerminal {
-  override protected def configuredAcceleratorHost: AcceleratorHostConfig =
-    AcceleratorHostConfig.SpmvCsr5Verilator
-  override protected def configuredSpmvPerformanceMonitor: SpmvPerformanceMonitorConfig =
-    SpmvPerformanceMonitorConfig.MulAddPipelineHtml
+    AcceleratorHostConfig.SpmvInputSmoke
 }
 
 /** ZCU102 终端直接包含的 FPGA 运行集群。 */

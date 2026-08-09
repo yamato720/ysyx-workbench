@@ -25,8 +25,7 @@ object ConfigCatalogGenerator {
   private val terminalTraits = Map(
     "LocalNpcTerminal" -> ("npc", "NPC"),
     "LocalSocTerminal" -> ("soc", "SOC"),
-    "LocalSpmvSimulationTerminal" -> ("spmv", "SPMV"),
-    "LocalSpmvPerformanceMonitorTerminal" -> ("spmv", "SPMV"),
+    "LocalSpmvInputTerminal" -> ("spmv", "SPMV"),
     "U55cNpcTerminal" -> ("fpga", "NPC"),
     "U55cNpcPerformanceMonitorTerminal" -> ("fpga", "NPC"),
     "U55cSpmvSynthesisTerminal" -> ("fpga", "SPMV"),

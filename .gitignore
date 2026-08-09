@@ -27,6 +27,8 @@
 !/accelerator-sim/spmv/README.md
 !/accelerator-sim/spmv/*.cpp
 !/accelerator-sim/spmv/*.hpp
+!/accelerator-sim/spmv/encoding/
+!/accelerator-sim/spmv/encoding/**
 !init.sh
 fceux-am.worktrees/
 /log/

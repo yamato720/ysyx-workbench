@@ -14,14 +14,8 @@ trait LocalSocTerminal extends LocalNemuTerminalCore {
   final override val constructionTarget: String = "SOC"
 }
 
-/** 不含 CPU/NEMU 的本地 SPMV Verilator 终端。 */
-trait LocalSpmvSimulationTerminal extends LocalSpmvSimulationTerminalCore {
-  final override val constructionScope: String = "spmv"
-  final override val constructionTarget: String = "SPMV"
-}
-
-/** 不含 CPU/NEMU 且输出 SPMV 性能 HTML 的本地 Verilator 终端。 */
-trait LocalSpmvPerformanceMonitorTerminal extends LocalSpmvPerformanceMonitorTerminalCore {
+/** 不含 CPU/NEMU 的本地 SPMV 输入 smoke 终端。 */
+trait LocalSpmvInputTerminal extends LocalSpmvInputTerminalCore {
   final override val constructionScope: String = "spmv"
   final override val constructionTarget: String = "SPMV"
 }

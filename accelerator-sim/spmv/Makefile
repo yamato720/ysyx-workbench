@@ -7,82 +7,102 @@ LDLIBS ?=
 
 BUILD_DIR ?= $(CURDIR)/build
 HOST_BIN := $(BUILD_DIR)/spmv-host
-SOURCES := host.cpp golden.cpp
-OBJECTS := $(addprefix $(BUILD_DIR)/,$(SOURCES:.cpp=.o))
-DEPFILES := $(OBJECTS:.o=.d)
+ENCODING_TEST_BIN := $(BUILD_DIR)/encoding-test
+ENCODING_SOURCES := encoding/encoder.cpp encoding/cuper/cuper.cpp encoding/cuper/report.cpp
+HOST_SOURCES := host.cpp golden.cpp $(ENCODING_SOURCES)
+HOST_OBJECTS := $(addprefix $(BUILD_DIR)/,$(HOST_SOURCES:.cpp=.o))
+ENCODING_OBJECTS := $(addprefix $(BUILD_DIR)/,$(ENCODING_SOURCES:.cpp=.o))
+ENCODING_TEST_OBJECT := $(BUILD_DIR)/encoding/encoding_test.o
+DEPFILES := $(sort $(HOST_OBJECTS:.o=.d) $(ENCODING_TEST_OBJECT:.o=.d))
+ENCODING ?= cuper
+ENCODING_TEST_DATASET ?= n512
 ACCELERATOR_DATA_ROOT ?= $(abspath $(CURDIR)/../data)
 SPMV_GOLDEN_DIR := $(BUILD_DIR)/golden
+SPMV_ENCODING_REPORT_DIR ?= $(BUILD_DIR)/encoding
 CPPFLAGS += -DACCELERATOR_SIM_DEFAULT_DATA_ROOT=\"$(ACCELERATOR_DATA_ROOT)\"
 
-export ACCELERATOR_DATA_ROOT SPMV_GOLDEN_DIR mainargs
+SPMV_PROFILE_FILE ?= $(if $(strip $(CONSTRUCTION_PROFILE)),$(CONSTRUCTION_PROFILE),$(if $(strip $(CONSTRUCTION_DIR)),$(CONSTRUCTION_DIR)/profile.env,))
+spmv_profile_value = $(shell test -n "$(SPMV_PROFILE_FILE)" && test -f "$(SPMV_PROFILE_FILE)" && sed -n 's/^$(1)=//p' "$(SPMV_PROFILE_FILE)" | tail -n 1)
+
+SPMV_INPUT_A_READER_COUNT ?= $(call spmv_profile_value,SPMV_INPUT_A_READER_COUNT)
+SPMV_INPUT_X_READER_COUNT ?= $(call spmv_profile_value,SPMV_INPUT_X_READER_COUNT)
+SPMV_INPUT_HBM_CHANNEL_COUNT ?= $(call spmv_profile_value,SPMV_INPUT_HBM_CHANNEL_COUNT)
+SPMV_INPUT_HBM_BASE ?= $(call spmv_profile_value,SPMV_INPUT_HBM_BASE)
+SPMV_INPUT_HBM_BYTES ?= $(call spmv_profile_value,SPMV_INPUT_HBM_BYTES)
+SPMV_INPUT_HBM_CHANNEL_ALIGNMENT_BYTES ?= $(call spmv_profile_value,SPMV_INPUT_HBM_CHANNEL_ALIGNMENT_BYTES)
+SPMV_INPUT_AXI_ADDR_WIDTH ?= $(call spmv_profile_value,SPMV_INPUT_AXI_ADDR_WIDTH)
+SPMV_INPUT_AXI_DATA_WIDTH ?= $(call spmv_profile_value,SPMV_INPUT_AXI_DATA_WIDTH)
+SPMV_INPUT_AXI_ID_WIDTH ?= $(call spmv_profile_value,SPMV_INPUT_AXI_ID_WIDTH)
+
+# 未绑定 construction 时保留独立编码 smoke test 的默认输入布局；一旦绑定 profile，
+# 上面的 ?= 会优先采用 Config 导出的值。
+SPMV_INPUT_A_READER_COUNT ?= 16
+SPMV_INPUT_X_READER_COUNT ?= 1
+SPMV_INPUT_HBM_CHANNEL_COUNT ?= 16
+SPMV_INPUT_HBM_BASE ?= 0x80000000
+SPMV_INPUT_HBM_BYTES ?= 134217728
+SPMV_INPUT_HBM_CHANNEL_ALIGNMENT_BYTES ?= 4096
+SPMV_INPUT_AXI_ADDR_WIDTH ?= 64
+SPMV_INPUT_AXI_DATA_WIDTH ?= 512
+SPMV_INPUT_AXI_ID_WIDTH ?= 4
+
+export ACCELERATOR_DATA_ROOT SPMV_GOLDEN_DIR SPMV_ENCODING_REPORT_DIR mainargs \
+	SPMV_INPUT_A_READER_COUNT SPMV_INPUT_X_READER_COUNT SPMV_INPUT_HBM_CHANNEL_COUNT \
+	SPMV_INPUT_HBM_BASE SPMV_INPUT_HBM_BYTES SPMV_INPUT_HBM_CHANNEL_ALIGNMENT_BYTES \
+	SPMV_INPUT_AXI_ADDR_WIDTH SPMV_INPUT_AXI_DATA_WIDTH SPMV_INPUT_AXI_ID_WIDTH
 
 ifneq ($(strip $(CONSTRUCTION_DIR)),)
 VERILATOR_ROOT := $(shell dirname $$(dirname $$(command -v verilator)))/share/verilator
 MODEL_DIR := $(CONSTRUCTION_DIR)/abi/verilator
-SOFTFLOAT_DIR := $(CONSTRUCTION_DIR)/abi/softfloat
-SPMV_X_MODE ?= $(shell sed -n 's/^SPMV_X_MODE=//p' "$(CONSTRUCTION_DIR)/profile.env")
-SPMV_PERFORMANCE_HTML ?= $(shell sed -n 's/^SPMV_PERFORMANCE_HTML=//p' "$(CONSTRUCTION_DIR)/profile.env")
-SPMV_PIPELINE_HTML ?= $(shell sed -n 's/^SPMV_PIPELINE_HTML=//p' "$(CONSTRUCTION_DIR)/profile.env")
-ifeq ($(SPMV_X_MODE),cached)
-CPPFLAGS += -DSPMV_CACHED_X
-else ifneq ($(SPMV_X_MODE),paired)
-$(error 保存构造的 SPMV_X_MODE 必须是 paired 或 cached)
-endif
-SPMV_PERFORMANCE_HTML ?= 0
-SPMV_PIPELINE_HTML ?= 0
-ifeq ($(SPMV_PIPELINE_HTML),1)
-CPPFLAGS += -DSPMV_PIPELINE_HTML=1
-else
-CPPFLAGS += -DSPMV_PIPELINE_HTML=0
-endif
-ifeq ($(SPMV_PERFORMANCE_HTML),1)
-CPPFLAGS += -DSPMV_PERFORMANCE_HTML=1
-else
-CPPFLAGS += -DSPMV_PERFORMANCE_HTML=0
-endif
-CPPFLAGS += -DSPMV_CSR5_VERILATOR -I$(MODEL_DIR) -isystem $(VERILATOR_ROOT)/include \
-	-isystem $(VERILATOR_ROOT)/include/vltstd -isystem $(SOFTFLOAT_DIR)/include
-LDLIBS += $(MODEL_DIR)/libVSpmvOneHbmCsr5MulSimulationTop.a \
-	$(MODEL_DIR)/libverilated.a $(SOFTFLOAT_DIR)/softfloat.a -pthread -latomic
+CPPFLAGS += -DSPMV_INPUT_SMOKE_VERILATOR -I$(MODEL_DIR) -isystem $(VERILATOR_ROOT)/include \
+	-isystem $(VERILATOR_ROOT)/include/vltstd
+LDLIBS += $(MODEL_DIR)/libVSpmvInputTop.a \
+	$(MODEL_DIR)/libverilated.a -pthread -latomic
 endif
 
-.PHONY: build-host build-simulation-host hbm-dpi-test hbm-protocol-test run
+.PHONY: build-host build-simulation-host encode cuper-a-test encoding-html-test encoding-test run
 
 build-host: $(HOST_BIN)
 
 build-simulation-host:
 	@test -n "$(strip $(CONSTRUCTION_DIR))" || { echo 'build-simulation-host 缺少 CONSTRUCTION_DIR' >&2; exit 2; }
-	@test -s "$(MODEL_DIR)/VSpmvOneHbmCsr5MulSimulationTop.h"
-	@test -s "$(MODEL_DIR)/libVSpmvOneHbmCsr5MulSimulationTop.a"
+	@test -s "$(MODEL_DIR)/VSpmvInputTop.h"
+	@test -s "$(MODEL_DIR)/libVSpmvInputTop.a"
 	@test -s "$(MODEL_DIR)/libverilated.a"
-	@test -s "$(SOFTFLOAT_DIR)/softfloat.a"
 	@$(MAKE) --no-print-directory "$(HOST_BIN)" CONSTRUCTION_DIR="$(CONSTRUCTION_DIR)" BUILD_DIR="$(BUILD_DIR)"
-	@printf 'HOST_FORMAT=1\nCONFIG_FQCN=%s\nACCELERATOR_HOST_KIND=spmv\nACCELERATOR_HOST_ABI=spmv-csr5-verilator-v3\nPROTOCOL_ABI=spmv-one-hbm-csr5-mul-v3\nSPMV_X_MODE=%s\nSPMV_PERFORMANCE_HTML=%s\nSPMV_PIPELINE_HTML=%s\nSPMV_PERFORMANCE_FIRST_SUBCONFIG=%s\n' \
-		"$$(sed -n 's/^CONFIG_FQCN=//p' "$(CONSTRUCTION_DIR)/profile.env")" \
-		"$(SPMV_X_MODE)" "$(SPMV_PERFORMANCE_HTML)" "$(SPMV_PIPELINE_HTML)" \
-		"$$(sed -n 's/^SPMV_PERFORMANCE_FIRST_SUBCONFIG=//p' "$(CONSTRUCTION_DIR)/profile.env")" > "$(BUILD_DIR)/host.env"
+	@printf 'HOST_FORMAT=1\nCONFIG_FQCN=%s\nACCELERATOR_HOST_KIND=spmv\nACCELERATOR_HOST_ABI=spmv-input-smoke-v1\nPROTOCOL_ABI=spmv-input-v1\nSPMV_INPUT_A_READER_COUNT=%s\nSPMV_INPUT_X_READER_COUNT=%s\nSPMV_INPUT_HBM_CHANNEL_COUNT=%s\nSPMV_INPUT_HBM_BASE=%s\nSPMV_INPUT_HBM_BYTES=%s\nSPMV_INPUT_HBM_CHANNEL_ALIGNMENT_BYTES=%s\nSPMV_INPUT_AXI_ADDR_WIDTH=%s\nSPMV_INPUT_AXI_DATA_WIDTH=%s\nSPMV_INPUT_AXI_ID_WIDTH=%s\n' \
+		"$$(sed -n 's/^CONFIG_FQCN=//p' "$(SPMV_PROFILE_FILE)")" \
+		"$(SPMV_INPUT_A_READER_COUNT)" "$(SPMV_INPUT_X_READER_COUNT)" \
+		"$(SPMV_INPUT_HBM_CHANNEL_COUNT)" "$(SPMV_INPUT_HBM_BASE)" "$(SPMV_INPUT_HBM_BYTES)" \
+		"$(SPMV_INPUT_HBM_CHANNEL_ALIGNMENT_BYTES)" "$(SPMV_INPUT_AXI_ADDR_WIDTH)" \
+		"$(SPMV_INPUT_AXI_DATA_WIDTH)" "$(SPMV_INPUT_AXI_ID_WIDTH)" > "$(BUILD_DIR)/host.env"
 
-hbm-dpi-test: build-simulation-host
-	@"$(HOST_BIN)" --self-test-hbm-dpi
+encode: build-host
+	@"$(HOST_BIN)" --encode "$(ENCODING)" "$${mainargs:-}"
 
-hbm-protocol-test:
-	@test -n "$(strip $(CONSTRUCTION_DIR))" || { echo 'hbm-protocol-test 缺少 CONSTRUCTION_DIR' >&2; exit 2; }
-	@mkdir -p "$(BUILD_DIR)"
-	@rm -rf "$(BUILD_DIR)/hbm-protocol-test"
-	@verilator -Wall -Wno-fatal --quiet --quiet-stats --sv --cc --exe --build --no-timing \
-		-j 0 --top-module SpmvHbmDpiReadSlave \
-		-Mdir "$(BUILD_DIR)/hbm-protocol-test" \
-		"$(CONSTRUCTION_DIR)/abi/rtl/SpmvHbmDpiReadSlave.sv" \
-		"$(CURDIR)/hbm_dpi_protocol_test.cpp"
-	@"$(BUILD_DIR)/hbm-protocol-test/VSpmvHbmDpiReadSlave"
+cuper-a-test: build-host
+	@"$(HOST_BIN)" --check-cuper-a "$${mainargs:-$(ENCODING_TEST_DATASET)}"
+
+encoding-test: $(ENCODING_TEST_BIN)
+	@"$(ENCODING_TEST_BIN)"
+
+encoding-html-test: build-host
+	@command -v node >/dev/null || { echo 'encoding-html-test 需要 node' >&2; exit 2; }
+	@"$(HOST_BIN)" --encode "$(ENCODING)" "$${mainargs:-$(ENCODING_TEST_DATASET)}"
+	@node "$(CURDIR)/encoding/html_report_test.js" \
+		"$(SPMV_ENCODING_REPORT_DIR)/$(ENCODING)/$${mainargs:-$(ENCODING_TEST_DATASET)}.html"
 
 run: build-host
 	@"$(HOST_BIN)" "$${mainargs:-}"
 
-$(HOST_BIN): $(OBJECTS)
-	$(CXX) $(CXXFLAGS) $(OBJECTS) $(LDLIBS) -o "$@"
+$(HOST_BIN): $(HOST_OBJECTS)
+	$(CXX) $(CXXFLAGS) $(HOST_OBJECTS) $(LDLIBS) -o "$@"
+
+$(ENCODING_TEST_BIN): $(ENCODING_TEST_OBJECT) $(ENCODING_OBJECTS)
+	$(CXX) $(CXXFLAGS) $^ -o "$@"
 
 $(BUILD_DIR)/%.o: %.cpp golden.hpp | $(BUILD_DIR)
+	@mkdir -p "$(dir $@)"
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -MMD -MP -c "$<" -o "$@"
 
 $(BUILD_DIR):

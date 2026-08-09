@@ -206,7 +206,7 @@ fp-dpi-test: softfloat-lib
 # 独立 SPMV 仿真只生成自己的顶层与 Verilator 模型，不进入 NPC/NEMU 构造。
 SPMV_SIM_OUT ?= $(CURDIR)/generated-spmv-simulation
 SPMV_SIM_MODEL_DIR ?= $(obj_dir)/spmv-simulation
-SPMV_SIM_TOP := SpmvOneHbmCsr5MulSimulationTop
+SPMV_SIM_TOP := SpmvInputTop
 
 spmv-sim-elaborate:
 	@set -e; \
@@ -214,10 +214,8 @@ spmv-sim-elaborate:
 	mkdir -p "$(SPMV_SIM_OUT)"; \
 	cd "$(CURDIR)"; \
 	NPC_SCALA_CONFIG="$(CONFIG_FQCN)" SPMV_ELABORATE_OUTPUT_DIR="$(SPMV_SIM_OUT)" \
-		sbt -Dnpc.config="$(CONFIG_FQCN)" "root/runMain spmv.ElaborateSpmvOneHbmCsr5MulSimulation"; \
-	test -s "$(SPMV_SIM_OUT)/$(SPMV_SIM_TOP).sv"; \
-	test -s "$(SPMV_SIM_OUT)/SpmvHbmDpiReadSlave.sv"; \
-	test -s "$(SPMV_SIM_OUT)/SpmvF32MulDpi.sv"
+		sbt -Dnpc.config="$(CONFIG_FQCN)" "root/runMain accelerator.spmv.ElaborateSpmvInputTop"; \
+	test -s "$(SPMV_SIM_OUT)/$(SPMV_SIM_TOP).sv"
 
 spmv-sim-verilator: $(if $(filter 1,$(CONSTRUCTION_PHASE_PREREQUISITES)),spmv-sim-elaborate)
 	@set -e; \
@@ -229,7 +227,8 @@ spmv-sim-verilator: $(if $(filter 1,$(CONSTRUCTION_PHASE_PREREQUISITES)),spmv-si
 		-Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM -Wno-CASEINCOMPLETE -Wno-WIDTH \
 		-Wno-UNOPTFLAT -Wno-LATCH -Wno-DECLFILENAME -Wno-PINCONNECTEMPTY \
 		-Wno-TIMESCALEMOD -Wno-UNDRIVEN -Wno-EOFNEWLINE -Wno-BLKSEQ \
-		-Mdir "$(SPMV_SIM_MODEL_DIR)" -f filelist.f -f firrtl_black_box_resource_files.f; \
+		-Mdir "$(SPMV_SIM_MODEL_DIR)" -f filelist.f \
+		$$(test -s firrtl_black_box_resource_files.f && printf '%s' '-f firrtl_black_box_resource_files.f'); \
 	$(MAKE) -s -C "$(SPMV_SIM_MODEL_DIR)" -f "V$(SPMV_SIM_TOP).mk" -j $(shell nproc); \
 	test -s "$(SPMV_SIM_MODEL_DIR)/libV$(SPMV_SIM_TOP).a"; \
 	test -s "$(SPMV_SIM_MODEL_DIR)/libverilated.a"

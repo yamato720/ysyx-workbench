@@ -11,8 +11,8 @@ Chisel；rv-core 保留 ISA 译码与操作码映射，ysyxSoC 保留 Diplomacy 
 一套保存的 NEMU 运行宿主；本地仿真的 DPI 只是该宿主连接 Verilator 模型的内部桥接。
 SPMV 的 `synthesize-only` 和 `bitstream-only` 只描述 FPGA 资产阶段；终端另以
 `AcceleratorHostConstruction` 挂载纯软件 golden host，不构造或运行 NEMU/XRT host，也不进入 Chisel RTL 仿真。
-两个 `SpmvOneHbmCsr5Mul*SimulationConfig` 则是独立的 `scope=spmv` 本地构造，直接冻结 CSR5 RTL、
-512-bit HBM DPI、Verilator 模型、SoftFloat 和对应 host，同样不依赖 NEMU。
+本地唯一的 `scope=spmv` 运行端点是 `SpmvInputSimulationConfig`，只构造输入顶层并执行结构 smoke，
+不包含 CSR5、计算 RTL、DPI 或 SoftFloat。
 
 ## 常用命令
 
@@ -34,13 +34,9 @@ make -C npc build config=U55cSpmv32PcFp32X8192UramResourceProbeConfig
 make -C npc rebuild config=U55cSpmv32PcFp32X8192UramResourceProbeConfig
 make -C npc build config=U55cSpmv32PcFp64X8192UramBitstreamConfig
 make -C npc rebuild config=U55cSpmv32PcFp64X8192UramBitstreamConfig
-make -C npc build config=SpmvOneHbmCsr5MulSimulationConfig
-make -C npc build-host config=SpmvOneHbmCsr5MulSimulationConfig
-make -C npc run config=SpmvOneHbmCsr5MulSimulationConfig mainargs=n512
-make -C npc build config=SpmvOneHbmCsr5MulCachedXSimulationConfig
-make -C npc run config=SpmvOneHbmCsr5MulCachedXSimulationConfig mainargs=n512
-make -C npc build config=SpmvOneHbmCsr5MulPerformanceMonitorSimulationConfig
-make -C npc run config=SpmvOneHbmCsr5MulPerformanceMonitorSimulationConfig mainargs=n512
+make -C npc build config=SpmvInputSimulationConfig
+make -C npc build-host config=SpmvInputSimulationConfig
+make -C npc run config=SpmvInputSimulationConfig
 make -C npc rebuild version=1
 make -C npc resume-post-link config=U55cRv64CacheNpc150MHzPerformanceMonitorFpgaConfig
 make -C npc host-config-list
@@ -94,32 +90,22 @@ make -C am-kernels/tests/cpu-tests run-bat ALL="forwarding matrix-mul fpu" \
 连字符分隔，例如 `D=1,2,3` 与 `D=1-2-3`；所有目标都按删除前的同一张版本表先解析，最后才统一删除和
 重编号，不需要根据中途变化的编号重复执行。两个别名同时给出时必须表示同一集合，顺序与分隔符可以不同。
 
-## 独立 SPMV CSR5 仿真
+## 独立 SPMV 输入 smoke
 
-`SpmvOneHbmCsr5MulSimulationConfig` 与 `SpmvOneHbmCsr5MulCachedXSimulationConfig` 固定同一套单路
-64-bit 地址、512-bit 数据的只读 HBM AXI，
-每次 DPI 调用原子传输一个 64-byte beat。host 自动把矩阵切成不超过 `8192 x 8192` 的二维块并按
-列块分组；同组非空行块合成一条 CSR5 stream。每个块内每 128 个
-CSR 非零元打成 Metadata v2 加 16 个转置 payload beat，不足 128 的 tail 保持块内 CSR 顺序。
-v3 host 把 A 与 X 放在同一 128 MiB backing memory 的两个 4 KiB 分隔区域；配置握手后显式 `start`
-同时启动 A/X。共享 scheduler 以 AXI ID 0/1 区分来源，以全局 `SPMV_HBM_OUTSTANDING=1|2` 控制
-credit，默认 2，并按 burst 公平轮转。paired Config 每个 X beat 提供两个八路 group，完全不实例化
-X cache；cached Config 每 beat 装入连续 16 个 FP32，并使用四份 `512 x 512-bit` 双端口宽 cache。
-multiplier 输出带行边界与 tile context 的 `ProductBeat`，RTL 不做行归约或 Y 写回。
+`SpmvInputSimulationConfig` 固定 `SpmvInputConfig.Cuper16Hbm`：16 个独立 A reader、1 个 X reader、
+16 个 HBM channel，地址窗口为 `0x80000000` 起始的 128 MiB，channel 基地址按 4 KiB 对齐，AXI
+参数为 64-bit 地址、512-bit 数据和 4-bit ID。`SpmvInputTop` 只展开 reader 与 HBM Bundle，暂不连接
+计算、CSR5、结果输出或实际存储模型。
 
-正式构造只有 `elaborate -> softfloat -> verilator -> accelerator-host` 四阶段，资产位于
-`abi/rtl`、`abi/verilator`、`abi/softfloat` 和 `abi/spmv`，不会创建 `abi/nemu`。其 profile 固定
-`HOST_ABI=none`、`ACCELERATOR_HOST_ABI=spmv-csr5-verilator-v3` 和
-`PROTOCOL_ABI=spmv-one-hbm-csr5-mul-v3`，不包含 XLEN、ISA、NEMU 或 CPU cache 字段。
-`build-host` 只用保存构造中的模型与 SoftFloat 重新链接 host；RTL 或协议变化必须执行 `rebuild`。
-`SPMV_DISABLE_OUTPUT_STALLS=1` 用于无输出反压的周期对比；`SPMV_HBM_NO_JITTER=1` 将每个 AR 的首个
-beat 固定为 77 拍，burst 内仍每拍返回一个 512-bit beat。旧 v1/v2 构造仍可用其冻结 host 运行，
-但不能用当前 host-only 流程刷新，必须先完整 `rebuild version=<编号>`。
+正式构造严格只有 `elaborate -> verilator -> accelerator-host` 三阶段，资产位于 `abi/rtl`、
+`abi/verilator` 和 `abi/spmv`，不会创建 `abi/nemu`、`abi/softfloat` 或 FPGA 目录。profile 固定
+`ACCELERATOR_HOST_ABI=spmv-input-smoke-v1`、`PROTOCOL_ABI=spmv-input-v1`，只包含 `SPMV_INPUT_*`
+布局字段和通用构造字段。host 复位顶层后检查 16 路 A 与 1 路 X 的 idle、无 AR、无 output、无 error
+状态；它不验证 HBM 读写或 SpMV 数值结果。
 
-运行时 host 跳过空块和空列组，以固定种子施加输出反压，逐 lane 用 SoftFloat 核对乘积和异常标志，
-再通过全局 NNZ 下标恢复原 CSR 顺序，执行 FP32 RNE 行归约并与独立 golden 逐位比较。不传
-`mainargs` 会列出共享数据目录中的规模并正常退出。
-已有构造优先按 `make -C npc version config=<Spmv Config>` 查到的版本运行。
+独立的 `make -C accelerator-sim/spmv encoding-test`、`cuper-a-test` 和 CPU golden 仍可单独使用，
+它们不依赖该 smoke RTL。输入布局通过构造 profile 传给 Cuper A 编码 smoke；CPU golden 仍读取
+`accelerator-sim/data`，由 `ACCELERATOR_DATA_ROOT` 覆盖数据目录。
 
 ## U55C SPMV 资源探针
 

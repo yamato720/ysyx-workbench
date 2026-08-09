@@ -16,7 +16,7 @@ NEMU 运行宿主；本地仿真的 DPI 只是该宿主连接 Verilator 的内�
 | 公共底层 | `common/base/` | 通用 IP 数据、计算单元选择、FPGA IP attachment、工具链字段模型和不可由终端直挂的构造接口 | 始终编译，不独立生成 | `OperatorIpConfigs.scala`、`IpComputeSelectionTraits.scala`、`FpgaIpAttachmentTraits.scala`、`FpgaToolchainConfigModels.scala`、`ConstructionTraits.scala` |
 | 构造配方 | `common/core/`、`nemu/core/` | 终端直接子项集群、检查 trait、NEMU host 与 FPGA 工具链 case class；不定义硬件 ABI | 所有 Make 终端必需 | `TerminalCoreTraits.scala`、`IpTerminalCoreTraits.scala`、`CheckTraits.scala`、`NemuHostConfig.scala`、`FpgaToolchainConfig.scala` |
 | 终端 trait | `common/TerminalTraits.scala`、`common/IpTerminalTraits.scala` | 前者提供完整 NEMU/FPGA 默认配方、目录身份、scope 和 target；后者只提供 FPGA/NEMU 两种计算单元终端 | 前者为所有 Make 终端必需；后者不进入 Make 目录 | 根部直挂文件 |
-| SPMV 加速器 | `spmv/`、`../accelerators/spmv/` | 独立参数键、CPU-free profile、CSR5 仿真与资源探针 RTL | SPMV 才需要 | `base/SpmvAcceleratorConfig.scala`、`base/SpmvCsr5MulConfig.scala`、`core/SpmvConstructionProfile.scala`、`core/SpmvSimulationProfile.scala` |
+| SPMV 加速器 | `spmv/`、`../accelerators/spmv/` | 独立输入/计算参数键、CPU-free profile、reader/IP 壳与 Cuper 编码输入层 | SPMV 才需要 | `base/SpmvInputConfig.scala`、`base/SpmvAcceleratorConfig.scala`、`core/SpmvInputSimulationProfile.scala` |
 | L1 NPC | `npc/` | 仅依赖 CDE 参数库，不依赖 Rocket/板卡 | 必需 | `core/` 成品与终端 `Configs.scala` |
 | L2 SoC | `ysyx/` | 依赖 L1 与 Rocket CDE | SoC 才需要 | `core/YsyxCore.scala` 与终端 `Configs.scala` |
 | L3 FPGA | `npc/chisel/configs/fpga/common/` | 把 L1/L2 接入 FPGA CDE | FPGA 才需要 | `base/` 与公共 resolver |
@@ -94,8 +94,7 @@ classpath、Make 和 construction manager 在启动前解析公开终端。该�
 | `U55cCacheYsyxSocFpgaConfig` | FPGA（`TARGET=SOC`） | U55C ysyxSoC 教学缓存版本 |
 | `U55cSpmv32PcFp32X8192UramResourceProbeConfig` | FPGA（`TARGET=SPMV`） | 32 路 HBM、每路 8192 项 FP32 UltraRAM X cache 的只综合资源探针 |
 | `U55cSpmv32PcFp64X8192UramBitstreamConfig` | FPGA（`TARGET=SPMV`） | 32 路 HBM、每路四 bank 双端口 FP64 X cache 的 bitstream 压力探针 |
-| `SpmvOneHbmCsr5MulSimulationConfig` | SPMV | 单 PC 公平共享 A/X 的 paired-X CSR5 v3 Verilator 仿真，无宽 X cache |
-| `SpmvOneHbmCsr5MulCachedXSimulationConfig` | SPMV | 同一 PC/延迟/FIFO 规则下，四份宽 X cache 的 CSR5 v3 对照仿真 |
+| `SpmvInputSimulationConfig` | SPMV | 16 路 A、1 路 X 输入顶层的 Verilator 结构 smoke |
 | `Zcu102NpcFpgaConfig` | FPGA（`TARGET=NPC`） | ZCU102 裸 NPC 上板运行 |
 | `Zcu102YsyxSocFpgaConfig` | FPGA（`TARGET=SOC`） | ZCU102 ysyxSoC 上板运行 |
 
@@ -200,8 +199,8 @@ make -C npc build config=U55cSpmv32PcFp32X8192UramResourceProbeConfig
 make -C npc build config=U55cSpmv32PcFp64X8192UramBitstreamConfig
 make -C npc build-host config=U55cSpmv32PcFp64X8192UramBitstreamConfig
 make -C npc run config=U55cSpmv32PcFp64X8192UramBitstreamConfig mainargs=n512
-make -C npc build config=SpmvOneHbmCsr5MulSimulationConfig
-make -C npc build config=SpmvOneHbmCsr5MulCachedXSimulationConfig
+make -C npc build config=SpmvInputSimulationConfig
+make -C npc run config=SpmvInputSimulationConfig
 make -C npc host-build config=U55cRv64Npc300MHzFpgaConfig
 make -C npc host-build version=1
 make -C npc rebuild config=U55cRv64Npc300MHzFpgaConfig
@@ -228,27 +227,15 @@ SPMV profile 以 `HOST_ABI=none` 表示正式 FPGA 资产不含 NEMU/XRT runtime
 CPU golden，不要求 RTL/xclbin。共享数据由 `make -C accelerator-sim/data` 下载或生成，
 `ACCELERATOR_DATA_ROOT` 可覆盖默认目录。
 
-本地 `SpmvOneHbmCsr5MulSimulationConfig` 与 `SpmvOneHbmCsr5MulCachedXSimulationConfig` 使用独立
-`scope=spmv` 和
-`LocalSpmvSimulationTerminal`，不继承 NPC/SoC/NEMU 构造。其 profile 固定
-`ACCELERATOR_HOST_ABI=spmv-csr5-verilator-v3`、`PROTOCOL_ABI=spmv-one-hbm-csr5-mul-v3`，
-记录单 HBM、512-bit beat、CSR5 `OMEGA=8/SIGMA=16`、全局两个 outstanding credit、128-beat A/X
-FIFO 与八个 latency=4/II=1 FP32 multiplier。paired 构造不实例化 X cache；cached 构造静态实例化
-四份宽 cache。不生成 XLEN、ISA、NEMU、CPU cache 或 FPGA 字段。正式构造严格执行
-`elaborate -> softfloat -> verilator -> accelerator-host`，并只发布到 `abi/{rtl,verilator,softfloat,spmv}`。
+`SpmvInputSimulationConfig` 使用独立 `scope=spmv` 和 `LocalSpmvInputTerminal`，不继承 NPC/SoC/NEMU
+或 FPGA 构造。`SpmvInputConfig.Cuper16Hbm` 描述 16 个 A reader、1 个 X reader、16 个 HBM channel、
+`0x80000000`/128 MiB 地址窗口、4 KiB channel 对齐以及 64/512/4 AXI 参数。profile 固定
+`ACCELERATOR_HOST_ABI=spmv-input-smoke-v1`、`PROTOCOL_ABI=spmv-input-v1`，只输出输入布局和通用
+构造字段，不输出 `SPMV_X_MODE`、CSR5、性能、NEMU、CPU 或 FPGA 字段。正式构造严格执行
+`elaborate -> verilator -> accelerator-host`，并只发布到 `abi/{rtl,verilator,spmv}`。
 
-`SpmvOneHbmCsr5MulPerformanceMonitorSimulationConfig` 是 paired-X 的性能监测对照端点，使用
-`LocalSpmvPerformanceMonitorTerminal`。它的 host trait 开启 `SPMV_PERFORMANCE_HTML=1` 与
-`SPMV_PIPELINE_HTML=1`；性能监测 Config 的首个子配置固定为
-`SpmvMulAddPipelineHtmlConfig`，因此一次 `run` 会在该构造的 `runtime/spmv/<run>/` 下写出
-`performance.html` 和 `pipeline.html`。流水线页沿用 NPC 的逐条时间线交互，但只覆盖 RTL：按 ProductBeat
-显示 HBM、CSR5 decode、paired-X join、8 路 FP32 DPI SoftFloat 乘法的 S0-S3（四级、II=1）、ProductBeat
-FIFO 和 ProductBeat 握手；HBM beat 使用 DPI 周期观测，四级 MUL 使用冻结 latency 推导。host 侧 FP32
-行归约不进入阶段数组、RTL 周期或 `WAIT` 计算；当前 RTL 没有浮点 reduction/FMA IP，报告不会把 host
-归约描述成硬件 FMA。MUL 前无法由当前 host ABI 观测的间隔标为 `UNOBSERVED / 未观测`，不宣称是硬件
-stall。普通 paired/cached Config 的 host 报告开关保持关闭，也不会生成空 HTML。
-`build-host` 必须复用保存的 v3 Verilator/SoftFloat 资产，只替换 `abi/spmv`；旧 v1/v2 构造需要完整
-`rebuild version=<编号>`，不能只刷新当前 host。
+smoke host 只检查复位后的 16 路 A 与 1 路 X reader 处于 idle，且没有 AR、output 或 error；它不执行
+HBM 读写或 SpMV 计算。Cuper 编码、`cuper-a-test`、encoding tests 和 CPU golden 均为独立能力。
 缓存 profile 还会写入 `CACHE_ACCESS_MODE` 与四项 `CACHE_*_QUEUE_DEPTH`。缓存 FPGA 终端会把相同的
 `ICACHE_*`、`DCACHE_*`、`L2CACHE_*`、`INSTRUCTION_BUFFER_*` 和 `NPC_ZIFENCEI`
 写入 elaboration manifest。任何几何、策略或存储风格变化都必须完整 `rebuild`；普通无缓存终端的字段

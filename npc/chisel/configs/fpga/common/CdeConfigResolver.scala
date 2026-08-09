@@ -26,12 +26,11 @@ object CdeConfigResolver {
             config.isInstanceOf[LocalSocTerminal] &&
             config.isInstanceOf[NemuSimulationIpTerminal],
             s"SoC configuration ${entry.className} must directly mount LocalSocTerminal and NemuSimulationIpTerminal")
-          case "spmv" => require((config.isInstanceOf[LocalSpmvSimulationTerminal] ||
-            config.isInstanceOf[LocalSpmvPerformanceMonitorTerminal]) &&
-            config.isInstanceOf[SpmvSimulationConstruction] &&
+          case "spmv" => require(config.isInstanceOf[LocalSpmvInputTerminal] &&
+            config.isInstanceOf[SpmvInputSimulationConstruction] &&
             config.isInstanceOf[AcceleratorHostConstruction] &&
             !config.isInstanceOf[HostConstruction] && !config.isInstanceOf[IpConstruction],
-            s"SPMV configuration ${entry.className} must directly mount LocalSpmvSimulationTerminal")
+            s"SPMV configuration ${entry.className} must directly mount LocalSpmvInputTerminal")
           case "fpga" =>
             val matchesPreset = (entry.board, entry.target) match {
               case (Some("u55c"), "NPC") => config.isInstanceOf[U55cNpcTerminal] ||

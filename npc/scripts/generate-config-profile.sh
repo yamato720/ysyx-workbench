@@ -44,7 +44,7 @@ case "$scope" in
     ;;
   spmv)
     if ! (cd "$npc_root" && NPC_SCALA_CONFIG="$fqcn" sbt \
-      "root/runMain spmv.DescribeSpmvSimulationConfig $temporary") >"$log" 2>&1; then
+      "root/runMain accelerator.spmv.DescribeSpmvInputSimulationConfig $temporary") >"$log" 2>&1; then
       echo "生成 $fqcn profile 失败：" >&2
       cat "$log" >&2
       exit 1
@@ -52,7 +52,7 @@ case "$scope" in
     ;;
   fpga)
     if [[ $target == SPMV ]]; then
-      profile_main=spmv.DescribeSpmvConfig
+      profile_main=accelerator.spmv.DescribeSpmvConfig
     else
       profile_main=ysyx.DescribeFpgaConfig
     fi
@@ -81,13 +81,6 @@ awk -F= '
   $1 == "HOST_ABI" { host_abi=$2 }
   $1 == "ACCELERATOR_HOST_KIND" { accelerator_host_kind=$2 }
   $1 == "ACCELERATOR_HOST_ABI" { accelerator_host_abi=$2 }
-  $1 == "SPMV_X_MODE" { spmv_x_mode=$2 }
-  $1 == "SPMV_X_REPLICAS" { spmv_x_replicas=$2 }
-  $1 == "SPMV_PERFORMANCE_HTML" { spmv_performance_html=$2 }
-  $1 == "SPMV_PIPELINE_HTML" { spmv_pipeline_html=$2 }
-  $1 == "SPMV_PERFORMANCE_FIRST_SUBCONFIG" { spmv_first_subconfig=$2 }
-  $1 == "SPMV_OUTSTANDING_BURSTS" { spmv_outstanding=$2 }
-  $1 == "SPMV_INPUT_FIFO_DEPTH" { spmv_input_fifo_depth=$2 }
   seen[$1]++ { exit 1 }
   index(substr($0, index($0, "=") + 1), "\r") { exit 1 }
   END {
@@ -97,27 +90,12 @@ awk -F= '
     if (scope == "spmv") {
       if (capability != "run" || target != "SPMV" || host_abi != "none" ||
           !seen["ACCELERATOR_HOST_KIND"] || !seen["ACCELERATOR_HOST_ABI"] ||
-          accelerator_host_kind != "spmv" || accelerator_host_abi != "spmv-csr5-verilator-v3" ||
-          !seen["SPMV_HBM_PC_COUNT"] || !seen["SPMV_HBM_BASE"] || !seen["SPMV_HBM_BYTES"] ||
-          !seen["SPMV_AXI_ADDR_WIDTH"] || !seen["SPMV_AXI_DATA_WIDTH"] ||
-          !seen["SPMV_A_WIDTH"] || !seen["SPMV_X_WIDTH"] || !seen["SPMV_PRODUCT_WIDTH"] ||
-          !seen["SPMV_OMEGA"] || !seen["SPMV_SIGMA"] || !seen["SPMV_MAX_BLOCK_ROWS"] ||
-          !seen["SPMV_MAX_BLOCK_COLS"] || !seen["SPMV_X_MODE"] || !seen["SPMV_X_REPLICAS"] ||
-          !seen["SPMV_PERFORMANCE_HTML"] || !seen["SPMV_PIPELINE_HTML"] ||
-          !seen["SPMV_PERFORMANCE_FIRST_SUBCONFIG"] ||
-          !seen["SPMV_X_READ_LANES"] || !seen["SPMV_MULTIPLIER_COUNT"] ||
-          !seen["SPMV_MULTIPLIER_LATENCY"] || !seen["SPMV_MULTIPLIER_II"] ||
-          !seen["SPMV_BURST_BEATS"] || !seen["SPMV_OUTSTANDING_BURSTS"] ||
-          !seen["SPMV_HBM_FIRST_BEAT_LATENCY_MIN"] ||
-          !seen["SPMV_HBM_FIRST_BEAT_LATENCY_MAX"] || !seen["SPMV_HBM_TIMING_SEED"] ||
-          !((spmv_x_mode == "paired" && spmv_x_replicas == 0) ||
-            (spmv_x_mode == "cached" && spmv_x_replicas == 4)) ||
-          (spmv_performance_html != 0 && spmv_performance_html != 1) ||
-          (spmv_pipeline_html != 0 && spmv_pipeline_html != 1) ||
-          (spmv_pipeline_html == 1 && spmv_performance_html != 1) ||
-          (spmv_performance_html == 1 && spmv_first_subconfig != "mul-add-pipeline-html") ||
-          (spmv_performance_html == 0 && spmv_first_subconfig != "none") ||
-          spmv_outstanding != 2 || spmv_input_fifo_depth != 128 ||
+          accelerator_host_kind != "spmv" || accelerator_host_abi != "spmv-input-smoke-v1" ||
+          !seen["SPMV_INPUT_A_READER_COUNT"] || !seen["SPMV_INPUT_X_READER_COUNT"] ||
+          !seen["SPMV_INPUT_HBM_CHANNEL_COUNT"] || !seen["SPMV_INPUT_HBM_BASE"] ||
+          !seen["SPMV_INPUT_HBM_BYTES"] || !seen["SPMV_INPUT_HBM_CHANNEL_ALIGNMENT_BYTES"] ||
+          !seen["SPMV_INPUT_AXI_ADDR_WIDTH"] || !seen["SPMV_INPUT_AXI_DATA_WIDTH"] ||
+          !seen["SPMV_INPUT_AXI_ID_WIDTH"] ||
           seen["XLEN"] || seen["ISA_STRING"] || seen["NEMU_PRESET"] ||
           seen["NEMU_BACKEND"] || seen["PIPELINE"] || seen["FPGA_BOARD"] ||
           seen["ICACHE_ENABLED"] || seen["DCACHE_ENABLED"] || seen["L2CACHE_ENABLED"]) exit 1

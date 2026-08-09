@@ -9,6 +9,7 @@ namespace accelerator_sim::spmv {
 
 struct CsrMatrix {
   std::size_t rows = 0;
+  std::size_t columns = 0;
   std::vector<std::uint64_t> rowPointers;
   std::vector<std::uint32_t> columnIndices;
   std::vector<double> values;
