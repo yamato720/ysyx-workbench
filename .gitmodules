@@ -18,9 +18,7 @@
 	path = npc/chisel/ysyxSoC
 	url = git@github.com:yamato720/ysyxSoC.git
 	branch = fpga-sdb
-[submodule "npc/chisel/accelerators/pcg-accelerator/refer/Callipepla"]
-	path = npc/chisel/accelerators/pcg-accelerator/refer/Callipepla
-	url = https://github.com/UCLA-VAST/Callipepla.git
-[submodule "npc/chisel/accelerators/spmv/refer/HiHiSpMV"]
-	path = npc/chisel/accelerators/spmv/refer/HiHiSpMV
-	url = https://github.com/pc2/HiHiSpMV.git
+[submodule "ResearchProject"]
+	path = ResearchProject
+	url = git@github.com:yamato720/ResearchProject.git
+	branch = main
