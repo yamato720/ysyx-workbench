@@ -1,8 +1,7 @@
 # SPMV Host、Golden 与 Cuper 编码
 
-本目录保留三类独立能力：CPU golden、Cuper 编码/输入 smoke，以及供 FPGA resource-probe 使用的
-纯软件 golden。当前本地 `SpmvInputSimulationConfig` 只构造输入顶层结构，不执行 CSR5、SpMV 计算、
-HBM DPI 或性能报告。
+本目录保留三类独立能力：CPU golden、Cuper 编码，以及由 `SpmvInputSimulationConfig` 驱动的
+Verilator 输入流水。输入流水执行真实 AXI 读事务和消费端校验，但暂不执行 CSR5、SpMV 乘加或结果写回。
 
 共享 CSR 数据位于 `accelerator-sim/data`。首次使用可执行：
 
@@ -10,7 +9,7 @@ HBM DPI 或性能报告。
 make -C accelerator-sim/data
 ```
 
-## 输入 smoke
+## 输入流水仿真
 
 正式 Config 的构造流程是：
 
@@ -18,18 +17,38 @@ make -C accelerator-sim/data
 elaborate -> verilator -> accelerator-host
 ```
 
-它生成 `SpmvInputTop.sv` 和 `VSpmvInputTop`，host 复位后检查 16 路 A reader、1 路 X reader 的静态
-接口状态：所有 reader idle，没有 AR 发射、output 或 error。该 smoke 不验证实际 HBM 读写和数值结果。
+它生成 `SpmvInputTop.sv` 和 `VSpmvInputTop`。host 将 Cuper 编码后的矩阵分发给 16 路 A reader，
+并把数据集 `b.txt` 按每拍 8 个 FP64 打包给一路 X reader。每路 A 连接一个消费端；X beat 只有在
+16 个消费端都 ready 时才原子广播。满带宽 HBM 模型令全部端口的 AR ready，并在已接受 burst 后逐拍
+连续返回 R；reader 通过 2 笔 outstanding burst 提前跨越 4 KiB 边界。运行时要求全部 A/X 在
+cycle 0/1/2 连续完成 Q、AR 和首个 R，并检查每一路 R 到自身末拍都没有空拍，同时校验 burst 连续性、
+64-byte 对齐、4 KiB 边界、beat 数和 XOR checksum。消费端当前只记录输入，不做乘加。
 
 ```bash
 make -C npc build config=SpmvInputSimulationConfig
-make -C npc run config=SpmvInputSimulationConfig
+make -C npc run config=SpmvInputSimulationConfig mainargs=n65536
 make -C npc build-host config=SpmvInputSimulationConfig
 ```
 
-profile 固定 `ACCELERATOR_HOST_ABI=spmv-input-smoke-v1` 和 `PROTOCOL_ABI=spmv-input-v1`，输入布局
-通过 `SPMV_INPUT_*` 字段传给 host：16 个 A reader、1 个 X reader、16 个 HBM channel、
-`0x80000000`/128 MiB 窗口、4 KiB channel 对齐和 64/512/4 AXI 参数。
+profile 固定 `ACCELERATOR_HOST_ABI=spmv-input-report-v3` 和
+`PROTOCOL_ABI=spmv-input-full-bandwidth-v1`，对应的 `abi/spmv/host.env` 使用 `HOST_FORMAT=4`。输入布局通过
+`SPMV_INPUT_*` 字段传给 host：16 个 A reader、1 个 X reader、16 个消费端、X 原子广播、16 个 HBM channel、
+`0x80000000`/128 MiB 窗口、4 KiB channel 对齐、64/512/4 AXI 参数和 2 笔 outstanding burst。
+
+`SpmvInputReportConfig` 独立控制报告行为：`performanceHtml` 生成报告主页，`pipelineHtml` 生成逐周期
+子页且要求主页已开启。公开 Config 使用 `PerformancePipeline` preset，两项 profile 字段分别为
+`SPMV_PERFORMANCE_HTML=1` 和 `SPMV_PIPELINE_HTML=1`；冻结 host 严格按这两个字段生成页面。
+
+成功运行后的目录遵循其他 construction 的运行报告布局：
+
+```text
+npc/constructions/accelerators.spmv.SpmvInputSimulationConfig/
+  runtime/<dataset>/<timestamp>-<pid>/{performance.html,pipeline.html}
+```
+
+同级 `<dataset>/latest` 指向最近一次成功写完的报告。`performance.html` 是主页，包含周期、输入吞吐、
+A 通道负载和 16 个消费端的计数/checksum；`pipeline.html` 是可搜索、缩放和横向滚动的 17 输入泳道
+时间线，展示 request、AXI AR、HBM R/消费和 done。
 
 ## CPU golden
 

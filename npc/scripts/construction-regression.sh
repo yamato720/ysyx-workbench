@@ -390,7 +390,7 @@ if "$manager" delete "$npc_root" "$pipeline_version" 1 >/dev/null 2>&1; then
   fail 'delete 仍接受已删除的确认参数'
 fi
 
-u55c="$CONSTRUCTION_TEST_ROOT/npc.fpga.u55c.U55cYsyxSocFpgaConfig"
+u55c="$CONSTRUCTION_TEST_ROOT/ysyx.fpga.u55c.U55cYsyxSocFpgaConfig"
 if "$manager" ensure "$npc_root" U55cYsyxSocFpgaConfig 0 0 >/dev/null 2>&1; then
   fail '缺失 FPGA 构造未要求 build=1'
 fi
@@ -405,7 +405,7 @@ fi
 
 # SPMV 的正式 FPGA 构造不含 NEMU/XRT host：FP32 版本只综合，FP64 版本还执行 link；
 # 独立软件 golden host 由同一 Config 分发，但不会写入正式构造目录。
-spmv_fqcn=npc.fpga.u55c.U55cSpmv32PcFp32X8192UramResourceProbeConfig
+spmv_fqcn=accelerators.spmv.fpga.u55c.U55cSpmv32PcFp32X8192UramResourceProbeConfig
 spmv="$CONSTRUCTION_TEST_ROOT/$spmv_fqcn"
 "$manager" build "$npc_root" U55cSpmv32PcFp32X8192UramResourceProbeConfig
 spmv_version=$(value "$spmv/version.tag" VERSION_INDEX)
@@ -454,7 +454,7 @@ if "$manager" resolve "$npc_root" '' "$spmv_version" >/dev/null 2>&1; then
   fail 'SPMV 报告校验和损坏后仍可按版本解析'
 fi
 "$manager" rebuild "$npc_root" U55cSpmv32PcFp32X8192UramResourceProbeConfig
-spmv_bitstream_fqcn=npc.fpga.u55c.U55cSpmv32PcFp64X8192UramBitstreamConfig
+spmv_bitstream_fqcn=accelerators.spmv.fpga.u55c.U55cSpmv32PcFp64X8192UramBitstreamConfig
 spmv_bitstream="$CONSTRUCTION_TEST_ROOT/$spmv_bitstream_fqcn"
 "$manager" build "$npc_root" U55cSpmv32PcFp64X8192UramBitstreamConfig
 spmv_bitstream_version=$(value "$spmv_bitstream/version.tag" VERSION_INDEX)
@@ -484,9 +484,9 @@ BUILD_DIR="$spmv_host_build" make --no-print-directory -s -C "$npc_root/.." buil
 "$manager" delete "$npc_root" "$spmv_version" >/dev/null
 [[ ! -d $spmv ]] || fail 'SPMV 回归构造没有从隔离版本库清理'
 
-# 本地 SPMV 只保留输入层结构 smoke：三阶段产物全部保存在 abi 下，不能生成
+# 本地 SPMV 正式驱动 16 路 A 与一路 X 广播：三阶段产物全部保存在 abi 下，不能生成
 # NEMU、CPU、FPGA 或 SoftFloat 资产；run 直接执行冻结的 Verilator host。
-spmv_input_fqcn=npc.spmv.SpmvInputSimulationConfig
+spmv_input_fqcn=accelerators.spmv.SpmvInputSimulationConfig
 spmv_input="$CONSTRUCTION_TEST_ROOT/$spmv_input_fqcn"
 "$manager" build "$npc_root" SpmvInputSimulationConfig
 spmv_input_version=$(value "$spmv_input/version.tag" VERSION_INDEX)
@@ -495,37 +495,42 @@ spmv_input_version=$(value "$spmv_input/version.tag" VERSION_INDEX)
   $(value "$spmv_input/version.info" RUNNING_TIME) == SIM &&
   $(value "$spmv_input/construction.env" CAPABILITY) == run &&
   $(value "$spmv_input/.complete" FPGA_ARTIFACT) == - ]] ||
-  fail 'SPMV 输入 smoke 没有发布正确的版本元数据'
+  fail 'SPMV 正式输入没有发布正确的版本元数据'
 for asset in \
   abi/rtl/SpmvInputTop.sv \
   abi/verilator/VSpmvInputTop.h \
   abi/verilator/libVSpmvInputTop.a \
   abi/verilator/libverilated.a \
   abi/spmv/spmv-host abi/spmv/host.env; do
-  [[ -s $spmv_input/$asset ]] || fail "SPMV 输入 smoke dry-run 缺少资产 $asset"
+  [[ -s $spmv_input/$asset ]] || fail "SPMV 正式输入 dry-run 缺少资产 $asset"
 done
 [[ -x $spmv_input/abi/spmv/spmv-host && ! -e $spmv_input/abi/nemu &&
   ! -e $spmv_input/abi/softfloat &&
   -s $spmv_input/logs/build/elaborate.log &&
   -s $spmv_input/logs/build/verilator.log &&
   -s $spmv_input/logs/build/accelerator-host.log ]] ||
-  fail 'SPMV 输入 smoke dry-run 的阶段或 host 边界不正确'
-[[ $(value "$spmv_input/profile.env" ACCELERATOR_HOST_ABI) == spmv-input-smoke-v1 &&
-  $(value "$spmv_input/profile.env" PROTOCOL_ABI) == spmv-input-v1 &&
+  fail 'SPMV 正式输入 dry-run 的阶段或 host 边界不正确'
+[[ $(value "$spmv_input/profile.env" ACCELERATOR_HOST_ABI) == spmv-input-report-v3 &&
+  $(value "$spmv_input/profile.env" PROTOCOL_ABI) == spmv-input-full-bandwidth-v1 &&
   $(value "$spmv_input/profile.env" SPMV_INPUT_A_READER_COUNT) == 16 &&
   $(value "$spmv_input/profile.env" SPMV_INPUT_X_READER_COUNT) == 1 &&
   $(value "$spmv_input/profile.env" SPMV_INPUT_HBM_CHANNEL_COUNT) == 16 &&
-  $(value "$spmv_input/profile.env" SPMV_INPUT_AXI_DATA_WIDTH) == 512 ]] ||
-  fail 'SPMV 输入 smoke profile 不完整'
-if rg -q '^(XLEN|ISA_STRING|NEMU_|PIPELINE|ICACHE|DCACHE|L2CACHE|FPGA_|SPMV_X_MODE|SPMV_PERFORMANCE_|SPMV_HBM_|SPMV_.*CSR5)' \
+  $(value "$spmv_input/profile.env" SPMV_INPUT_AXI_DATA_WIDTH) == 512 &&
+  $(value "$spmv_input/profile.env" SPMV_INPUT_MAX_OUTSTANDING_BURSTS) == 2 &&
+  $(value "$spmv_input/profile.env" SPMV_INPUT_CONSUMER_COUNT) == 16 &&
+  $(value "$spmv_input/profile.env" SPMV_INPUT_X_BROADCAST) == 1 &&
+  $(value "$spmv_input/profile.env" SPMV_PERFORMANCE_HTML) == 1 &&
+  $(value "$spmv_input/profile.env" SPMV_PIPELINE_HTML) == 1 ]] ||
+  fail 'SPMV 正式输入 profile 不完整'
+if rg -q '^(XLEN|ISA_STRING|NEMU_|PIPELINE|ICACHE|DCACHE|L2CACHE|FPGA_|SPMV_X_MODE|SPMV_HBM_|SPMV_.*CSR5)' \
     "$spmv_input/profile.env" "$spmv_input/construction.env"; then
-  fail 'SPMV 输入 smoke 构造泄漏了 CPU、NEMU、FPGA 或旧 CSR5 字段'
+  fail 'SPMV 正式输入构造泄漏了 CPU、NEMU、FPGA 或旧 CSR5 字段'
 fi
-spmv_input_output=$("$manager" accelerator-run "$npc_root" "version=$spmv_input_version" smoke)
+spmv_input_output=$("$manager" accelerator-run "$npc_root" "version=$spmv_input_version" n512)
 [[ $spmv_input_output == *'SPMV construction dry-run host'* ]] ||
-  fail 'SPMV 输入 smoke run 没有执行冻结构造中的 host'
+  fail 'SPMV 正式输入 run 没有执行冻结构造中的 host'
 "$manager" delete "$npc_root" "$spmv_input_version" >/dev/null
-[[ ! -d $spmv_input ]] || fail 'SPMV 输入 smoke 回归构造没有从隔离版本库清理'
+[[ ! -d $spmv_input ]] || fail 'SPMV 正式输入回归构造没有从隔离版本库清理'
 
 # Vitis may have already completed implementation and xclbin packaging when a
 # post-link validator fails.  Resume must validate that saved xclbin, produce
@@ -605,7 +610,7 @@ if fpga_failure=$(CONSTRUCTION_TEST_FAIL=1 "$manager" rebuild "$npc_root" U55cYs
 fi
 [[ $fpga_failure == *"make -C $npc_root rebuild config=U55cYsyxSocFpgaConfig"* ]] ||
   fail '失败的 FPGA 重构未提示 Config 短名'
-fpga_failed="$CONSTRUCTION_TEST_ROOT/.failed/npc.fpga.u55c.U55cYsyxSocFpgaConfig/build"
+fpga_failed="$CONSTRUCTION_TEST_ROOT/.failed/ysyx.fpga.u55c.U55cYsyxSocFpgaConfig/build"
 [[ -f $fpga_failed/profile.env && -s $fpga_failed/fpga/ip-generated/logs/npc_int_multiplier_ip.log &&
   -s $fpga_failed/fpga/ip-generated/logs/npc_int_divider_ip.log ]] ||
   fail '失败的 FPGA 重构没有保存 profile 与逐 IP 证据'

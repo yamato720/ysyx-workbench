@@ -15,12 +15,12 @@ NEMU 运行宿主；本地仿真的 DPI 只是该宿主连接 Verilator 的内�
 | --- | --- | --- | --- | --- |
 | 公共底层 | `common/base/` | 通用 IP 数据、计算单元选择、FPGA IP attachment、工具链字段模型和不可由终端直挂的构造接口 | 始终编译，不独立生成 | `OperatorIpConfigs.scala`、`IpComputeSelectionTraits.scala`、`FpgaIpAttachmentTraits.scala`、`FpgaToolchainConfigModels.scala`、`ConstructionTraits.scala` |
 | 构造配方 | `common/core/`、`nemu/core/` | 终端直接子项集群、检查 trait、NEMU host 与 FPGA 工具链 case class；不定义硬件 ABI | 所有 Make 终端必需 | `TerminalCoreTraits.scala`、`IpTerminalCoreTraits.scala`、`CheckTraits.scala`、`NemuHostConfig.scala`、`FpgaToolchainConfig.scala` |
-| 终端 trait | `common/TerminalTraits.scala`、`common/IpTerminalTraits.scala` | 前者提供完整 NEMU/FPGA 默认配方、目录身份、scope 和 target；后者只提供 FPGA/NEMU 两种计算单元终端 | 前者为所有 Make 终端必需；后者不进入 Make 目录 | 根部直挂文件 |
-| SPMV 加速器 | `spmv/`、`../accelerators/spmv/` | 独立输入/计算参数键、CPU-free profile、reader/IP 壳与 Cuper 编码输入层 | SPMV 才需要 | `base/SpmvInputConfig.scala`、`base/SpmvAcceleratorConfig.scala`、`core/SpmvInputSimulationProfile.scala` |
+| 终端 trait | `common/TerminalTraits.scala`、`common/IpTerminalTraits.scala` | 前者提供通用 NPC/SoC 的 NEMU/FPGA 默认配方、目录身份、scope 和 target；后者只提供 FPGA/NEMU 两种计算单元终端 | CPU Make 终端必需；后者不进入 Make 目录 | 根部直挂文件 |
+| SPMV 加速器 | `accelerators/spmv/`、`../accelerators/spmv/` | 独立参数键、host/terminal preset、CPU-free profile、reader/IP 壳与 Cuper 输入层 | SPMV 才需要 | `base/SpmvInputConfig.scala`、`base/SpmvConstructionTraits.scala`、`core/SpmvInputSimulationProfile.scala`、`TerminalTraits.scala` |
 | L1 NPC | `npc/` | 仅依赖 CDE 参数库，不依赖 Rocket/板卡 | 必需 | `core/` 成品与终端 `Configs.scala` |
 | L2 SoC | `ysyx/` | 依赖 L1 与 Rocket CDE | SoC 才需要 | `core/YsyxCore.scala` 与终端 `Configs.scala` |
-| L3 FPGA | `npc/chisel/configs/fpga/common/` | 把 L1/L2 接入 FPGA CDE | FPGA 才需要 | `base/` 与公共 resolver |
-| L4 Board | `npc/chisel/configs/fpga/u55c/`、`npc/chisel/configs/fpga/zcu102/` | 依赖 L3，固定物理板卡 | FPGA 必需且二选一 | `core/*BoardConfig.scala`、终端 `Configs.scala` |
+| L3 FPGA | `npc/chisel/configs/fpga/base/` | 中性 `fpga` package，把 L1/L2 接入 FPGA CDE | FPGA 才需要 | `base/` 与 `fpga/CdeConfigResolver.scala` |
+| L4 Board | `npc/chisel/configs/fpga/u55c/`、`npc/chisel/configs/fpga/zcu102/` | 依赖 L3，固定物理板卡并按产品目标拆分终端 | FPGA 必需且二选一 | `core/*BoardConfig.scala`、`{npc,ysyx,spmv}/Configs.scala` |
 
 ## 统一文件协议
 
@@ -30,10 +30,12 @@ NEMU 运行宿主；本地仿真的 DPI 只是该宿主连接 Verilator 的内�
   不引用 `core/`，也不直接表达某个可运行目标。
 - `core/` 调用 `base/`，把 ISA、流水线、接口、内存、SoC 或板卡策略组合成名称直观、含义完整的
   成品。终端必须直接引用这些成品，不能在终端文件里重新展开底层片段。
-- 终端级文件与 `base/`、`core/` 文件夹分离，直接位于领域根部。当前十一种共享 Make 终端预设 trait
-  统一位于 `common/TerminalTraits.scala`；`common/IpTerminalTraits.scala` 只定义非 Make 的
+- 终端级文件与 `base/`、`core/` 文件夹分离，直接位于领域根部。通用 NPC/SoC Make 终端预设 trait
+  位于 `common/TerminalTraits.scala`；SPMV 预设位于 `accelerators/spmv/TerminalTraits.scala`；
+  `common/IpTerminalTraits.scala` 只定义非 Make 的
   `FpgaIpTerminal` 与 `NemuSimulationIpTerminal`。通用计算单元合同位于
-  `common/base/IpComputeSelectionTraits.scala`，让两种终端消费同一组时序属性。每个 CPU 运行 terminal
+  `common/base/IpComputeSelectionTraits.scala`，让两种终端消费同一组时序属性。SPMV 的 construction、
+  host preset 和 terminal trait 全部位于 `accelerators/spmv/`。每个 CPU 运行 terminal
   Config 必须显式混入对应 IP terminal；`U55cSpmvSynthesisTerminal` 与
   `U55cSpmvBitstreamTerminal` 都不挂载 CPU 算子 terminal。
   不得把 IP 作为 `ConstructionConfig`/SoC Config 的构造参数，或在 CDE `++` 链中重新选择后端。
@@ -44,12 +46,13 @@ NEMU 运行宿主；本地仿真的 DPI 只是该宿主连接 Verilator 的内�
   一步挂载；显式自定义终端可重载配方，但不得直接混入 base trait。检查构造和可复用成品也不得放入此文件。
 - `common/`、`nemu/` 没有硬件终端 Config，因此不创建空的 `Configs.scala`；公共运行预设与计算单元 IP
   trait 分别放在 `common/TerminalTraits.scala` 和 `common/IpTerminalTraits.scala`。FPGA 板卡共享
-  `fpga/common/base/`，各自在 `fpga/<board>/core/` 形成物理策略，并由同目录根部 `Configs.scala` 生成
-  最终终端。
+  `fpga/base/`，各自在 `fpga/<board>/core/` 形成物理策略，并由板卡下
+  `{npc,ysyx,spmv}/Configs.scala` 生成最终终端。
 
 目录生成器会拒绝缺少根部 `Configs.scala` 的终端领域、出现在其他文件中的终端 trait、
 `Configs.scala` 中未挂载 terminal 层 trait 的 Config 类，以及终端对 base 构造 trait 的直接混入。
-移动文件时保持原 package，避免无意改变公开 FQCN。
+板卡目录会递归发现 `npc`、`ysyx`、`spmv` 终端，并校验目录对应的 `TARGET` 与 package 所有权。
+本次领域重构后的公开 FQCN 直接使用新 namespace，不提供旧 package 别名；Config 短名保持不变。
 
 `configs/resources/` 不属于 Config 分层：它只保存自动生成的 `npc-config-catalog.tsv`，供 Scala
 classpath、Make 和 construction manager 在启动前解析公开终端。该目录必须保留，不能手工编辑 catalog；
@@ -128,7 +131,7 @@ CDE 和本项目 L1 Config 的 `++` 都是左侧优先：右侧先提供基础�
 
 ```scala
 class U55cYsyxSocFpgaConfig extends CDEConfig(
-  new U55cBoardConfig ++
+  new _root_.fpga.u55c.U55cBoardConfig ++
     new FpgaConfig ++
     new YsyxElaborateConfig
 ) with _root_.npc.U55cSocTerminal with _root_.npc.FpgaIpTerminal
@@ -173,7 +176,7 @@ DPI 时序参数与前者一致。由于 VCD 要求 Verilator 在生成时带 `-
 `HostConstruction`、`AcceleratorHostConstruction`、`NemuSimulationConstruction`、`FpgaConstruction` 和 `MakeTerminal` 是
 `common/base/ConstructionTraits.scala` 中的底层接口，只供 terminal 层组合，终端不能直接混入。
 `LocalNpcTerminal`、`LocalSocTerminal`、`U55cNpcTerminal`、`U55cSocTerminal`、`Zcu102NpcTerminal`、
-`Zcu102SocTerminal` 是 `common/TerminalTraits.scala` 中十一种 Make 终端预设之一；每个终端只挂载其中一个。
+`Zcu102SocTerminal` 是 `common/TerminalTraits.scala` 中的通用 Make 终端预设；每个终端只挂载其中一个。
 工具链按 `device`、`flow`、`reports`、`runtime` 分组。显式自定义终端
 可通过嵌套 `copy(...)` 局部重载 NEMU/FPGA 配方；重复使用或需要进入普通示例的配方应提升为 `core/`
 中的具名完整 preset，必要时再增加根部 terminal trait。`CheckOnlyConstruction` 是检查构造直接挂载的
@@ -228,14 +231,29 @@ CPU golden，不要求 RTL/xclbin。共享数据由 `make -C accelerator-sim/dat
 `ACCELERATOR_DATA_ROOT` 可覆盖默认目录。
 
 `SpmvInputSimulationConfig` 使用独立 `scope=spmv` 和 `LocalSpmvInputTerminal`，不继承 NPC/SoC/NEMU
-或 FPGA 构造。`SpmvInputConfig.Cuper16Hbm` 描述 16 个 A reader、1 个 X reader、16 个 HBM channel、
-`0x80000000`/128 MiB 地址窗口、4 KiB channel 对齐以及 64/512/4 AXI 参数。profile 固定
-`ACCELERATOR_HOST_ABI=spmv-input-smoke-v1`、`PROTOCOL_ABI=spmv-input-v1`，只输出输入布局和通用
-构造字段，不输出 `SPMV_X_MODE`、CSR5、性能、NEMU、CPU 或 FPGA 字段。正式构造严格执行
-`elaborate -> verilator -> accelerator-host`，并只发布到 `abi/{rtl,verilator,spmv}`。
+或 FPGA 构造。`SpmvInputConfig.Cuper16Hbm` 描述一个 16-HBM A 输入封装和一个 1-HBM X 输入封装，
+合计 17 个只读 HBM master；其中 16 个 HBM channel 是 Cuper A 编码几何，不包含 X HBM。
+`ip-interface` 的 `npc.ip.axi` 提供 NPC 与加速器共同使用的唯一 AXI4 只读、只写和读写契约；HBM
+只描述这些端口的物理用途。`SpmvAInput`/`SpmvXInput` 继承
+`accelerators.common.IndependentAxiReadPorts`，以具体 reader 工厂和
+`hbmCount` 参数选择 A/X 输入；每个 HBM 保留独立 request、AXI 和 output stream，公共基础模块不负责
+仲裁或数据拼接。对应的 `IndependentAxiWritePorts`、`IndependentAxiReadWritePorts` 也位于
+`accelerators.common`。地址窗口为
+`0x80000000`/128 MiB，4 KiB channel 对齐，
+AXI 参数为 64/512/4，reader 支持 2 笔 outstanding burst。profile 固定
+`ACCELERATOR_HOST_ABI=spmv-input-report-v3`、`PROTOCOL_ABI=spmv-input-full-bandwidth-v1`，输出输入布局、
+16 个消费端和 X 原子广播。独立的 `SpmvInputReportConfig` 输出 `SPMV_PERFORMANCE_HTML` 与
+`SPMV_PIPELINE_HTML`；后者要求前者开启，公开 Config 使用 `PerformancePipeline` preset。不输出
+`SPMV_X_MODE`、CSR5、NEMU、CPU 或 FPGA
+字段。正式构造严格执行 `elaborate -> verilator -> accelerator-host`，并只发布到
+`abi/{rtl,verilator,spmv}`。
 
-smoke host 只检查复位后的 16 路 A 与 1 路 X reader 处于 idle，且没有 AR、output 或 error；它不执行
-HBM 读写或 SpMV 计算。Cuper 编码、`cuper-a-test`、encoding tests 和 CPU golden 均为独立能力。
+transaction host 用 Cuper 编码矩阵驱动 16 路 A，以 `b.txt` 驱动一路 X，并模拟 AR ready 恒高、R 逐拍
+连续的满带宽 HBM。每路 reader 用 2 笔 outstanding burst 隐藏 4 KiB 边界 AR 延迟；每路 A 连接一个消费端，
+X 原子广播到全部消费端。host 强制校验 Q/AR/首 R 对齐、R 无空拍、burst、beat 数、checksum 和错误状态，
+并按 `runtime/<dataset>/<run>/` 写入 `performance.html` 主页和可选 `pipeline.html` 子页。主页沿用
+construction 报告的指标、统计 band 和表格布局；流水页沿用全屏搜索、缩放与横向时间线布局。它暂不执行
+SpMV 乘加。
 缓存 profile 还会写入 `CACHE_ACCESS_MODE` 与四项 `CACHE_*_QUEUE_DEPTH`。缓存 FPGA 终端会把相同的
 `ICACHE_*`、`DCACHE_*`、`L2CACHE_*`、`INSTRUCTION_BUFFER_*` 和 `NPC_ZIFENCEI`
 写入 elaboration manifest。任何几何、策略或存储风格变化都必须完整 `rebuild`；普通无缓存终端的字段

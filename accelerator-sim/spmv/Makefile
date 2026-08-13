@@ -9,7 +9,7 @@ BUILD_DIR ?= $(CURDIR)/build
 HOST_BIN := $(BUILD_DIR)/spmv-host
 ENCODING_TEST_BIN := $(BUILD_DIR)/encoding-test
 ENCODING_SOURCES := encoding/encoder.cpp encoding/cuper/cuper.cpp encoding/cuper/report.cpp
-HOST_SOURCES := host.cpp golden.cpp $(ENCODING_SOURCES)
+HOST_SOURCES := host.cpp input_simulation.cpp golden.cpp $(ENCODING_SOURCES)
 HOST_OBJECTS := $(addprefix $(BUILD_DIR)/,$(HOST_SOURCES:.cpp=.o))
 ENCODING_OBJECTS := $(addprefix $(BUILD_DIR)/,$(ENCODING_SOURCES:.cpp=.o))
 ENCODING_TEST_OBJECT := $(BUILD_DIR)/encoding/encoding_test.o
@@ -33,6 +33,11 @@ SPMV_INPUT_HBM_CHANNEL_ALIGNMENT_BYTES ?= $(call spmv_profile_value,SPMV_INPUT_H
 SPMV_INPUT_AXI_ADDR_WIDTH ?= $(call spmv_profile_value,SPMV_INPUT_AXI_ADDR_WIDTH)
 SPMV_INPUT_AXI_DATA_WIDTH ?= $(call spmv_profile_value,SPMV_INPUT_AXI_DATA_WIDTH)
 SPMV_INPUT_AXI_ID_WIDTH ?= $(call spmv_profile_value,SPMV_INPUT_AXI_ID_WIDTH)
+SPMV_INPUT_MAX_OUTSTANDING_BURSTS ?= $(call spmv_profile_value,SPMV_INPUT_MAX_OUTSTANDING_BURSTS)
+SPMV_INPUT_CONSUMER_COUNT ?= $(call spmv_profile_value,SPMV_INPUT_CONSUMER_COUNT)
+SPMV_INPUT_X_BROADCAST ?= $(call spmv_profile_value,SPMV_INPUT_X_BROADCAST)
+SPMV_PERFORMANCE_HTML ?= $(call spmv_profile_value,SPMV_PERFORMANCE_HTML)
+SPMV_PIPELINE_HTML ?= $(call spmv_profile_value,SPMV_PIPELINE_HTML)
 
 # 未绑定 construction 时保留独立编码 smoke test 的默认输入布局；一旦绑定 profile，
 # 上面的 ?= 会优先采用 Config 导出的值。
@@ -45,22 +50,32 @@ SPMV_INPUT_HBM_CHANNEL_ALIGNMENT_BYTES ?= 4096
 SPMV_INPUT_AXI_ADDR_WIDTH ?= 64
 SPMV_INPUT_AXI_DATA_WIDTH ?= 512
 SPMV_INPUT_AXI_ID_WIDTH ?= 4
+SPMV_INPUT_MAX_OUTSTANDING_BURSTS ?= 2
+SPMV_INPUT_CONSUMER_COUNT ?= 16
+SPMV_INPUT_X_BROADCAST ?= 1
+SPMV_PERFORMANCE_HTML ?= 1
+SPMV_PIPELINE_HTML ?= 1
 
 export ACCELERATOR_DATA_ROOT SPMV_GOLDEN_DIR SPMV_ENCODING_REPORT_DIR mainargs \
 	SPMV_INPUT_A_READER_COUNT SPMV_INPUT_X_READER_COUNT SPMV_INPUT_HBM_CHANNEL_COUNT \
 	SPMV_INPUT_HBM_BASE SPMV_INPUT_HBM_BYTES SPMV_INPUT_HBM_CHANNEL_ALIGNMENT_BYTES \
-	SPMV_INPUT_AXI_ADDR_WIDTH SPMV_INPUT_AXI_DATA_WIDTH SPMV_INPUT_AXI_ID_WIDTH
+	SPMV_INPUT_AXI_ADDR_WIDTH SPMV_INPUT_AXI_DATA_WIDTH SPMV_INPUT_AXI_ID_WIDTH \
+	SPMV_INPUT_MAX_OUTSTANDING_BURSTS \
+	SPMV_INPUT_CONSUMER_COUNT SPMV_INPUT_X_BROADCAST \
+	SPMV_PERFORMANCE_HTML SPMV_PIPELINE_HTML
 
 ifneq ($(strip $(CONSTRUCTION_DIR)),)
 VERILATOR_ROOT := $(shell dirname $$(dirname $$(command -v verilator)))/share/verilator
 MODEL_DIR := $(CONSTRUCTION_DIR)/abi/verilator
-CPPFLAGS += -DSPMV_INPUT_SMOKE_VERILATOR -I$(MODEL_DIR) -isystem $(VERILATOR_ROOT)/include \
-	-isystem $(VERILATOR_ROOT)/include/vltstd
+CPPFLAGS += -DSPMV_INPUT_TRANSACTION_VERILATOR -I$(MODEL_DIR) -isystem $(VERILATOR_ROOT)/include \
+	-isystem $(VERILATOR_ROOT)/include/vltstd \
+	-DSPMV_PERFORMANCE_HTML_DEFAULT=$(SPMV_PERFORMANCE_HTML) \
+	-DSPMV_PIPELINE_HTML_DEFAULT=$(SPMV_PIPELINE_HTML)
 LDLIBS += $(MODEL_DIR)/libVSpmvInputTop.a \
 	$(MODEL_DIR)/libverilated.a -pthread -latomic
 endif
 
-.PHONY: build-host build-simulation-host encode cuper-a-test encoding-html-test encoding-test run
+.PHONY: build-host build-simulation-host encode cuper-a-test encoding-html-test encoding-test input-html-test run
 
 build-host: $(HOST_BIN)
 
@@ -70,12 +85,15 @@ build-simulation-host:
 	@test -s "$(MODEL_DIR)/libVSpmvInputTop.a"
 	@test -s "$(MODEL_DIR)/libverilated.a"
 	@$(MAKE) --no-print-directory "$(HOST_BIN)" CONSTRUCTION_DIR="$(CONSTRUCTION_DIR)" BUILD_DIR="$(BUILD_DIR)"
-	@printf 'HOST_FORMAT=1\nCONFIG_FQCN=%s\nACCELERATOR_HOST_KIND=spmv\nACCELERATOR_HOST_ABI=spmv-input-smoke-v1\nPROTOCOL_ABI=spmv-input-v1\nSPMV_INPUT_A_READER_COUNT=%s\nSPMV_INPUT_X_READER_COUNT=%s\nSPMV_INPUT_HBM_CHANNEL_COUNT=%s\nSPMV_INPUT_HBM_BASE=%s\nSPMV_INPUT_HBM_BYTES=%s\nSPMV_INPUT_HBM_CHANNEL_ALIGNMENT_BYTES=%s\nSPMV_INPUT_AXI_ADDR_WIDTH=%s\nSPMV_INPUT_AXI_DATA_WIDTH=%s\nSPMV_INPUT_AXI_ID_WIDTH=%s\n' \
+	@printf 'HOST_FORMAT=4\nCONFIG_FQCN=%s\nACCELERATOR_HOST_KIND=spmv\nACCELERATOR_HOST_ABI=spmv-input-report-v3\nPROTOCOL_ABI=spmv-input-full-bandwidth-v1\nSPMV_INPUT_A_READER_COUNT=%s\nSPMV_INPUT_X_READER_COUNT=%s\nSPMV_INPUT_HBM_CHANNEL_COUNT=%s\nSPMV_INPUT_HBM_BASE=%s\nSPMV_INPUT_HBM_BYTES=%s\nSPMV_INPUT_HBM_CHANNEL_ALIGNMENT_BYTES=%s\nSPMV_INPUT_AXI_ADDR_WIDTH=%s\nSPMV_INPUT_AXI_DATA_WIDTH=%s\nSPMV_INPUT_AXI_ID_WIDTH=%s\nSPMV_INPUT_MAX_OUTSTANDING_BURSTS=%s\nSPMV_INPUT_CONSUMER_COUNT=%s\nSPMV_INPUT_X_BROADCAST=%s\nSPMV_PERFORMANCE_HTML=%s\nSPMV_PIPELINE_HTML=%s\n' \
 		"$$(sed -n 's/^CONFIG_FQCN=//p' "$(SPMV_PROFILE_FILE)")" \
 		"$(SPMV_INPUT_A_READER_COUNT)" "$(SPMV_INPUT_X_READER_COUNT)" \
 		"$(SPMV_INPUT_HBM_CHANNEL_COUNT)" "$(SPMV_INPUT_HBM_BASE)" "$(SPMV_INPUT_HBM_BYTES)" \
 		"$(SPMV_INPUT_HBM_CHANNEL_ALIGNMENT_BYTES)" "$(SPMV_INPUT_AXI_ADDR_WIDTH)" \
-		"$(SPMV_INPUT_AXI_DATA_WIDTH)" "$(SPMV_INPUT_AXI_ID_WIDTH)" > "$(BUILD_DIR)/host.env"
+			"$(SPMV_INPUT_AXI_DATA_WIDTH)" "$(SPMV_INPUT_AXI_ID_WIDTH)" \
+			"$(SPMV_INPUT_MAX_OUTSTANDING_BURSTS)" \
+			"$(SPMV_INPUT_CONSUMER_COUNT)" "$(SPMV_INPUT_X_BROADCAST)" \
+			"$(SPMV_PERFORMANCE_HTML)" "$(SPMV_PIPELINE_HTML)" > "$(BUILD_DIR)/host.env"
 
 encode: build-host
 	@"$(HOST_BIN)" --encode "$(ENCODING)" "$${mainargs:-}"
@@ -91,6 +109,12 @@ encoding-html-test: build-host
 	@"$(HOST_BIN)" --encode "$(ENCODING)" "$${mainargs:-$(ENCODING_TEST_DATASET)}"
 	@node "$(CURDIR)/encoding/html_report_test.js" \
 		"$(SPMV_ENCODING_REPORT_DIR)/$(ENCODING)/$${mainargs:-$(ENCODING_TEST_DATASET)}.html"
+
+input-html-test:
+	@command -v node >/dev/null || { echo 'input-html-test 需要 node' >&2; exit 2; }
+	@test -n "$(strip $(SPMV_INPUT_REPORT_DIR))" || { echo 'input-html-test 缺少 SPMV_INPUT_REPORT_DIR' >&2; exit 2; }
+	@node "$(CURDIR)/input_html_test.js" \
+		"$(SPMV_INPUT_REPORT_DIR)/performance.html" "$(SPMV_INPUT_REPORT_DIR)/pipeline.html"
 
 run: build-host
 	@"$(HOST_BIN)" "$${mainargs:-}"

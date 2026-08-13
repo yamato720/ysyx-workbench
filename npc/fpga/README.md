@@ -8,7 +8,8 @@
 
 | 目录 | 职责 |
 | --- | --- |
-| `common/scala/` | mailbox、AXI、系统 IO、FPGA runtime 和公共 elaborator |
+| `common/scala/fpga/` | 中性 `fpga` package 的 mailbox、AXI、系统 IO、runtime、provider 与 manifest |
+| `common/scala/{npc,ysyx,accelerators}/` | 各产品 FPGA 顶层、shell 与 elaborator |
 | `../chisel/configs/fpga/` | FPGA L3/L4 CDE Config、`base`、`core` 和板卡终端 |
 | `common/{scripts,tcl,tests}/` | 构建入口、共享 Tcl、清单工具与 dry-run/RTL 回归 |
 | `common/{build,releases}/` | 忽略的本地构建缓存与可审查的 Release 合同 |
@@ -103,13 +104,15 @@ Vivado/Vitis 实现后从实现报告中取得，本次 dry-run 不对其作估�
 
 | 路径 | 层级 |
 | --- | --- |
-| `common/scala/common/` | AXI、mailbox、运行时和 `FpgaSystemIO` 公共边界 |
-| `common/scala/{rv-core,ysyxSoC}/` | 裸 NPC 与 ysyxSoC 的公共 FPGA 系统和 elaborator |
-| `../chisel/configs/fpga/common/` | FPGA L3 公共 CDE 键与组合协议 |
+| `common/scala/fpga/` | 中性 `fpga` package 的 AXI、mailbox、运行时和 `FpgaSystemIO` |
+| `common/scala/{npc,ysyx,accelerators}/` | 裸 NPC、ysyxSoC 与 SPMV 的 FPGA 顶层和 elaborator |
+| `../chisel/configs/fpga/base/` | FPGA L3 公共 CDE 键与组合协议 |
 | `{u55c,zcu102}/scala/` | 板卡 provider 与 shell；L4 终端位于 `../chisel/configs/fpga/` |
 
 CDE 的 `FpgaBoardKey` 决定 shell，`FpgaClockMHzKey` 决定目标频率；板卡 wrapper、XDC、HBM 或
-PS-DDR 连接仍属于对应板卡目录。Scala package `npc.fpga` 和 Config FQCN 不随物理路径改变。
+PS-DDR 连接仍属于对应板卡目录。共享类型使用 `fpga`/`fpga.<board>`；裸 NPC、SoC 与 SPMV
+公开 Config 分别使用 `npc.fpga.<board>`、`ysyx.fpga.<board>` 与
+`accelerators.spmv.fpga.<board>`。短名保持稳定，不提供旧 FQCN 别名。
 
 ## 资产校验
 
@@ -121,7 +124,7 @@ npc/fpga/common/scripts/artifact-manifest.sh verify \
   --directory /path/to/artifacts \
   --board u55c \
   --platform xilinx_u55c_gen3x16_xdma_3_202210_1 \
-  --config-fqcn npc.fpga.u55c.U55cYsyxSocFpgaConfig \
+  --config-fqcn ysyx.fpga.u55c.U55cYsyxSocFpgaConfig \
   --host-abi nemu-construction-v1 \
   --protocol-abi npc-fpga-runtime-v11
 ```

@@ -2,7 +2,9 @@
 
 | 目录 | 编译边界 | 职责 |
 | --- | --- | --- |
-| `rv-core/` | SBT `root` | NPC 流水线、公共协议、DPI 组件和单元测试 |
+| `rv-core/` | SBT `root` | `scala/` 保存 NPC 流水线与协议，`test/` 保存单元测试 |
+| `accelerators/common/` | SBT `root`、Mill `ysyxsoc` | `scala/`/`test/` 保存产品无关的独立 AXI4 端口基础模块 |
+| `accelerators/spmv/` | SBT `root`、Mill `ysyxsoc` | SPMV 顶层、A/X 输入、reader、资源探针和测试 |
 | `../fpga/{common,u55c,zcu102}/scala/` | Mill `ysyxsoc` | 裸 NPC/ysyxSoC 的 FPGA 系统与板卡 shell |
 | `ysyxSoC/` | Mill `ysyxsoc` | Rocket/CDE/Diplomacy SoC 与教学外设 |
 | `configs/` | 按使用范围编入上述目标 | L1-L4 命名 Config、片段和参数数据 |
@@ -10,6 +12,10 @@
 依赖保持单向：L1 NPC 只额外依赖轻量 CDE 参数库，并直接提供 `NpcCoreConfigKey`；
 `YsyxSocConfig` 默认选择 `ExternalAxiConfig`；终端板卡 SoC Config 再从左侧直接叠加完整 NPC
 与板卡策略。裸 NPC 不会因为支持 FPGA 而引入 Rocket、Diplomacy 或 ysyxSoC 依赖。
+
+自有 Chisel 模块统一使用紧凑源码根：生产源码放 `scala/`，测试放 `test/`，不再叠加
+`main/scala/<重复 package>` 或 `test/scala/<重复 package>`。Scala `package` 负责命名空间，目录只表达
+模块和职责。`ysyxSoC/rocket-chip` 是外部工程，保留其标准目录结构。
 
 ## 构造矩阵
 
@@ -23,7 +29,7 @@
 
 ```scala
 class U55cYsyxSocFpgaConfig extends CDEConfig(
-  new U55cBoardConfig ++
+  new _root_.fpga.u55c.U55cBoardConfig ++
     new FpgaConfig ++
     new YsyxElaborateConfig
 ) with _root_.npc.U55cSocTerminal

@@ -65,7 +65,7 @@ $(SPMV_ELAB_DONE): FORCE spmv-check
 	if test "$(FPGA_TOOL_DRY_RUN)" = 1; then echo 'SPMV elaboration dry run'; touch "$@"; exit 0; fi; \
 	rm -rf "$(SPMV_RTL_DIR)"; mkdir -p "$(SPMV_RTL_DIR)"; \
 	cd "$(CURDIR)/chisel/ysyxSoC" && NPC_SCALA_CONFIG="$(CONFIG_FQCN)" \
-		mill -i ysyxsoc.runMain spmv.ElaborateSpmvResourceProbe --target-dir "$(SPMV_RTL_DIR)"; \
+		mill -i ysyxsoc.runMain accelerators.spmv.fpga.ElaborateSpmvResourceProbe --target-dir "$(SPMV_RTL_DIR)"; \
 	test -f "$(SPMV_RTL_DIR)/$(SPMV_CHISEL_TOP).sv" && test -f "$(SPMV_PARAMETER_MANIFEST)"; \
 	cp "$(SPMV_WRAPPER)" "$(SPMV_RTL_DIR)/"; \
 	"$(SPMV_SOURCE_MANIFEST_TOOL)" write synthesis "$(SPMV_SOURCE_MANIFEST)" "$(CURDIR)" \

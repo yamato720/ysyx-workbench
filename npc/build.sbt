@@ -33,22 +33,24 @@ lazy val root = (project in file("./chisel"))
   .dependsOn(ip)
   .settings(
     name := "npc",
-    Compile / scalaSource := baseDirectory.value / "rv-core/main/scala",
-    Compile / resourceDirectory := baseDirectory.value / "rv-core/main/resources",
-    Test / scalaSource := baseDirectory.value / "rv-core/test/scala",
-    Test / resourceDirectory := baseDirectory.value / "rv-core/test/resources",
+    Compile / scalaSource := baseDirectory.value / "rv-core/scala",
+    Test / scalaSource := baseDirectory.value / "rv-core/test",
     Compile / unmanagedSourceDirectories ++= Seq(
-      baseDirectory.value / "accelerators/spmv/main/scala",
+      baseDirectory.value / "accelerators/common/scala",
+      baseDirectory.value / "accelerators/spmv/scala",
       baseDirectory.value / "configs/parameters",
       baseDirectory.value / "configs/common",
       baseDirectory.value / "configs/nemu",
       baseDirectory.value / "configs/npc",
-      baseDirectory.value / "configs/spmv",
+      baseDirectory.value / "configs/accelerators/spmv",
       baseDirectory.value / "ysyxSoC/rocket-chip/dependencies/cde/cde/src",
       (ThisBuild / baseDirectory).value / "chisel/ysyxSoC/rocket-chip/dependencies/hardfloat/hardfloat/src/main/scala"
     ),
     Compile / unmanagedResourceDirectories += baseDirectory.value / "configs/resources",
-    Test / unmanagedSourceDirectories += baseDirectory.value / "accelerators/spmv/test/scala"
+    Test / unmanagedSourceDirectories ++= Seq(
+      baseDirectory.value / "accelerators/common/test",
+      baseDirectory.value / "accelerators/spmv/test"
+    )
   )
   .settings(chiselSettings)
 

@@ -16,6 +16,7 @@ object ConfigCatalogGenerator {
   private val ConfigRelativePath = Path.of("chisel", "configs")
   private val FpgaRelativePath = Path.of("fpga")
   private val FpgaConfigRelativePath = ConfigRelativePath.resolve("fpga")
+  private val FpgaTerminalTargets = Map("npc" -> "NPC", "ysyx" -> "SOC", "spmv" -> "SPMV")
   private val PackagePattern: Regex = raw"(?m)^package\s+([A-Za-z_][A-Za-z0-9_.]*)\s*$$".r
   private val ClassPattern: Regex = raw"(?m)^\s*class\s+([A-Za-z_][A-Za-z0-9_]*Config)\s+extends\s+([A-Za-z_][A-Za-z0-9_.]*)".r
   private val BoardPattern: Regex = raw"WithFpgaBoardConfig\(FpgaBoard\.([A-Za-z0-9_]+)\)".r
@@ -236,17 +237,27 @@ object ConfigCatalogGenerator {
   private def discoverTerminals(
     directory: Path,
     expectedScope: String,
-    board: Option[String]
+    board: Option[String],
+    expectedTarget: Option[String] = None,
+    expectedPackage: Option[String] = None
   ): Vector[ConfigCatalog.Entry] = {
     val path = validateTerminalLayout(directory)
     val source = read(path)
     val pkg = packageName(source, path)
+    expectedPackage.foreach { value =>
+      require(pkg == value,
+        s"终端目录 $directory 必须使用 package $value，实际为 $pkg")
+    }
     classBlocks(source).map { block =>
       val (scope, target) = terminalMetadata(block).getOrElse(
         throw new IllegalArgumentException(s"终端文件 $path 中的 ${block.name} 缺少 terminal 层 trait")
       )
       require(scope == expectedScope,
         s"Config ${block.name} 的终端 trait 作用域 $scope 与目录 $directory 不一致")
+      expectedTarget.foreach { value =>
+        require(target == value,
+          s"Config ${block.name} 的 terminal TARGET=$target 与目录 $directory 要求的 $value 不一致")
+      }
       validateIpTerminal(block, scope, target)
       val expectedParent = if (scope == "npc") "ConstructionConfig" else "CDEConfig"
       require(block.parent == expectedParent,
@@ -262,13 +273,18 @@ object ConfigCatalogGenerator {
   }
 
   private def discoverNpc(configRoot: Path): Vector[ConfigCatalog.Entry] =
-    discoverTerminals(configRoot.resolve("npc"), "npc", None)
+    discoverTerminals(configRoot.resolve("npc"), "npc", None, expectedPackage = Some("npc"))
 
   private def discoverSoc(configRoot: Path): Vector[ConfigCatalog.Entry] =
-    discoverTerminals(configRoot.resolve("ysyx"), "soc", None)
+    discoverTerminals(configRoot.resolve("ysyx"), "soc", None, expectedPackage = Some("ysyx"))
 
   private def discoverSpmv(configRoot: Path): Vector[ConfigCatalog.Entry] =
-    discoverTerminals(configRoot.resolve("spmv"), "spmv", None)
+    discoverTerminals(
+      configRoot.resolve("accelerators").resolve("spmv"),
+      "spmv",
+      None,
+      expectedPackage = Some("accelerators.spmv")
+    )
 
   private def boardMetadata(boardDirectory: Path, configDirectory: Path): String = {
     val source = scalaFiles(configDirectory).map(read).mkString("\n")
@@ -283,23 +299,54 @@ object ConfigCatalogGenerator {
     }
   }
 
-  private def discoverFpga(npcRoot: Path): Vector[ConfigCatalog.Entry] = {
+  private def fpgaTerminalPackage(board: String, targetDirectory: String): String =
+    targetDirectory match {
+      case "npc" => s"npc.fpga.$board"
+      case "ysyx" => s"ysyx.fpga.$board"
+      case "spmv" => s"accelerators.spmv.fpga.$board"
+    }
+
+  /** 递归发现板卡下按产品目标拆分的终端目录。 */
+  private[npc] def discoverFpga(npcRoot: Path): Vector[ConfigCatalog.Entry] = {
     val fpgaConfigRoot = npcRoot.resolve(FpgaConfigRelativePath)
     if (!Files.isDirectory(fpgaConfigRoot)) Vector.empty
     else {
       val directories = Files.list(fpgaConfigRoot)
       try directories.iterator.asScala.filter(Files.isDirectory(_)).toVector.flatMap { boardDirectory =>
-        if (boardDirectory.getFileName.toString == "common") Vector.empty
+        if (boardDirectory.getFileName.toString == "base") Vector.empty
         else {
           val board = boardMetadata(boardDirectory, boardDirectory)
-          discoverTerminals(boardDirectory, "fpga", Some(board))
+          val files = Files.walk(boardDirectory)
+          try {
+            val terminalFiles = files.iterator.asScala.filter { path =>
+              Files.isRegularFile(path) && path.getFileName.toString == "Configs.scala"
+            }.toVector
+            require(terminalFiles.nonEmpty, s"FPGA 板卡目录 $boardDirectory 不含终端 Configs.scala")
+            terminalFiles.flatMap { path =>
+              val directory = path.getParent
+              val relative = boardDirectory.relativize(directory)
+              require(relative.getNameCount == 1,
+                s"FPGA 终端必须直接位于 $boardDirectory/{npc,ysyx,spmv}，实际为 $relative")
+              val targetDirectory = relative.getFileName.toString
+              val target = FpgaTerminalTargets.getOrElse(targetDirectory,
+                throw new IllegalArgumentException(
+                  s"FPGA 终端目录 $directory 必须命名为 npc、ysyx 或 spmv"))
+              discoverTerminals(
+                directory,
+                "fpga",
+                Some(board),
+                expectedTarget = Some(target),
+                expectedPackage = Some(fpgaTerminalPackage(board, targetDirectory))
+              )
+            }
+          } finally files.close()
         }
       }
       finally directories.close()
     }
   }
 
-  private def validate(entries: Vector[ConfigCatalog.Entry]): Vector[ConfigCatalog.Entry] = {
+  private[npc] def validate(entries: Vector[ConfigCatalog.Entry]): Vector[ConfigCatalog.Entry] = {
     val duplicateShortNames = entries.groupBy(_.shortName).collect { case (name, values) if values.size > 1 => name }
     val duplicateClassNames = entries.groupBy(_.className).collect { case (name, values) if values.size > 1 => name }
     require(duplicateShortNames.isEmpty, s"Duplicate generated Config short names: ${duplicateShortNames.toSeq.sorted.mkString(", ")}")

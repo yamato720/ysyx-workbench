@@ -1,9 +1,11 @@
 #include "golden.hpp"
 #include "encoding/encoder.hpp"
+#include "input_simulation.hpp"
 
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstring>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -15,11 +17,6 @@
 #include <string>
 #include <system_error>
 #include <vector>
-
-#ifdef SPMV_INPUT_SMOKE_VERILATOR
-#include "VSpmvInputTop.h"
-#include "verilated.h"
-#endif
 
 namespace fs = std::filesystem;
 
@@ -111,7 +108,7 @@ fs::path resolveDataRoot() {
   return fs::path(ACCELERATOR_SIM_DEFAULT_DATA_ROOT);
 }
 
-#ifndef SPMV_INPUT_SMOKE_VERILATOR
+#ifndef SPMV_INPUT_TRANSACTION_VERILATOR
 fs::path resolveGoldenDirectory() {
   if (const char* configured = std::getenv("SPMV_GOLDEN_DIR")) {
     if (*configured != '\0') {
@@ -211,6 +208,7 @@ struct CuperAConfig {
   std::size_t axiAddrWidth = 64;
   std::size_t axiDataWidth = 512;
   std::size_t axiIdWidth = 4;
+  std::size_t maxOutstandingBursts = 2;
 };
 
 std::uint64_t readUnsignedEnv(const char* name, std::uint64_t fallback) {
@@ -250,11 +248,14 @@ CuperAConfig readCuperAConfig() {
       "SPMV_INPUT_AXI_DATA_WIDTH", config.axiDataWidth));
   config.axiIdWidth = static_cast<std::size_t>(readUnsignedEnv(
       "SPMV_INPUT_AXI_ID_WIDTH", config.axiIdWidth));
+  config.maxOutstandingBursts = static_cast<std::size_t>(readUnsignedEnv(
+      "SPMV_INPUT_MAX_OUTSTANDING_BURSTS", config.maxOutstandingBursts));
   if (config.aReaderCount == 0 || config.xReaderCount != 1 ||
       config.hbmChannelCount != config.aReaderCount || config.hbmBytes == 0 ||
       config.channelAlignment == 0 ||
       (config.channelAlignment & (config.channelAlignment - 1)) != 0 ||
       config.axiAddrWidth != 64 || config.axiDataWidth != 512 || config.axiIdWidth == 0 ||
+      config.maxOutstandingBursts < 2 ||
       (config.hbmBase & (config.channelAlignment - 1)) != 0 ||
       config.hbmBytes % config.channelAlignment != 0) {
     throw std::invalid_argument("SPMV_INPUT profile contains an invalid Cuper input layout");
@@ -362,7 +363,7 @@ void validateCuperAInstances(const encoding::cuper::CuperPackage& package,
   }
 }
 
-#ifndef SPMV_INPUT_SMOKE_VERILATOR
+#ifndef SPMV_INPUT_TRANSACTION_VERILATOR
 int runGolden(const DatasetChoice& choice) {
   const auto loadStart = std::chrono::steady_clock::now();
   const CsrMatrix matrix = loadMatrix(choice);
@@ -483,76 +484,93 @@ int runEncoding(const std::string& formatName, const std::string& requested) {
   return 0;
 }
 
-#ifdef SPMV_INPUT_SMOKE_VERILATOR
-int runInputSmoke() {
-  VerilatedContext context;
-  context.commandArgs(0, static_cast<char**>(nullptr));
-  VSpmvInputTop dut(&context);
-
-  dut.reset = 1;
-  dut.clock = 0;
-  dut.eval();
-  dut.clock = 1;
-  dut.eval();
-  dut.clock = 0;
-  dut.reset = 0;
-  dut.eval();
-
-  const std::array<CData*, 16> aIdle = {
-      &dut.io_aIdle_0, &dut.io_aIdle_1, &dut.io_aIdle_2, &dut.io_aIdle_3,
-      &dut.io_aIdle_4, &dut.io_aIdle_5, &dut.io_aIdle_6, &dut.io_aIdle_7,
-      &dut.io_aIdle_8, &dut.io_aIdle_9, &dut.io_aIdle_10, &dut.io_aIdle_11,
-      &dut.io_aIdle_12, &dut.io_aIdle_13, &dut.io_aIdle_14, &dut.io_aIdle_15};
-  const std::array<CData*, 16> aBusy = {
-      &dut.io_aBusy_0, &dut.io_aBusy_1, &dut.io_aBusy_2, &dut.io_aBusy_3,
-      &dut.io_aBusy_4, &dut.io_aBusy_5, &dut.io_aBusy_6, &dut.io_aBusy_7,
-      &dut.io_aBusy_8, &dut.io_aBusy_9, &dut.io_aBusy_10, &dut.io_aBusy_11,
-      &dut.io_aBusy_12, &dut.io_aBusy_13, &dut.io_aBusy_14, &dut.io_aBusy_15};
-  const std::array<CData*, 16> aDone = {
-      &dut.io_aDone_0, &dut.io_aDone_1, &dut.io_aDone_2, &dut.io_aDone_3,
-      &dut.io_aDone_4, &dut.io_aDone_5, &dut.io_aDone_6, &dut.io_aDone_7,
-      &dut.io_aDone_8, &dut.io_aDone_9, &dut.io_aDone_10, &dut.io_aDone_11,
-      &dut.io_aDone_12, &dut.io_aDone_13, &dut.io_aDone_14, &dut.io_aDone_15};
-  const std::array<CData*, 16> aError = {
-      &dut.io_aError_0, &dut.io_aError_1, &dut.io_aError_2, &dut.io_aError_3,
-      &dut.io_aError_4, &dut.io_aError_5, &dut.io_aError_6, &dut.io_aError_7,
-      &dut.io_aError_8, &dut.io_aError_9, &dut.io_aError_10, &dut.io_aError_11,
-      &dut.io_aError_12, &dut.io_aError_13, &dut.io_aError_14, &dut.io_aError_15};
-  const std::array<CData*, 16> aArValid = {
-      &dut.io_aHbm_0_ar_valid, &dut.io_aHbm_1_ar_valid, &dut.io_aHbm_2_ar_valid,
-      &dut.io_aHbm_3_ar_valid, &dut.io_aHbm_4_ar_valid, &dut.io_aHbm_5_ar_valid,
-      &dut.io_aHbm_6_ar_valid, &dut.io_aHbm_7_ar_valid, &dut.io_aHbm_8_ar_valid,
-      &dut.io_aHbm_9_ar_valid, &dut.io_aHbm_10_ar_valid, &dut.io_aHbm_11_ar_valid,
-      &dut.io_aHbm_12_ar_valid, &dut.io_aHbm_13_ar_valid, &dut.io_aHbm_14_ar_valid,
-      &dut.io_aHbm_15_ar_valid};
-  const std::array<CData*, 16> aOutputValid = {
-      &dut.io_aOutput_0_valid, &dut.io_aOutput_1_valid, &dut.io_aOutput_2_valid,
-      &dut.io_aOutput_3_valid, &dut.io_aOutput_4_valid, &dut.io_aOutput_5_valid,
-      &dut.io_aOutput_6_valid, &dut.io_aOutput_7_valid, &dut.io_aOutput_8_valid,
-      &dut.io_aOutput_9_valid, &dut.io_aOutput_10_valid, &dut.io_aOutput_11_valid,
-      &dut.io_aOutput_12_valid, &dut.io_aOutput_13_valid, &dut.io_aOutput_14_valid,
-      &dut.io_aOutput_15_valid};
-  for (unsigned lane = 0; lane < 16; ++lane) {
-    if (!*aIdle[lane] || *aBusy[lane] || *aDone[lane] || *aError[lane] ||
-        *aArValid[lane] || *aOutputValid[lane]) {
-      throw std::runtime_error("SPMV A reader static smoke check failed at lane " +
-          std::to_string(lane));
-    }
+#ifdef SPMV_INPUT_TRANSACTION_VERILATOR
+encoding::cuper::CuperBeat packXBeat(const std::vector<double>& input, std::size_t begin) {
+  encoding::cuper::CuperBeat beat{};
+  for (std::size_t lane = 0; lane < beat.size() && begin + lane < input.size(); ++lane) {
+    static_assert(sizeof(input[begin + lane]) == sizeof(beat[lane]));
+    std::memcpy(&beat[lane], &input[begin + lane], sizeof(beat[lane]));
   }
-  if (!dut.io_xIdle_0 || dut.io_xBusy_0 || dut.io_xDone_0 || dut.io_xError_0 ||
-      dut.io_xHbm_0_ar_valid || dut.io_xOutput_0_valid) {
-    throw std::runtime_error("SPMV X reader static smoke check failed");
+  return beat;
+}
+
+int runInputTransactions(const std::string& requested) {
+  const fs::path dataRoot = resolveDataRoot();
+  const std::vector<DatasetChoice> choices = discoverDatasets(dataRoot);
+  const std::string dataset = requested.empty() ? "n512" : requested;
+  if (dataset == "--list") {
+    printChoices(dataRoot, choices, "run");
+    return 0;
   }
-  dut.final();
-  std::cout << "[spmv-input-smoke] A readers=16 X readers=1 idle=1 ar=0 output=0 error=0 PASS\n";
+  if (choices.empty()) {
+    throw std::runtime_error("no CSR datasets were found under " + dataRoot.string() +
+        "; run make -C accelerator-sim/data");
+  }
+
+  const DatasetChoice& choice = selectDataset(choices, dataset);
+  const CsrMatrix matrix = loadMatrix(choice);
+  const std::vector<double> x = readArray<double>(choice.path / "b.txt");
+  if (x.size() != matrix.columns) {
+    throw std::runtime_error("b.txt length must equal matrix column count");
+  }
+  encoding::EncodingOptions options;
+  options.format = encoding::EncodingFormat::Cuper;
+  const encoding::EncodedMatrix encoded = encoding::encodeMatrix(matrix, options);
+  const auto& package = std::get<encoding::cuper::CuperPackage>(encoded.package);
+  const CuperAConfig config = readCuperAConfig();
+  const CuperAInstances instances = instantiateCuperA(package, config);
+  validateCuperAInstances(package, instances, config);
+
+  InputSimulationData simulation;
+  simulation.dataset = choice.name;
+  simulation.hbmBase = config.hbmBase;
+  simulation.hbmBytes = config.hbmBytes;
+  simulation.aChannels = package.matrixChannels;
+  simulation.aAddresses.reserve(instances.instances.size());
+  for (const CuperAInstance& instance : instances.instances) {
+    simulation.aAddresses.push_back(instance.address);
+  }
+  const std::size_t xOffset = alignValue(instances.hbm.size(), config.channelAlignment);
+  simulation.xAddress = config.hbmBase + xOffset;
+  simulation.maxOutstandingBursts = config.maxOutstandingBursts;
+  for (std::size_t begin = 0; begin < x.size(); begin += encoding::cuper::kLanesPerBeat) {
+    simulation.xBeats.push_back(packXBeat(x, begin));
+  }
+  if (xOffset > config.hbmBytes || simulation.xBeats.size() >
+      (config.hbmBytes - xOffset) / (config.axiDataWidth / 8)) {
+    throw std::runtime_error("Cuper A and X inputs exceed the configured HBM window");
+  }
+#ifndef SPMV_PERFORMANCE_HTML_DEFAULT
+#define SPMV_PERFORMANCE_HTML_DEFAULT 1
+#endif
+#ifndef SPMV_PIPELINE_HTML_DEFAULT
+#define SPMV_PIPELINE_HTML_DEFAULT 1
+#endif
+  simulation.performanceHtml = SPMV_PERFORMANCE_HTML_DEFAULT != 0;
+  simulation.pipelineHtml = SPMV_PIPELINE_HTML_DEFAULT != 0;
+  if (simulation.pipelineHtml && !simulation.performanceHtml) {
+    throw std::invalid_argument("SPMV_PIPELINE_HTML requires SPMV_PERFORMANCE_HTML");
+  }
+
+  const InputSimulationResult result = runInputSimulation(simulation);
+  std::cout << "[spmv-input] dataset=" << choice.name
+            << " A_readers=" << simulation.aChannels.size()
+            << " A_beats=" << package.stats.totalMatrixBeats
+            << " X_broadcast_consumers=16 X_beats=" << simulation.xBeats.size()
+            << " cycles=" << result.cycles << " PASS\n";
+  if (!result.performanceReport.empty()) {
+    std::cout << "[spmv-input] performance=" << result.performanceReport << '\n';
+  }
+  if (!result.pipelineReport.empty()) {
+    std::cout << "[spmv-input] pipeline=" << result.pipelineReport << '\n';
+  }
   return 0;
 }
 #endif
 
 int run(const std::string& requested) {
-#ifdef SPMV_INPUT_SMOKE_VERILATOR
-  (void)requested;
-  return runInputSmoke();
+#ifdef SPMV_INPUT_TRANSACTION_VERILATOR
+  return runInputTransactions(requested);
 #else
   const fs::path dataRoot = resolveDataRoot();
   const std::vector<DatasetChoice> choices = discoverDatasets(dataRoot);

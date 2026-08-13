@@ -44,7 +44,7 @@ case "$scope" in
     ;;
   spmv)
     if ! (cd "$npc_root" && NPC_SCALA_CONFIG="$fqcn" sbt \
-      "root/runMain accelerator.spmv.DescribeSpmvInputSimulationConfig $temporary") >"$log" 2>&1; then
+      "root/runMain accelerators.spmv.DescribeSpmvInputSimulationConfig $temporary") >"$log" 2>&1; then
       echo "生成 $fqcn profile 失败：" >&2
       cat "$log" >&2
       exit 1
@@ -52,7 +52,7 @@ case "$scope" in
     ;;
   fpga)
     if [[ $target == SPMV ]]; then
-      profile_main=accelerator.spmv.DescribeSpmvConfig
+      profile_main=accelerators.spmv.fpga.DescribeSpmvConfig
     else
       profile_main=ysyx.DescribeFpgaConfig
     fi
@@ -81,6 +81,8 @@ awk -F= '
   $1 == "HOST_ABI" { host_abi=$2 }
   $1 == "ACCELERATOR_HOST_KIND" { accelerator_host_kind=$2 }
   $1 == "ACCELERATOR_HOST_ABI" { accelerator_host_abi=$2 }
+  $1 == "SPMV_PERFORMANCE_HTML" { spmv_performance_html=$2 }
+  $1 == "SPMV_PIPELINE_HTML" { spmv_pipeline_html=$2 }
   seen[$1]++ { exit 1 }
   index(substr($0, index($0, "=") + 1), "\r") { exit 1 }
   END {
@@ -90,12 +92,17 @@ awk -F= '
     if (scope == "spmv") {
       if (capability != "run" || target != "SPMV" || host_abi != "none" ||
           !seen["ACCELERATOR_HOST_KIND"] || !seen["ACCELERATOR_HOST_ABI"] ||
-          accelerator_host_kind != "spmv" || accelerator_host_abi != "spmv-input-smoke-v1" ||
+          accelerator_host_kind != "spmv" || accelerator_host_abi != "spmv-input-report-v3" ||
           !seen["SPMV_INPUT_A_READER_COUNT"] || !seen["SPMV_INPUT_X_READER_COUNT"] ||
           !seen["SPMV_INPUT_HBM_CHANNEL_COUNT"] || !seen["SPMV_INPUT_HBM_BASE"] ||
           !seen["SPMV_INPUT_HBM_BYTES"] || !seen["SPMV_INPUT_HBM_CHANNEL_ALIGNMENT_BYTES"] ||
           !seen["SPMV_INPUT_AXI_ADDR_WIDTH"] || !seen["SPMV_INPUT_AXI_DATA_WIDTH"] ||
-          !seen["SPMV_INPUT_AXI_ID_WIDTH"] ||
+          !seen["SPMV_INPUT_AXI_ID_WIDTH"] || !seen["SPMV_INPUT_MAX_OUTSTANDING_BURSTS"] ||
+          !seen["SPMV_INPUT_CONSUMER_COUNT"] ||
+          !seen["SPMV_INPUT_X_BROADCAST"] || !seen["SPMV_PERFORMANCE_HTML"] ||
+          !seen["SPMV_PIPELINE_HTML"] || spmv_performance_html !~ /^[01]$/ ||
+          spmv_pipeline_html !~ /^[01]$/ ||
+          (spmv_pipeline_html == "1" && spmv_performance_html != "1") ||
           seen["XLEN"] || seen["ISA_STRING"] || seen["NEMU_PRESET"] ||
           seen["NEMU_BACKEND"] || seen["PIPELINE"] || seen["FPGA_BOARD"] ||
           seen["ICACHE_ENABLED"] || seen["DCACHE_ENABLED"] || seen["L2CACHE_ENABLED"]) exit 1

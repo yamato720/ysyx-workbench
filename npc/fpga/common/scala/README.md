@@ -4,14 +4,14 @@
 板卡 wrapper、约束与板卡构建流程位于 `../../u55c`、`../../zcu102`；厂商 IP 生成器位于
 `../../../fpga-ip-generator`。
 
-- `common/`：FPGA 平台组件、调试控制、浮点回退、邮箱、运行时协议和
-  板卡无关的 `FpgaSystemIO` 边界。
-- `rv-core/`：裸核生成入口与板卡无关系统，生成入口为 `npc.ElaborateFPGA`。
-- `ysyxSoC/`：ysyxSoC 生成入口与板卡无关系统，生成入口为 `ysyx.ElaborateFPGA`。
-- FPGA 公共 CDE 键与组合协议位于 `../../../chisel/configs/fpga/common/`；板卡终端 Config 位于
-  `../../../chisel/configs/fpga/{u55c,zcu102}/`。
+- `fpga/`：中性 FPGA 平台组件、邮箱、运行时协议、算术 provider 与 `FpgaSystemIO`。
+- `npc/`：裸核生成入口与板卡无关系统，生成入口为 `npc.ElaborateFPGA`。
+- `ysyx/`：ysyxSoC 生成入口与板卡无关系统，生成入口为 `ysyx.ElaborateFPGA`。
+- `accelerators/spmv/fpga/`：SPMV profile 与资源探针生成入口。
+- FPGA 公共 CDE 键与组合协议位于 `../../../chisel/configs/fpga/base/`；板卡终端 Config 位于
+  `../../../chisel/configs/fpga/<board>/{npc,ysyx,spmv}/`。
 
-普通 NPC 流水线仍位于 `../../../chisel/rv-core/main/scala`。`FpgaCoreComponents` 只提供 FPGA 的
+普通 NPC 流水线仍位于 `../../../chisel/rv-core/scala`。`FpgaCoreComponents` 只提供 FPGA 的
 整数 IP 选择、浮点直接/邮箱端点和派发控制；译码、流水线和提交逻辑不复制，也不进入
 板级源码。SBT `root` 只额外编入轻量 CDE 参数库；FPGA 终端统一由 ysyxSoC 的 Mill 编译边界编入，
 使裸核与 SoC 共用同一份板卡 Config 源码与组合方式。
@@ -35,6 +35,6 @@ elaborator 会交叉验证目录板卡、工具链板卡与硬件 CDE 板卡。
 `U55cBoardConfig` 与 `Zcu102BoardConfig` 位于 `../../../chisel/configs/fpga/<board>/core/`，是裸核和 SoC 共用的
 板卡策略，并在 Config 中设定频率。完整 L1 `FpgaConfig` 自身提供 CDE 核心键；
 `U55cNpcFpgaConfig` 与 `Zcu102NpcFpgaConfig` 直接叠加它。`U55cYsyxSocFpgaConfig` 与
-`Zcu102YsyxSocFpgaConfig` 位于对应板卡 `../../../chisel/configs/fpga/<board>/`，使用
+`Zcu102YsyxSocFpgaConfig` 位于对应板卡 `../../../chisel/configs/fpga/<board>/ysyx/`，使用
 `../../../chisel/configs/ysyx/Configs.scala` 的通用 SoC 平台，并在其左侧直接叠加完整 NPC。两块板没有不同的
 CPU 语义，因此不保留 CPU 专用的板卡别名 Config。

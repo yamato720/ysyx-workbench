@@ -14,12 +14,6 @@ trait LocalSocTerminal extends LocalNemuTerminalCore {
   final override val constructionTarget: String = "SOC"
 }
 
-/** 不含 CPU/NEMU 的本地 SPMV 输入 smoke 终端。 */
-trait LocalSpmvInputTerminal extends LocalSpmvInputTerminalCore {
-  final override val constructionScope: String = "spmv"
-  final override val constructionTarget: String = "SPMV"
-}
-
 /** U55C 裸 NPC 的完整终端预设。 */
 trait U55cNpcTerminal extends U55cFpgaTerminalCore {
   final override val constructionScope: String = "fpga"
@@ -30,18 +24,6 @@ trait U55cNpcTerminal extends U55cFpgaTerminalCore {
 trait U55cNpcPerformanceMonitorTerminal extends U55cPerformanceMonitorFpgaTerminalCore {
   final override val constructionScope: String = "fpga"
   final override val constructionTarget: String = "NPC"
-}
-
-/** U55C SPMV 加速器的只综合终端，并提供独立软件 golden host。 */
-trait U55cSpmvSynthesisTerminal extends U55cSpmvSynthesisTerminalCore {
-  final override val constructionScope: String = "fpga"
-  final override val constructionTarget: String = "SPMV"
-}
-
-/** U55C SPMV bitstream-only 终端；发布 XO/DCP/xclbin，并挂载独立软件 golden host。 */
-trait U55cSpmvBitstreamTerminal extends U55cSpmvBitstreamTerminalCore {
-  final override val constructionScope: String = "fpga"
-  final override val constructionTarget: String = "SPMV"
 }
 
 /** U55C ysyxSoC 的完整终端预设。 */

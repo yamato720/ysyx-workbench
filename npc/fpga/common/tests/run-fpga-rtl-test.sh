@@ -58,7 +58,7 @@ grep -q 'Zcu102YsyxFpgaShell.scala' "$zcu_soc/rtl/NpcFpgaTop.sv" || {
 grep -q 'U55cYsyxFpgaShell.scala' "$u55c_soc/rtl/NpcFpgaTop.sv" || {
   echo 'U55C elaboration 未选择 U55C SoC shell' >&2; exit 1;
 }
-grep -qx 'CONFIG_FQCN=npc.fpga.zcu102.Zcu102YsyxSocFpgaConfig' "$zcu_soc/rtl/fpga-parameters.env"
+grep -qx 'CONFIG_FQCN=ysyx.fpga.zcu102.Zcu102YsyxSocFpgaConfig' "$zcu_soc/rtl/fpga-parameters.env"
 grep -qx 'FPGA_BOARD=zcu102' "$zcu_soc/rtl/fpga-parameters.env"
 grep -qx 'FPGA_BOARD=u55c' "$u55c_soc/rtl/fpga-parameters.env"
 

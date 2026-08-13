@@ -25,6 +25,7 @@
 !/accelerator-sim/spmv/
 !/accelerator-sim/spmv/Makefile
 !/accelerator-sim/spmv/README.md
+!/accelerator-sim/spmv/input_html_test.js
 !/accelerator-sim/spmv/*.cpp
 !/accelerator-sim/spmv/*.hpp
 !/accelerator-sim/spmv/encoding/

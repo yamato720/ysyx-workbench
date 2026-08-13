@@ -52,15 +52,6 @@ final case class AcceleratorHostConfig(kind: String, abi: String) {
 }
 
 object AcceleratorHostConfig {
-  val SpmvGolden: AcceleratorHostConfig = AcceleratorHostConfig(
-    kind = "spmv",
-    abi = "spmv-golden-v1"
-  )
-
-  val SpmvInputSmoke: AcceleratorHostConfig = AcceleratorHostConfig(
-    kind = "spmv",
-    abi = "spmv-input-smoke-v1"
-  )
 }
 
 /** 终端可在综合或 bitstream 能力之外独立挂载纯软件 accelerator host。 */
@@ -68,11 +59,6 @@ trait AcceleratorHostConstruction extends Construction {
   protected def configuredAcceleratorHost: AcceleratorHostConfig
 
   final def acceleratorHostConfig: AcceleratorHostConfig = configuredAcceleratorHost
-}
-
-/** 独立于 NEMU 的本地 SPMV 输入 smoke 构造。 */
-trait SpmvInputSimulationConstruction extends AcceleratorHostConstruction {
-  final override protected def configuredCapability: String = "run"
 }
 
 /** 与运行宿主平行的计算 IP 挂载合同。

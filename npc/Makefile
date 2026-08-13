@@ -214,7 +214,7 @@ spmv-sim-elaborate:
 	mkdir -p "$(SPMV_SIM_OUT)"; \
 	cd "$(CURDIR)"; \
 	NPC_SCALA_CONFIG="$(CONFIG_FQCN)" SPMV_ELABORATE_OUTPUT_DIR="$(SPMV_SIM_OUT)" \
-		sbt -Dnpc.config="$(CONFIG_FQCN)" "root/runMain accelerator.spmv.ElaborateSpmvInputTop"; \
+		sbt -Dnpc.config="$(CONFIG_FQCN)" "root/runMain accelerators.spmv.ElaborateSpmvInputTop"; \
 	test -s "$(SPMV_SIM_OUT)/$(SPMV_SIM_TOP).sv"
 
 spmv-sim-verilator: $(if $(filter 1,$(CONSTRUCTION_PHASE_PREREQUISITES)),spmv-sim-elaborate)

@@ -87,7 +87,7 @@ if rg -q '\bNpcAluOp\b' "$npc_root/fpga/common/scala" \
   "$npc_root/fpga/u55c/scala" "$npc_root/fpga/zcu102/scala"; then
   fail 'FPGA harness 不应拥有 ISA 操作映射'
 fi
-if rg -q 'freechips\.rocketchip|org\.chipsalliance\.cde|npc\.fpga' "$npc_root/chisel/rv-core/main/scala"; then
+if rg -q 'freechips\.rocketchip|org\.chipsalliance\.cde|npc\.fpga' "$npc_root/chisel/rv-core/scala"; then
   fail 'rv-core 仍依赖 Rocket、CDE 或 FPGA 类型'
 fi
 
@@ -111,9 +111,9 @@ for name in U55cNpcFpgaConfig U55cCacheNpcFpgaConfig U55cRv64NpcFpgaConfig \
   Zcu102NpcFpgaConfig Zcu102YsyxSocFpgaConfig; do
   grep -Eq "^${name}[[:space:]]" "$catalog" || fail "自动目录缺少 $name"
 done
-[[ $($resolver "$catalog" U55cYsyxSocFpgaConfig fpga) == 'npc.fpga.u55c.U55cYsyxSocFpgaConfig|fpga|u55c|SOC' ]] ||
+[[ $($resolver "$catalog" U55cYsyxSocFpgaConfig fpga) == 'ysyx.fpga.u55c.U55cYsyxSocFpgaConfig|fpga|u55c|SOC' ]] ||
   fail '短名解析结果错误'
-[[ $($resolver "$catalog" npc.fpga.u55c.U55cYsyxSocFpgaConfig fpga) == 'npc.fpga.u55c.U55cYsyxSocFpgaConfig|fpga|u55c|SOC' ]] ||
+[[ $($resolver "$catalog" ysyx.fpga.u55c.U55cYsyxSocFpgaConfig fpga) == 'ysyx.fpga.u55c.U55cYsyxSocFpgaConfig|fpga|u55c|SOC' ]] ||
   fail 'FQCN 解析结果错误'
 if $resolver "$catalog" U55cYsyxSocFpgaConfig npc >/dev/null 2>&1; then fail '作用域错误未被拒绝'; fi
 if $resolver "$catalog" UnknownConfig fpga >/dev/null 2>&1; then fail '未知 Config 未被拒绝'; fi

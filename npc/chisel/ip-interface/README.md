@@ -10,3 +10,7 @@ FPGA harness。
 
 目录不使用 `src/` 或 `main/` 包装层。SBT 的 `ip` 项目和 ysyxSoC 的 Mill `npcIp` 模块都显式使用
 这些源码与资源根。
+
+AXI4 总线只在 `npc.ip.axi` 定义一次：`Axi4ReadMasterIO`、`Axi4WriteMasterIO` 和
+`Axi4ReadWriteMasterIO` 分别表示只读、只写和完整五通道主端口。NPC、加速器和 FPGA 集成层共同引用
+这些契约；HBM、DDR 或 U55C pseudo-channel 只描述端口最终连接的存储介质，不再各自复制 AXI4 Bundle。

@@ -6,12 +6,13 @@ FPGA 时启用；独立 NPC、DPI 和非 FPGA SoC 均跳过本层。L3 不决定
 
 | 目录 | 职责 | 可供下一层使用的成品 |
 | --- | --- | --- |
-| `common/base/` | FPGA 平台、板卡 CDE 键与原子片段 | `WithFpgaPlatformConfig`、`WithFpgaBoardConfig` |
-| `u55c/` | U55C 的 L4 板卡 core 和统一终端文件 | `U55cBoardConfig`、`Configs.scala` 中的完整终端 |
-| `zcu102/` | ZCU102 的 L4 板卡 core 和统一终端文件 | `Zcu102BoardConfig`、`Configs.scala` 中的完整终端 |
+| `base/` | 中性 `fpga` package 的平台、板卡 CDE 键与原子片段 | `WithFpgaPlatformConfig`、`WithFpgaBoardConfig` |
+| `u55c/` | U55C 的共享板卡 core 与产品终端目录 | `U55cBoardConfig`、`{npc,ysyx,spmv}/Configs.scala` |
+| `zcu102/` | ZCU102 的共享板卡 core 与产品终端目录 | `Zcu102BoardConfig`、`{npc,ysyx}/Configs.scala` |
 
-每块板卡只维护一个根部 `Configs.scala`，且其中只放挂载一个 terminal 层 trait 的无参类。所有 FPGA 终端使用同一个 `fpga` 作用域；`TARGET=NPC|SOC`
-在构造时选择裸核或 ysyxSoC elaborator。SoC FPGA 终端直接组合 L4 板卡、完整 L1 NPC 和
+每块板卡按 `npc`、`ysyx`、`spmv` 产品目标维护独立 `Configs.scala`，且其中只放挂载一个
+terminal 层 trait 的无参类。目录生成器递归发现这些文件，并校验其 `TARGET=NPC|SOC|SPMV`。
+SoC FPGA 终端直接组合 L4 板卡、完整 L1 NPC 和
 `YsyxElaborateConfig`；板卡键同时选择 FPGA 硬件分支。
 
 ## 可增加的特性
@@ -21,7 +22,7 @@ FPGA 时启用；独立 NPC、DPI 和非 FPGA SoC 均跳过本层。L3 不决定
 | 默认裸核 FPGA 核心 | `new FpgaConfig` | `npc/core/IntegrationCore.scala` | 裸核 FPGA 必需 |
 | 默认 SoC 外部 AXI 核心 | `new ExternalAxiConfig` | `npc/core/IntegrationCore.scala` | 通用 SoC 必需，且可覆盖 |
 | 已完成 NPC 覆盖 | `new Rv64PipelineDualForwardingFpgaConfig` 等完整 L1 Config | `npc/core/IntegrationCore.scala` | 是；仅 IM_Zicsr |
-| 平台地址与时钟 | `new WithFpgaPlatformConfig(platform)` | `common/base/FpgaConfigFragments.scala` | FPGA 生成必需 |
+| 平台地址与时钟 | `new WithFpgaPlatformConfig(platform)` | `base/FpgaConfigFragments.scala` | FPGA 生成必需 |
 | M 算子 IP | `new WithFpgaIpAttachmentConfig(attachment)` | `configs/common/base/FpgaIpAttachmentTraits.scala` | FPGA 生成必需；NPC/SoC 共享同一 attachment |
 | Vivado/Vitis 策略 | `FpgaToolchainConfig.U55cBase` 或 `Zcu102Base` | 根部 U55C/ZCU102 终端预设 trait | FPGA 生成必需；不进入 CDE |
 | SoC FPGA 分支 | `new U55cBoardConfig` 或 `new Zcu102BoardConfig` | L4 `...BoardConfig.scala` | SoC FPGA 必需；板卡键自动选择 |

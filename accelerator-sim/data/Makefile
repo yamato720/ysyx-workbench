@@ -13,7 +13,7 @@ FORCE_DOWNLOAD_ARG := $(if $(filter 1 yes true,$(FORCE_DOWNLOAD)),--force-downlo
 
 .DEFAULT_GOAL := fetch
 
-.PHONY: fetch generate download download-suitesparse-data list
+.PHONY: fetch generate download download-mad download-all download-suitesparse-data list
 
 fetch: generate download-suitesparse-data
 
@@ -23,6 +23,12 @@ generate:
 		--output-dir "$(GENERATED_OUTPUT)"
 
 download: download-suitesparse-data
+
+download-mad:
+	$(MAKE) download-suitesparse-data DATASETS=mad
+
+download-all:
+	$(MAKE) download-suitesparse-data DATASETS=all
 
 download-suitesparse-data:
 	$(PYTHON) "$(SCRIPT_DIR)/download_suitesparse_data.py" \

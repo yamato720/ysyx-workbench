@@ -15,31 +15,30 @@
 | `base/ConstructionTraits.scala` | NEMU host、accelerator host、计算 IP、FPGA 与 Make 终端的底层接口和校验 | 不直接使用；只由 terminal 层 trait 组合 |
 | `core/FpgaToolchainConfig.scala` | 可复制的完整 U55C/ZCU102 工具链配方 | 根部终端预设内部绑定 `U55cBase` 或 `Zcu102Base` |
 | `core/CheckTraits.scala` | 非 Make 的检查构造行为 | 检查 Config 直接挂载 `CheckOnlyConstruction` |
-| `core/TerminalCoreTraits.scala` | 本地、U55C、ZCU102 终端直接需要的运行子项集群 | 根部 Make terminal trait 只继承对应集群 |
+| `core/TerminalCoreTraits.scala` | NPC/SoC 的本地、U55C、ZCU102 运行子项集群 | 根部 Make terminal trait 只继承对应集群 |
 | `core/IpTerminalCoreTraits.scala` | FPGA/NEMU 计算单元终端直接需要的子项集群 | 根部 IP terminal trait 只继承对应集群 |
-| `TerminalTraits.scala` | 十一种提供 scope 和 target 的 Make 终端预设 | 根部终端协议；每个终端只挂载其中一个 trait |
+| `TerminalTraits.scala` | 通用 NPC/SoC 的 scope 和 target 终端预设 | 根部终端协议；每个 CPU 终端只挂载其中一个 trait |
 | `IpTerminalTraits.scala` | `NemuSimulationIpTerminal` 与 `FpgaIpTerminal` 两种计算单元终端 | 由运行 Config 显式混入；不是 Make terminal |
 
 | 名称 | 用途 | 终端可否直接挂载 |
 | --- | --- | --- |
-| `HostConstruction`、`AcceleratorHostConstruction`、`NemuSimulationConstruction`、`FpgaConstruction`、`MakeTerminal` | 底层运行接口与约束；SPMV 输入 smoke host 与 CPU golden 共用 accelerator host 合同 | 否；base trait 只允许 core 组合 |
+| `HostConstruction`、`AcceleratorHostConstruction`、`NemuSimulationConstruction`、`FpgaConstruction`、`MakeTerminal` | 底层运行接口与约束；具体 accelerator host 配方由加速器领域定义 | 否；base trait 只允许 core 组合 |
 | `CheckOnlyConstruction` | 仅检查硬件 | 不适用；由检查 Config 直接挂载 |
 | `LocalNpcTerminal`、`LocalSocTerminal` | 完整的本地 NPC/SoC 终端预设；默认 `LocalPipelineTrace` | 是；对应终端只挂载其中一个 |
 | `U55cNpcTerminal`、`U55cSocTerminal` | 完整的 U55C NPC/SoC 终端预设；默认 U55C NEMU 与工具链配方 | 是；对应终端只挂载其中一个 |
 | `U55cNpcPerformanceMonitorTerminal` | U55C 裸 NPC 的 batch-only 性能监测终端预设 | 是；只供 v13 监测 Config 挂载 |
-| `U55cSpmvSynthesisTerminal` | U55C SPMV 的 synthesize-only 资产与软件 golden host 终端预设 | 是；只供 FP32 资源探针挂载 |
-| `U55cSpmvBitstreamTerminal` | U55C SPMV 的 bitstream-only 资产与软件 golden host 终端预设 | 是；只供 FP64/8-lane 压力探针挂载 |
-| `LocalSpmvInputTerminal` | 16 路 A、1 路 X 输入顶层的本地 Verilator smoke 终端 | 是；只供 `SpmvInputSimulationConfig` 挂载 |
 | `Zcu102NpcTerminal`、`Zcu102SocTerminal` | 完整的 ZCU102 NPC/SoC 终端预设；默认 ZCU102 NEMU 与工具链配方 | 是；对应终端只挂载其中一个 |
 
-十一种 terminal 层预设 trait 提供运行或综合所需的 FPGA/NEMU/独立加速器配方、自动目录身份、scope 和 target；一个终端只挂载一个，且
+通用 terminal 层预设提供 NPC/SoC 所需的 FPGA/NEMU 配方、自动目录身份、scope 和 target；
+`LocalSpmvInputTerminal` 与 U55C SPMV 两种终端位于 `../accelerators/spmv/TerminalTraits.scala`。
+一个终端只挂载一个 terminal trait，且
 不得越过 terminal 层直接混入 base 构造 trait。公共构造 trait 名称不加 `Trait` 后缀，承载这些 trait 的
 文件统一使用 `*Traits.scala`。除计算 IP 选择外，实际硬件参数仍由 L1-L4 的 CDE 或 NPC `++` 链固定。
 `NemuHostConfig` 与 `FpgaToolchainConfig` 是普通 case class，不进入 CDE 图。内置终端与普通示例只选择预设：
 
 ```scala
 class U55cNpcFpgaConfig extends CDEConfig(
-  new U55cBoardConfig ++
+  new _root_.fpga.u55c.U55cBoardConfig ++
     new FpgaConfig
 ) with U55cNpcTerminal with FpgaIpTerminal
 ```
@@ -63,7 +62,7 @@ backend，`NemuSimulationIpTerminal` 选择周期精确的内建 M/F 功能模�
 这些 trait 只服务硬件组合，既不提供 scope/target，也不参与 Make 目录发现。公开运行 Config 在自身
 显式混入它们以提供 `IpConstruction`，和 `HostConstruction` 提供 NEMU 配方的方式相同；
 `ConstructionConfig` 与 `WithTerminalIpCoreConfig` 只能读取已挂载的选择，不能接收 IP 构造参数或在
-CDE `++` 链中选择后端。公开终端还必须混入 `TerminalTraits.scala` 的十一种终端预设之一。
+CDE `++` 链中选择后端。公开 CPU 终端还必须混入 `TerminalTraits.scala` 的一个终端预设。
 
 ## 算子 IP 配置
 

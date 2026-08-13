@@ -1,9 +1,9 @@
-package npc.fpga.zcu102
+package fpga.zcu102
 
 import org.chipsalliance.cde.config.{Config => CDEConfig}
-import _root_.npc.fpga.FpgaBoard
-import _root_.npc.fpga.FpgaPlatformSettings
-import _root_.npc.fpga.{WithFpgaBoardConfig, WithFpgaClockMHzConfig, WithFpgaPlatformConfig}
+import _root_.fpga.FpgaBoard
+import _root_.fpga.FpgaPlatformSettings
+import _root_.fpga.{WithFpgaBoardConfig, WithFpgaClockMHzConfig, WithFpgaPlatformConfig}
 import _root_.npc.{OperatorIpTimingConfig, WithFpgaIpAttachmentConfig, XilinxIntegerIpAttachment}
 
 /** ZCU102 复用的 Xilinx 整数 IP attachment。 */

@@ -33,5 +33,5 @@
 默认提供 `NemuHostConfig.LocalPipelineTrace` 的 `LocalSocTerminal`，成为可运行终端。
 没有通用 `FpgaIpAttachmentKey` 的 SoC CDE 图自动使用本地 Verilator 分支；L4 板卡终端只要叠加
 自身 `...BoardConfig` 即自动转入 FPGA 分支，无需额外的平台 Config。L2 只读取
-`NpcCoreConfigKey` 和 `FpgaIpAttachmentKey`，不依赖 `npc.fpga` 的板卡类型或实现；物理板卡和
+`NpcCoreConfigKey` 和 `FpgaIpAttachmentKey`，不依赖 `npc.fpga` 的 NPC 顶层类型；中性物理板卡和
 profile 细节由 FPGA 集成层负责。

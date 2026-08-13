@@ -166,7 +166,7 @@ mret（NEMU）      → dnpc = cpu.mepc = pc_of_ecall + 4
 
 #### A. CSR 寄存器文件（`CSRs` 类，已实现于 `DataManage.scala`）✅
 
-`CSRs` 模块位于 `npc/chisel/rv-core/main/scala/backend/csr/CsrFile.scala`，接口如下：
+`CSRs` 模块位于 `npc/chisel/rv-core/scala/backend/csr/CsrFile.scala`，接口如下：
 
 ```scala
 class CSRs(Width: Int = 64) extends Module {

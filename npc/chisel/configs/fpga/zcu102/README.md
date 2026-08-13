@@ -6,12 +6,13 @@
 | 文件 | 职责 | 是否可被更高层复用或覆盖 |
 | --- | --- | --- |
 | `core/Zcu102BoardConfig.scala` | 板卡标识与 `300 MHz` 时钟策略 | 是；`Zcu102BoardConfig` 是可叠加的 L4 板卡层 |
-| `Configs.scala` | ZCU102 裸 NPC 与 ysyxSoC 的所有终端构造 | 是；根部只放终端 |
+| `npc/Configs.scala` | ZCU102 裸 NPC 终端 | 是；package 为 `npc.fpga.zcu102` |
+| `ysyx/Configs.scala` | ZCU102 ysyxSoC 终端 | 是；package 为 `ysyx.fpga.zcu102` |
 
 `Zcu102NpcFpgaConfig` 直接组合 `Zcu102BoardConfig ++ FpgaConfig`。
 `Zcu102YsyxSocFpgaConfig` 以 `Zcu102BoardConfig ++ FpgaConfig ++ YsyxElaborateConfig` 覆盖通用 SoC
-的默认 NPC；板卡键自动选择 SoC 的 FPGA 分支。所有完整终端均在 `Configs.scala`，以统一的
-`fpga` 作用域发现，再由 `TARGET=NPC|SOC` 选择对应生成入口。
+的默认 NPC；板卡键自动选择 SoC 的 FPGA 分支。完整终端按产品目录发现，使用统一的
+`fpga` 作用域，再由 `TARGET=NPC|SOC` 选择对应生成入口。
 
 所有公开 FPGA Config 固定 `F=0`、`D=0`；PL 不生成硬件 FPR、本地 FPU、浮点 IP 或 NEMU 指令
 代执行服务。浮点学习仅由本地 Verilator/NEMU 仿真 Config 提供。
@@ -23,10 +24,10 @@
 | 特性 | 可直接复制到 `++` 链的名称 | 添加位置 | 是否可选 |
 | --- | --- | --- | --- |
 | ZCU102 板卡层 | `new Zcu102BoardConfig` | `core/Zcu102BoardConfig.scala` | ZCU102 目标必需 |
-| ZCU102 裸 NPC 终端 | `new Zcu102NpcFpgaConfig` | `Configs.scala` | 是 |
-| ZCU102 SoC 终端 | `new Zcu102YsyxSocFpgaConfig` | `Configs.scala` | 是 |
-| ZCU102 板卡标识 | `new WithFpgaBoardConfig(FpgaBoard.Zcu102)` | L3 `common/base/FpgaConfigFragments.scala` | ZCU102 目标必需 |
-| ZCU102 时钟 | `new WithFpgaClockMHzConfig(300)` | L3 `common/base/FpgaConfigFragments.scala` | ZCU102 目标必需 |
+| ZCU102 裸 NPC 终端 | `new Zcu102NpcFpgaConfig` | `npc/Configs.scala` | 是 |
+| ZCU102 SoC 终端 | `new Zcu102YsyxSocFpgaConfig` | `ysyx/Configs.scala` | 是 |
+| ZCU102 板卡标识 | `new WithFpgaBoardConfig(FpgaBoard.Zcu102)` | L3 `base/FpgaConfigFragments.scala` | ZCU102 目标必需 |
+| ZCU102 时钟 | `new WithFpgaClockMHzConfig(300)` | L3 `base/FpgaConfigFragments.scala` | ZCU102 目标必需 |
 | ZCU102 地址与时钟 | `new WithFpgaPlatformConfig(FpgaPlatformSettings(...))` | `core/Zcu102BoardConfig.scala` | ZCU102 目标必需 |
 | ZCU102 整数 IP | `Zcu102XilinxIpAttachment(...)` | `core/Zcu102BoardConfig.scala` | ZCU102 目标必需；同一 attachment 同时挂接 NPC 与 SoC |
 | ZCU102 器件与实现策略 | `FpgaToolchainConfig.Zcu102Base` | 根部 `Zcu102NpcTerminal`/`Zcu102SocTerminal` 预设 | ZCU102 目标必需；不进入 CDE |

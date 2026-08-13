@@ -3,11 +3,15 @@ package npc.fpga
 import npc.CdeConfigResolver
 import org.chipsalliance.cde.config.Parameters
 import org.scalatest.flatspec.AnyFlatSpec
+import _root_.fpga._
+import _root_.fpga.u55c.U55cXilinxIpAttachment
 import npc.ExternalAxiConfig
 import npc.{ArithmeticRouteOperation, ComputeBackend, ConfigCatalog, ConstructionConfig, ConstructionProfile, FloatingCheckConfig, FpgaIpTerminal, FpgaToolchainConfig, NemuHostConfig, NemuSimulationIpTerminal, NpcConfig, NpcCoreComponents, NpcCoreConfigKey, OperatorIpTimingConfig, OperatorRouteTarget, Rv64IMFZicsrConfig, WithNpcCoreConfig}
-import npc.fpga.u55c.{U55cCacheNpcFpgaConfig, U55cCacheYsyxSocFpgaConfig, U55cNpcFpgaConfig, U55cRv64CacheNpc150MHzPerformanceMonitorFpgaConfig, U55cRv64CacheNpc300MHzFpgaConfig, U55cRv64CacheNpc300MHzPerformanceMonitorFpgaConfig, U55cRv64Hbm512CacheNpc150MHzPerformanceMonitorFpgaConfig, U55cRv64Hbm512L2CacheNpc150MHzPerformanceMonitorFpgaConfig, U55cRv64Npc300MHzPerformanceMonitorFpgaConfig, U55cRv64Npc300MHzFpgaConfig, U55cRv64NpcFpgaConfig, U55cXilinxIpAttachment, U55cYsyxSocFpgaConfig}
-import npc.fpga.zcu102.{Zcu102NpcFpgaConfig, Zcu102YsyxSocFpgaConfig}
+import npc.fpga.u55c.{U55cCacheNpcFpgaConfig, U55cNpcFpgaConfig, U55cRv64CacheNpc150MHzPerformanceMonitorFpgaConfig, U55cRv64CacheNpc300MHzFpgaConfig, U55cRv64CacheNpc300MHzPerformanceMonitorFpgaConfig, U55cRv64Hbm512CacheNpc150MHzPerformanceMonitorFpgaConfig, U55cRv64Hbm512L2CacheNpc150MHzPerformanceMonitorFpgaConfig, U55cRv64Npc300MHzPerformanceMonitorFpgaConfig, U55cRv64Npc300MHzFpgaConfig, U55cRv64NpcFpgaConfig}
+import npc.fpga.zcu102.Zcu102NpcFpgaConfig
 import ysyx.{YsyxPlatformParameters, YsyxSimulationConfig, YsyxSocConfig}
+import ysyx.fpga.u55c.{U55cCacheYsyxSocFpgaConfig, U55cYsyxSocFpgaConfig}
+import ysyx.fpga.zcu102.Zcu102YsyxSocFpgaConfig
 
 class FpgaConfigCompositionTest extends AnyFlatSpec {
   private class ExternalAxiModelConstruction
