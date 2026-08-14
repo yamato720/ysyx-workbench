@@ -9,7 +9,8 @@ class SpmvInputConfigTest extends AnyFlatSpec {
   "SpmvInputConfig" should "describe the 16-channel Cuper input layout" in {
     val config = SpmvInputConfig.Cuper16Hbm
     assert(config.aReaderCount == 16)
-    assert(config.xReaderCount == 1)
+    assert(config.xReaderCount == 2)
+    assert(config.ctrlReaderCount == 1)
     assert(config.hbmChannelCount == 16)
     assert(config.hbmBase == 0x80000000L)
     assert(config.hbmBytes == 128L * 1024L * 1024L)
@@ -18,11 +19,27 @@ class SpmvInputConfigTest extends AnyFlatSpec {
     assert(config.axiDataWidth == 512)
     assert(config.axiIdWidth == 4)
     assert(config.maxOutstandingBursts == 2)
-    assert(config.totalHbmPortCount == 17)
+    assert(config.totalHbmPortCount == 19)
+    assert(config.xWindowSize == 8192)
+    assert(config.xReplicaCount == 4)
+    assert(config.xElementWidth == 64)
+    assert(config.xElementsPerBeat == 8)
+    assert(config.xWriteLanes == 16)
+    assert(config.xBankCount == 16)
+    assert(config.xBankDepth == 512)
+    assert(config.fp64MultiplyLaneCount == 8)
+    assert(config.fp64MultiplyCoreCount == 16)
+    assert(config.fp64MultiplyTotalLaneCount == 128)
   }
 
   it should "reject an A-reader count that does not cover every HBM channel" in {
     assertThrows[IllegalArgumentException](SpmvInputConfig.Cuper16Hbm.copy(aReaderCount = 8))
+  }
+
+  it should "reject a non-power-of-two X window or a non-FP64 element" in {
+    assertThrows[IllegalArgumentException](SpmvInputConfig.Cuper16Hbm.copy(xWindowSize = 3000))
+    assertThrows[IllegalArgumentException](SpmvInputConfig.Cuper16Hbm.copy(xElementWidth = 32))
+    assertThrows[IllegalArgumentException](SpmvInputConfig.Cuper16Hbm.copy(xReplicaCount = 0))
   }
 
   "SpmvInputReportConfig" should "要求流水页依赖性能主页" in {
@@ -42,10 +59,11 @@ class SpmvInputConfigTest extends AnyFlatSpec {
     val report = parameters(SpmvInputReportConfigKey)
     val values = SpmvInputSimulationProfile.values(entry, construction, input, report).toMap
 
-    assert(values("ACCELERATOR_HOST_ABI") == "spmv-input-report-v3")
-    assert(values("PROTOCOL_ABI") == "spmv-input-full-bandwidth-v1")
+    assert(values("ACCELERATOR_HOST_ABI") == "spmv-input-report-v10")
+    assert(values("PROTOCOL_ABI") == "spmv-input-windowed-v9")
     assert(values("SPMV_INPUT_A_READER_COUNT") == "16")
-    assert(values("SPMV_INPUT_X_READER_COUNT") == "1")
+    assert(values("SPMV_INPUT_X_READER_COUNT") == "2")
+    assert(values("SPMV_INPUT_CTRL_READER_COUNT") == "1")
     assert(values("SPMV_INPUT_HBM_CHANNEL_COUNT") == "16")
     assert(values("SPMV_INPUT_HBM_BASE") == "0x80000000")
     assert(values("SPMV_INPUT_HBM_BYTES") == "134217728")
@@ -56,6 +74,18 @@ class SpmvInputConfigTest extends AnyFlatSpec {
     assert(values("SPMV_INPUT_MAX_OUTSTANDING_BURSTS") == "2")
     assert(values("SPMV_INPUT_CONSUMER_COUNT") == "16")
     assert(values("SPMV_INPUT_X_BROADCAST") == "1")
+    assert(values("SPMV_INPUT_CTRL_BROADCAST") == "1")
+    assert(values("SPMV_INPUT_X_WINDOW_SIZE") == "8192")
+    assert(values("SPMV_INPUT_X_REPLICA_COUNT") == "4")
+    assert(values("SPMV_INPUT_X_BANK_COUNT") == "16")
+    assert(values("SPMV_INPUT_X_ELEMENT_WIDTH") == "64")
+    assert(values("SPMV_FP64_MUL_INTERFACE") == "arithmetic-req-resp-v1")
+    assert(values("SPMV_FP64_MUL_LATENCY") == "4")
+    assert(values("SPMV_FP64_MUL_II") == "1")
+    assert(values("SPMV_FP64_MUL_RESPONSE_FIFO_DEPTH") == "4")
+    assert(values("SPMV_FP64_MUL_LANES") == "8")
+    assert(values("SPMV_FP64_MUL_CORE_COUNT") == "16")
+    assert(values("SPMV_FP64_MUL_TOTAL_LANES") == "128")
     assert(values("SPMV_PERFORMANCE_HTML") == "1")
     assert(values("SPMV_PIPELINE_HTML") == "1")
     val performanceOnly = SpmvInputSimulationProfile.values(

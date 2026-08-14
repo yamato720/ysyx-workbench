@@ -17,6 +17,15 @@ class SpmvInputWrapperTest extends AnyFlatSpec {
     assert(chirrtl.contains("io.output[2]"))
   }
 
+  "SpmvCtrlInput" should "允许一个封装展开独立的控制面 HBM reader" in {
+    val chirrtl = ChiselStage.emitCHIRRTL(new SpmvCtrlInput(SpmvInputConfig.Cuper16Hbm, 1))
+
+    assert(chirrtl.contains("module SpmvCtrlInput"))
+    assert(chirrtl.contains("ports_0"))
+    assert(chirrtl.contains("io.axi[0].ar"))
+    assert(chirrtl.contains("io.output[0]"))
+  }
+
   "SpmvXInput" should "允许一个封装展开多个独立 HBM reader" in {
     val chirrtl = ChiselStage.emitCHIRRTL(new SpmvXInput(SpmvInputConfig.Cuper16Hbm, 2))
 

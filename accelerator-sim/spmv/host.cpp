@@ -13,6 +13,7 @@
 #include <iomanip>
 #include <iostream>
 #include <limits>
+#include <numeric>
 #include <stdexcept>
 #include <string>
 #include <system_error>
@@ -191,7 +192,8 @@ CsrMatrix loadMatrix(const DatasetChoice& choice) {
 }
 
 constexpr std::size_t kDefaultCuperAReaderCount = 16;
-constexpr std::size_t kDefaultCuperXReaderCount = 1;
+constexpr std::size_t kDefaultCuperXReaderCount = 2;
+constexpr std::size_t kDefaultCuperCtrlReaderCount = 1;
 constexpr std::size_t kDefaultCuperChannelCount = 16;
 constexpr std::size_t kDefaultCuperBeatBytes = 64;
 constexpr std::size_t kDefaultCuperChannelAlignment = 4096;
@@ -201,6 +203,7 @@ constexpr std::uint64_t kDefaultCuperHbmBase = 0x80000000ULL;
 struct CuperAConfig {
   std::size_t aReaderCount = kDefaultCuperAReaderCount;
   std::size_t xReaderCount = kDefaultCuperXReaderCount;
+  std::size_t ctrlReaderCount = kDefaultCuperCtrlReaderCount;
   std::size_t hbmChannelCount = kDefaultCuperChannelCount;
   std::uint64_t hbmBase = kDefaultCuperHbmBase;
   std::size_t hbmBytes = kDefaultCuperHbmBytes;
@@ -209,8 +212,10 @@ struct CuperAConfig {
   std::size_t axiDataWidth = 512;
   std::size_t axiIdWidth = 4;
   std::size_t maxOutstandingBursts = 2;
+  std::size_t xWindowSize = 8192;
 };
 
+#ifndef SPMV_INPUT_PROFILE_FROZEN
 std::uint64_t readUnsignedEnv(const char* name, std::uint64_t fallback) {
   const char* configured = std::getenv(name);
   if (configured == nullptr || *configured == '\0') {
@@ -228,13 +233,30 @@ std::uint64_t readUnsignedEnv(const char* name, std::uint64_t fallback) {
     throw std::invalid_argument(std::string(name) + " must be an unsigned integer");
   }
 }
+#endif
 
 CuperAConfig readCuperAConfig() {
   CuperAConfig config;
+#ifdef SPMV_INPUT_PROFILE_FROZEN
+  config.aReaderCount = SPMV_INPUT_A_READER_COUNT_FROZEN;
+  config.xReaderCount = SPMV_INPUT_X_READER_COUNT_FROZEN;
+  config.ctrlReaderCount = SPMV_INPUT_CTRL_READER_COUNT_FROZEN;
+  config.hbmChannelCount = SPMV_INPUT_HBM_CHANNEL_COUNT_FROZEN;
+  config.hbmBase = SPMV_INPUT_HBM_BASE_FROZEN;
+  config.hbmBytes = SPMV_INPUT_HBM_BYTES_FROZEN;
+  config.channelAlignment = SPMV_INPUT_HBM_CHANNEL_ALIGNMENT_BYTES_FROZEN;
+  config.axiAddrWidth = SPMV_INPUT_AXI_ADDR_WIDTH_FROZEN;
+  config.axiDataWidth = SPMV_INPUT_AXI_DATA_WIDTH_FROZEN;
+  config.axiIdWidth = SPMV_INPUT_AXI_ID_WIDTH_FROZEN;
+  config.maxOutstandingBursts = SPMV_INPUT_MAX_OUTSTANDING_BURSTS_FROZEN;
+  config.xWindowSize = SPMV_INPUT_X_WINDOW_SIZE_DEFAULT;
+#else
   config.aReaderCount = static_cast<std::size_t>(readUnsignedEnv(
       "SPMV_INPUT_A_READER_COUNT", config.aReaderCount));
   config.xReaderCount = static_cast<std::size_t>(readUnsignedEnv(
       "SPMV_INPUT_X_READER_COUNT", config.xReaderCount));
+  config.ctrlReaderCount = static_cast<std::size_t>(readUnsignedEnv(
+      "SPMV_INPUT_CTRL_READER_COUNT", config.ctrlReaderCount));
   config.hbmChannelCount = static_cast<std::size_t>(readUnsignedEnv(
       "SPMV_INPUT_HBM_CHANNEL_COUNT", config.hbmChannelCount));
   config.hbmBase = readUnsignedEnv("SPMV_INPUT_HBM_BASE", config.hbmBase);
@@ -250,14 +272,22 @@ CuperAConfig readCuperAConfig() {
       "SPMV_INPUT_AXI_ID_WIDTH", config.axiIdWidth));
   config.maxOutstandingBursts = static_cast<std::size_t>(readUnsignedEnv(
       "SPMV_INPUT_MAX_OUTSTANDING_BURSTS", config.maxOutstandingBursts));
-  if (config.aReaderCount == 0 || config.xReaderCount != 1 ||
+#ifndef SPMV_INPUT_X_WINDOW_SIZE_DEFAULT
+#define SPMV_INPUT_X_WINDOW_SIZE_DEFAULT 8192
+#endif
+  config.xWindowSize = static_cast<std::size_t>(readUnsignedEnv(
+      "SPMV_INPUT_X_WINDOW_SIZE", SPMV_INPUT_X_WINDOW_SIZE_DEFAULT));
+#endif
+  if (config.aReaderCount == 0 || config.xReaderCount != 2 ||
+      config.ctrlReaderCount != 1 ||
       config.hbmChannelCount != config.aReaderCount || config.hbmBytes == 0 ||
       config.channelAlignment == 0 ||
       (config.channelAlignment & (config.channelAlignment - 1)) != 0 ||
       config.axiAddrWidth != 64 || config.axiDataWidth != 512 || config.axiIdWidth == 0 ||
       config.maxOutstandingBursts < 2 ||
       (config.hbmBase & (config.channelAlignment - 1)) != 0 ||
-      config.hbmBytes % config.channelAlignment != 0) {
+      config.hbmBytes % config.channelAlignment != 0 ||
+      config.xWindowSize == 0 || (config.xWindowSize & (config.xWindowSize - 1)) != 0) {
     throw std::invalid_argument("SPMV_INPUT profile contains an invalid Cuper input layout");
   }
   return config;
@@ -448,18 +478,29 @@ int runEncoding(const std::string& formatName, const std::string& requested) {
 
   const DatasetChoice& choice = selectDataset(choices, requested);
   const CsrMatrix matrix = loadMatrix(choice);
+  const std::vector<double> input = readArray<double>(choice.path / "b.txt");
+  if (input.size() != matrix.columns) {
+    throw std::runtime_error("b.txt length must equal matrix column count");
+  }
   encoding::EncodingOptions options;
   options.format = format;
   const auto start = std::chrono::steady_clock::now();
   const encoding::EncodedMatrix encoded = encoding::encodeMatrix(matrix, options);
+  const encoding::EncodedVector encodedVector = encoding::encodeVector(input, options);
   const auto end = std::chrono::steady_clock::now();
   const fs::path reportPath = resolveEncodingReportDirectory() /
       std::string(encoding::encodingFormatName(encoded.format)) / (choice.name + ".html");
+  const fs::path vectorReportPath = resolveEncodingReportDirectory() /
+      std::string(encoding::encodingFormatName(encoded.format)) / (choice.name + "-x.html");
+  encoding::writeVectorHtmlReport(vectorReportPath, encodedVector,
+      encoding::EncodingReportMetadata{choice.name, (choice.path / "b.txt").string()});
   encoding::writeHtmlReport(reportPath, encoded,
       encoding::EncodingReportMetadata{choice.name, choice.path.string()});
 
   if (format == encoding::EncodingFormat::Cuper) {
     const auto& package = std::get<encoding::cuper::CuperPackage>(encoded.package);
+    const auto& vectorPackage =
+        std::get<encoding::cuper::CuperVectorPackage>(encodedVector.package);
     const double milliseconds = std::chrono::duration<double, std::milli>(end - start).count();
     std::cout << "[spmv-encoding] format=" << encoding::encodingFormatName(encoded.format)
               << " scale=" << choice.name << " dataset=" << choice.path << '\n';
@@ -479,12 +520,94 @@ int runEncoding(const std::string& formatName, const std::string& requested) {
               << package.stats.slotUtilization()
               << " packed_bytes=" << package.stats.packedBytes
               << " encode_ms=" << std::setprecision(3) << milliseconds << '\n';
+    std::cout << "[spmv-encoding-x] source=fp64 encoded=fp32"
+              << " elements=" << vectorPackage.stats.validElements
+              << " batches=" << vectorPackage.stats.batchCount
+              << " payload_beats=" << vectorPackage.stats.payloadBeats
+              << " allocated_beats=" << vectorPackage.stats.allocatedBeats
+              << " replicas_per_core=" << encoding::cuper::kVectorReplicaCount
+              << " cyclic_banks=" << encoding::cuper::kVectorPartitionFactor << '\n';
   }
   std::cout << "[spmv-encoding] html=" << reportPath << '\n';
+  std::cout << "[spmv-encoding-x] html=" << vectorReportPath << '\n';
   return 0;
 }
 
 #ifdef SPMV_INPUT_TRANSACTION_VERILATOR
+std::uint64_t fp64Bits(double value) {
+  std::uint64_t bits = 0;
+  static_assert(sizeof(bits) == sizeof(value));
+  std::memcpy(&bits, &value, sizeof(bits));
+  return bits;
+}
+
+void validateCuperBatchMap(const encoding::cuper::CuperPackage& package,
+                           const CuperAConfig& inputConfig) {
+  const std::size_t batchWidth = encoding::cuper::columnsPerBatch(package.config);
+  const std::size_t expectedBatchCount =
+      (package.columns + batchWidth - 1U) / batchWidth;
+  if (batchWidth != inputConfig.xWindowSize || package.stats.batchCount != expectedBatchCount ||
+      package.channelBatchPointers.size() != inputConfig.aReaderCount ||
+      package.matrixChannels.size() != inputConfig.aReaderCount) {
+    throw std::runtime_error("Cuper map 与 local_X 窗口或 A HBM 布局不一致");
+  }
+  if (package.stats.batchCount == 0 || package.stats.batchCount > 64U) {
+    throw std::runtime_error("Cuper map batch 数超出当前 64-entry 硬件控制 RAM");
+  }
+  for (std::size_t channel = 0; channel < package.matrixChannels.size(); ++channel) {
+    const auto& pointers = package.channelBatchPointers[channel];
+    if (pointers.size() != package.stats.batchCount + 1U || pointers.front() != 0U ||
+        pointers.back() != package.matrixChannels[channel].size() ||
+        !std::is_sorted(pointers.begin(), pointers.end())) {
+      throw std::runtime_error("Cuper map 的 per-channel batch pointer 非法");
+    }
+  }
+}
+
+std::uint64_t computeMixedProductChecksum(const encoding::cuper::CuperPackage& package,
+                                          const std::vector<double>& x,
+                                          std::size_t batch) {
+  std::uint64_t checksum = 0;
+  const std::size_t batchWidth = encoding::cuper::columnsPerBatch(package.config);
+  if (package.matrixChannels.size() != package.channelBatchPointers.size()) {
+    throw std::runtime_error("Cuper package 的 channel 与 map 长度不一致");
+  }
+  if (batch >= package.stats.batchCount) {
+    throw std::out_of_range("Mixed-V3 乘法 golden 请求了不存在的 Cuper batch");
+  }
+  for (std::size_t channel = 0; channel < package.matrixChannels.size(); ++channel) {
+    const auto& beats = package.matrixChannels[channel];
+    const auto& pointers = package.channelBatchPointers[channel];
+    if (pointers.size() <= batch + 1U) {
+      throw std::runtime_error("Cuper map 缺少 channel batch pointer");
+    }
+    for (std::size_t beat = pointers[batch]; beat < pointers[batch + 1U]; ++beat) {
+      for (std::size_t lane = 0; lane < encoding::cuper::kLanesPerBeat; ++lane) {
+        const encoding::cuper::DecodedCuperSlot slot =
+            encoding::cuper::decodeSlot(beats[beat][lane]);
+        if (slot.padding) {
+          continue;
+        }
+        const std::size_t column = batch * batchWidth + slot.localColumn;
+        if (column >= x.size()) {
+          throw std::runtime_error("Mixed-V3 乘法 golden 的列号超出 X 范围");
+        }
+        checksum ^= fp64Bits(static_cast<double>(slot.value) * x[column]);
+      }
+    }
+  }
+  return checksum;
+}
+
+std::uint64_t computeMixedProductChecksum(const encoding::cuper::CuperPackage& package,
+                                          const std::vector<double>& x) {
+  std::uint64_t checksum = 0;
+  for (std::size_t batch = 0; batch < package.stats.batchCount; ++batch) {
+    checksum ^= computeMixedProductChecksum(package, x, batch);
+  }
+  return checksum;
+}
+
 encoding::cuper::CuperBeat packXBeat(const std::vector<double>& input, std::size_t begin) {
   encoding::cuper::CuperBeat beat{};
   for (std::size_t lane = 0; lane < beat.size() && begin + lane < input.size(); ++lane) {
@@ -492,6 +615,75 @@ encoding::cuper::CuperBeat packXBeat(const std::vector<double>& input, std::size
     std::memcpy(&beat[lane], &input[begin + lane], sizeof(beat[lane]));
   }
   return beat;
+}
+
+std::vector<std::vector<encoding::cuper::CuperBeat>> packXWindow(
+    const std::vector<double>& input, std::size_t firstColumn, std::size_t lastColumn,
+    std::size_t xReaderCount) {
+  if (firstColumn >= lastColumn || lastColumn > input.size() || xReaderCount != 2U) {
+    throw std::invalid_argument("Cuper X 窗口范围或双路条带配置非法");
+  }
+  const std::size_t payloadBeats = (lastColumn - firstColumn +
+      encoding::cuper::kLanesPerBeat - 1U) / encoding::cuper::kLanesPerBeat;
+  // X0/X1 的请求必须原子发起；尾窗口不足两个 512-bit beat 时补一个零 beat 给 X1。
+  const std::size_t stripedBeats = std::max<std::size_t>(2U, (payloadBeats + 1U) & ~1U);
+  std::vector<std::vector<encoding::cuper::CuperBeat>> channels(xReaderCount);
+  for (std::size_t beat = 0; beat < stripedBeats; ++beat) {
+    const std::size_t begin = firstColumn + beat * encoding::cuper::kLanesPerBeat;
+    channels[beat % xReaderCount].push_back(packXBeat(input, begin));
+  }
+  return channels;
+}
+
+std::size_t validSlotCount(const std::vector<encoding::cuper::CuperBeat>& beats) {
+  std::size_t count = 0;
+  for (const auto& beat : beats) {
+    for (std::uint64_t slot : beat) {
+      if (!encoding::cuper::decodeSlot(slot).padding) ++count;
+    }
+  }
+  return count;
+}
+
+void writeCtrlWord(encoding::cuper::CuperBeat& beat, std::size_t word, std::uint32_t value) {
+  const std::size_t lane = word / 2U;
+  if (lane >= beat.size()) {
+    throw std::out_of_range("控制面 beat 不能写入超过 16 个 uint32");
+  }
+  if ((word % 2U) == 0U) {
+    beat[lane] = (beat[lane] & 0xffffffff00000000ULL) | value;
+  } else {
+    beat[lane] = (beat[lane] & 0xffffffffULL) | (static_cast<std::uint64_t>(value) << 32U);
+  }
+}
+
+std::vector<encoding::cuper::CuperBeat> packCtrlMap(
+    const encoding::cuper::CuperPackage& package) {
+  if (package.channelBatchPointers.size() != package.config.hbmChannelCount ||
+      package.channelBatchPointers.empty()) {
+    throw std::runtime_error("Cuper map 的 per-HBM pointer 数量与 channel 数不一致");
+  }
+  const std::size_t pointerCount = package.channelBatchPointers.front().size();
+  for (const auto& pointers : package.channelBatchPointers) {
+    if (pointers.size() != pointerCount) {
+      throw std::runtime_error("Cuper map 要求各 HBM channel 的 pointer 长度相同");
+    }
+  }
+
+  constexpr std::uint32_t kCtrlKindMap = 1;
+  std::vector<encoding::cuper::CuperBeat> beats(1U + pointerCount);
+  writeCtrlWord(beats[0], 0, kCtrlKindMap);
+  writeCtrlWord(beats[0], 1, static_cast<std::uint32_t>(package.stats.batchCount));
+  writeCtrlWord(beats[0], 2, static_cast<std::uint32_t>(package.rows));
+  writeCtrlWord(beats[0], 3, static_cast<std::uint32_t>(package.columns));
+  writeCtrlWord(beats[0], 4, static_cast<std::uint32_t>(package.config.hbmChannelCount));
+  writeCtrlWord(beats[0], 5, static_cast<std::uint32_t>(pointerCount));
+  for (std::size_t index = 0; index < pointerCount; ++index) {
+    for (std::size_t channel = 0; channel < package.channelBatchPointers.size(); ++channel) {
+      writeCtrlWord(beats[index + 1U], channel, package.channelBatchPointers[channel][index]);
+    }
+  }
+  return beats;
 }
 
 int runInputTransactions(const std::string& requested) {
@@ -520,6 +712,7 @@ int runInputTransactions(const std::string& requested) {
   const CuperAConfig config = readCuperAConfig();
   const CuperAInstances instances = instantiateCuperA(package, config);
   validateCuperAInstances(package, instances, config);
+  validateCuperBatchMap(package, config);
 
   InputSimulationData simulation;
   simulation.dataset = choice.name;
@@ -530,16 +723,69 @@ int runInputTransactions(const std::string& requested) {
   for (const CuperAInstance& instance : instances.instances) {
     simulation.aAddresses.push_back(instance.address);
   }
-  const std::size_t xOffset = alignValue(instances.hbm.size(), config.channelAlignment);
-  simulation.xAddress = config.hbmBase + xOffset;
+  simulation.xAddresses.resize(config.xReaderCount);
+  simulation.xChannels.resize(config.xReaderCount);
   simulation.maxOutstandingBursts = config.maxOutstandingBursts;
-  for (std::size_t begin = 0; begin < x.size(); begin += encoding::cuper::kLanesPerBeat) {
-    simulation.xBeats.push_back(packXBeat(x, begin));
+  std::vector<std::vector<std::size_t>> xBatchOffsets(
+      package.stats.batchCount, std::vector<std::size_t>(config.xReaderCount));
+  const std::size_t batchWidth = encoding::cuper::columnsPerBatch(package.config);
+  for (std::size_t batch = 0; batch < package.stats.batchCount; ++batch) {
+    InputSimulationBatch window;
+    window.aAddresses.resize(config.aReaderCount);
+    window.aChannels.resize(config.aReaderCount);
+    for (std::size_t channel = 0; channel < config.aReaderCount; ++channel) {
+      const auto& pointers = package.channelBatchPointers[channel];
+      const std::size_t begin = pointers[batch];
+      const std::size_t end = pointers[batch + 1U];
+      window.aChannels[channel] = std::vector<encoding::cuper::CuperBeat>(
+          package.matrixChannels[channel].begin() + static_cast<std::ptrdiff_t>(begin),
+          package.matrixChannels[channel].begin() + static_cast<std::ptrdiff_t>(end));
+      window.aAddresses[channel] = simulation.aAddresses[channel] + begin * kDefaultCuperBeatBytes;
+      window.expectedMultiplyCount += validSlotCount(window.aChannels[channel]);
+    }
+    const std::size_t firstColumn = batch * batchWidth;
+    const std::size_t lastColumn = std::min(firstColumn + batchWidth, x.size());
+    window.xChannels = packXWindow(x, firstColumn, lastColumn, config.xReaderCount);
+    window.xAddresses.resize(config.xReaderCount);
+    for (std::size_t channel = 0; channel < config.xReaderCount; ++channel) {
+      xBatchOffsets[batch][channel] = simulation.xChannels[channel].size();
+      simulation.xChannels[channel].insert(simulation.xChannels[channel].end(),
+          window.xChannels[channel].begin(), window.xChannels[channel].end());
+    }
+    window.expectedProductChecksum = computeMixedProductChecksum(package, x, batch);
+    simulation.expectedProductChecksum ^= window.expectedProductChecksum;
+    simulation.expectedMultiplyCount += window.expectedMultiplyCount;
+    simulation.batches.push_back(std::move(window));
   }
-  if (xOffset > config.hbmBytes || simulation.xBeats.size() >
-      (config.hbmBytes - xOffset) / (config.axiDataWidth / 8)) {
-    throw std::runtime_error("Cuper A and X inputs exceed the configured HBM window");
+  if (simulation.expectedMultiplyCount != package.nonzeros ||
+      simulation.expectedProductChecksum != computeMixedProductChecksum(package, x)) {
+    throw std::runtime_error("Cuper 分窗口 Mixed-V3 golden 与完整矩阵不一致");
   }
+  simulation.multiplyExpected = true;
+  std::size_t xStorageEnd = instances.hbm.size();
+  for (std::size_t channel = 0; channel < config.xReaderCount; ++channel) {
+    const std::size_t xOffset = alignValue(xStorageEnd, config.channelAlignment);
+    const std::size_t xBytes = simulation.xChannels[channel].size() *
+        (config.axiDataWidth / 8);
+    if (xOffset > config.hbmBytes || xBytes > config.hbmBytes - xOffset) {
+      throw std::runtime_error("Cuper A and X inputs exceed the configured HBM window");
+    }
+    simulation.xAddresses[channel] = config.hbmBase + xOffset;
+    xStorageEnd = xOffset + xBytes;
+  }
+  for (std::size_t batch = 0; batch < simulation.batches.size(); ++batch) {
+    for (std::size_t channel = 0; channel < config.xReaderCount; ++channel) {
+      simulation.batches[batch].xAddresses[channel] = simulation.xAddresses[channel] +
+          xBatchOffsets[batch][channel] * kDefaultCuperBeatBytes;
+    }
+  }
+  simulation.ctrlChannel = packCtrlMap(package);
+  const std::size_t ctrlOffset = alignValue(xStorageEnd, config.channelAlignment);
+  const std::size_t ctrlBytes = simulation.ctrlChannel.size() * (config.axiDataWidth / 8);
+  if (ctrlOffset > config.hbmBytes || ctrlBytes > config.hbmBytes - ctrlOffset) {
+    throw std::runtime_error("Cuper A/X/Ctrl 输入超过配置的 HBM 窗口");
+  }
+  simulation.ctrlAddress = config.hbmBase + ctrlOffset;
 #ifndef SPMV_PERFORMANCE_HTML_DEFAULT
 #define SPMV_PERFORMANCE_HTML_DEFAULT 1
 #endif
@@ -553,16 +799,30 @@ int runInputTransactions(const std::string& requested) {
   }
 
   const InputSimulationResult result = runInputSimulation(simulation);
+  const std::size_t xBeats = std::accumulate(
+      simulation.xChannels.begin(), simulation.xChannels.end(), std::size_t{0},
+      [](std::size_t sum, const auto& channel) { return sum + channel.size(); });
   std::cout << "[spmv-input] dataset=" << choice.name
             << " A_readers=" << simulation.aChannels.size()
             << " A_beats=" << package.stats.totalMatrixBeats
-            << " X_broadcast_consumers=16 X_beats=" << simulation.xBeats.size()
+            << " X_readers=" << simulation.xChannels.size()
+            << " X_broadcast_consumers=16 X_beats=" << xBeats
+            << " Ctrl_readers=1 Ctrl_beats=" << simulation.ctrlChannel.size()
+            << " Cuper_batches=" << simulation.batches.size()
             << " cycles=" << result.cycles << " PASS\n";
+  if (result.multiplyCompared) {
+    std::cout << "[spmv-input] mixed-v3 fp64_mul=" << simulation.expectedMultiplyCount
+              << " product_checksum=0x" << std::hex << simulation.expectedProductChecksum << std::dec
+              << " mul_cycles=" << result.mulCycles << " PASS\n";
+  }
   if (!result.performanceReport.empty()) {
     std::cout << "[spmv-input] performance=" << result.performanceReport << '\n';
   }
-  if (!result.pipelineReport.empty()) {
-    std::cout << "[spmv-input] pipeline=" << result.pipelineReport << '\n';
+  if (!result.inputPipelineReport.empty()) {
+    std::cout << "[spmv-input] input_pipeline=" << result.inputPipelineReport << '\n';
+  }
+  if (!result.timingPipelineReport.empty()) {
+    std::cout << "[spmv-input] timing_pipeline=" << result.timingPipelineReport << '\n';
   }
   return 0;
 }

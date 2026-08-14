@@ -97,7 +97,7 @@ classpath、Make 和 construction manager 在启动前解析公开终端。该�
 | `U55cCacheYsyxSocFpgaConfig` | FPGA（`TARGET=SOC`） | U55C ysyxSoC 教学缓存版本 |
 | `U55cSpmv32PcFp32X8192UramResourceProbeConfig` | FPGA（`TARGET=SPMV`） | 32 路 HBM、每路 8192 项 FP32 UltraRAM X cache 的只综合资源探针 |
 | `U55cSpmv32PcFp64X8192UramBitstreamConfig` | FPGA（`TARGET=SPMV`） | 32 路 HBM、每路四 bank 双端口 FP64 X cache 的 bitstream 压力探针 |
-| `SpmvInputSimulationConfig` | SPMV | 16 路 A、1 路 X 输入顶层的 Verilator 结构 smoke |
+| `SpmvInputSimulationConfig` | SPMV | 16 路 A、2 路 X 条带输入顶层的 Verilator 结构 smoke |
 | `Zcu102NpcFpgaConfig` | FPGA（`TARGET=NPC`） | ZCU102 裸 NPC 上板运行 |
 | `Zcu102YsyxSocFpgaConfig` | FPGA（`TARGET=SOC`） | ZCU102 ysyxSoC 上板运行 |
 
@@ -231,29 +231,36 @@ CPU golden，不要求 RTL/xclbin。共享数据由 `make -C accelerator-sim/dat
 `ACCELERATOR_DATA_ROOT` 可覆盖默认目录。
 
 `SpmvInputSimulationConfig` 使用独立 `scope=spmv` 和 `LocalSpmvInputTerminal`，不继承 NPC/SoC/NEMU
-或 FPGA 构造。`SpmvInputConfig.Cuper16Hbm` 描述一个 16-HBM A 输入封装和一个 1-HBM X 输入封装，
-合计 17 个只读 HBM master；其中 16 个 HBM channel 是 Cuper A 编码几何，不包含 X HBM。
+或 FPGA 构造。`SpmvInputConfig.Cuper16Hbm` 描述一个 16-HBM A 输入封装、一个 2-HBM X 输入封装和
+一路控制面 HBM，合计 19 个只读 HBM master；其中 16 个 HBM channel 是 Cuper A 编码几何，
+不包含两路 X 和一路控制 HBM。
 `ip-interface` 的 `npc.ip.axi` 提供 NPC 与加速器共同使用的唯一 AXI4 只读、只写和读写契约；HBM
-只描述这些端口的物理用途。`SpmvAInput`/`SpmvXInput` 继承
+只描述这些端口的物理用途。`SpmvAInput`/`SpmvXInput`/`SpmvCtrlInput` 继承
 `accelerators.common.IndependentAxiReadPorts`，以具体 reader 工厂和
-`hbmCount` 参数选择 A/X 输入；每个 HBM 保留独立 request、AXI 和 output stream，公共基础模块不负责
+`hbmCount` 参数选择 A/X/控制面输入；每个 HBM 保留独立 request、AXI 和 output stream，公共基础模块不负责
 仲裁或数据拼接。对应的 `IndependentAxiWritePorts`、`IndependentAxiReadWritePorts` 也位于
-`accelerators.common`。地址窗口为
+`accelerators.common`，控制面之后若要给 JPCG 写回可换到读写封装。地址窗口为
 `0x80000000`/128 MiB，4 KiB channel 对齐，
 AXI 参数为 64/512/4，reader 支持 2 笔 outstanding burst。profile 固定
-`ACCELERATOR_HOST_ABI=spmv-input-report-v3`、`PROTOCOL_ABI=spmv-input-full-bandwidth-v1`，输出输入布局、
-16 个消费端和 X 原子广播。独立的 `SpmvInputReportConfig` 输出 `SPMV_PERFORMANCE_HTML` 与
+`ACCELERATOR_HOST_ABI=spmv-input-report-v10`、`PROTOCOL_ABI=spmv-input-windowed-v9`，输出输入布局、
+16 个消费端、两路 X 条带原子广播和一路控制面广播。独立的 `SpmvInputReportConfig` 输出 `SPMV_PERFORMANCE_HTML` 与
 `SPMV_PIPELINE_HTML`；后者要求前者开启，公开 Config 使用 `PerformancePipeline` preset。不输出
 `SPMV_X_MODE`、CSR5、NEMU、CPU 或 FPGA
 字段。正式构造严格执行 `elaborate -> verilator -> accelerator-host`，并只发布到
 `abi/{rtl,verilator,spmv}`。
 
-transaction host 用 Cuper 编码矩阵驱动 16 路 A，以 `b.txt` 驱动一路 X，并模拟 AR ready 恒高、R 逐拍
-连续的满带宽 HBM。每路 reader 用 2 笔 outstanding burst 隐藏 4 KiB 边界 AR 延迟；每路 A 连接一个消费端，
-X 原子广播到全部消费端。host 强制校验 Q/AR/首 R 对齐、R 无空拍、burst、beat 数、checksum 和错误状态，
-并按 `runtime/<dataset>/<run>/` 写入 `performance.html` 主页和可选 `pipeline.html` 子页。主页沿用
-construction 报告的指标、统计 band 和表格布局；流水页沿用全屏搜索、缩放与横向时间线布局。它暂不执行
-SpMV 乘加。
+transaction host 先广播 Cuper 控制 map，再把 FP64 `b.txt` 的 512-bit beat 按全局偶/奇序号条带化到
+X0/X1；两路 X 可同周期向全部消费端原子广播两个 beat，奇数总 beat 数时由 X0 单独交付尾 beat。
+X 载入完成后 host 拉高 `mulEnable`，`mulReady` 立即拉高后驱动 16 路 A。唯一一次 A 读取同时
+送入消费端做 checksum，并由 Mixed-V3 引擎通过公共算术 IP `req/resp` 接口完成 FP64 乘法验证。
+模拟 AR ready 恒高；每路 reader 用 2 笔 outstanding burst 隐藏 4 KiB 边界 AR 延迟。Ctrl/X 的 R
+逐拍连续，A 由每拍一个 A beat、下一拍 8-lane FP64 发射的引擎背压。host 校验阶段顺序、burst、beat 数、checksum 和错误状态，
+并按 `runtime/<dataset>/<run>/` 写入 `performance.html` 主页和可选的 `input-pipeline.html`、
+`timing-pipeline.html` 子页。主页沿用
+construction 报告的指标、统计 band 和表格布局；`timing-pipeline.html` 区分 A beat 前端连续性与实际
+FMUL 活跃拍，并把全 padding beat 标为数据空窗而不是控制气泡；流水页沿用全屏搜索、缩放与横向时间线布局。
+矩阵能放入 8192 列窗口时会对照编码 slot 的 FP64 乘积 checksum；更大的矩阵仍按相同 `Ctrl -> X -> A`
+单遍输入顺序校验，但跳过乘法。
 缓存 profile 还会写入 `CACHE_ACCESS_MODE` 与四项 `CACHE_*_QUEUE_DEPTH`。缓存 FPGA 终端会把相同的
 `ICACHE_*`、`DCACHE_*`、`L2CACHE_*`、`INSTRUCTION_BUFFER_*` 和 `NPC_ZIFENCEI`
 写入 elaboration manifest。任何几何、策略或存储风格变化都必须完整 `rebuild`；普通无缓存终端的字段

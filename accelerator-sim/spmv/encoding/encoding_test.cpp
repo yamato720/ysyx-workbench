@@ -288,6 +288,71 @@ void testOriginalPeMapping() {
   }
 }
 
+void testVectorEncoding() {
+  std::vector<double> input(8193);
+  for (std::size_t column = 0; column < input.size(); ++column) {
+    input[column] = static_cast<double>(column) + 0.25;
+  }
+  const EncodedVector encoded = encodeVector(input);
+  const auto& package = std::get<cuper::CuperVectorPackage>(encoded.package);
+  expect(package.columns == input.size(), "Cuper X package 列数错误");
+  expect(package.batchPointers == std::vector<std::uint32_t>({0, 512, 513}),
+         "Cuper X 跨 8192 列 batch 的累计指针错误");
+  expect(package.stats.batchCount == 2 && package.stats.payloadBeats == 513 &&
+         package.stats.allocatedBeats == 576,
+         "Cuper X payload 或 1024-element 对齐统计错误");
+  expect(package.stats.validElements == 8193 &&
+         package.stats.lanePaddingElements == 15 &&
+         package.stats.allocationPaddingElements == 1008,
+         "Cuper X lane/allocation padding 统计错误");
+
+  for (std::size_t column : {0U, 15U, 16U, 8191U, 8192U}) {
+    std::uint32_t expected = 0;
+    const float converted = static_cast<float>(input[column]);
+    std::memcpy(&expected, &converted, sizeof(expected));
+    expect(package.hbmBeats[column / cuper::kVectorLanesPerBeat]
+                           [column % cuper::kVectorLanesPerBeat] == expected,
+           "Cuper X 没有保持原列顺序或 FP32 bits 错误");
+  }
+  expect(std::all_of(package.hbmBeats[512].begin() + 1,
+                     package.hbmBeats[512].end(), [](std::uint32_t bits) {
+                       return bits == 0;
+                     }), "Cuper X 最后一个 float_v16 beat 的 lane padding 不是零");
+  expect(std::all_of(package.hbmBeats.begin() + 513, package.hbmBeats.end(),
+                     [](const cuper::CuperVectorBeat& beat) {
+                       return std::all_of(beat.begin(), beat.end(),
+                                          [](std::uint32_t bits) { return bits == 0; });
+                     }),
+         "Cuper X HBM allocation padding 不是零");
+
+  std::ostringstream output;
+  writeVectorHtmlReport(output, encoded,
+      EncodingReportMetadata{"x\"vector", "/tmp/</script>&b.txt"});
+  const std::string html = output.str();
+  expect(html.find("id=\"packageView\"") != std::string::npos &&
+         html.find("id=\"batchView\"") != std::string::npos &&
+         html.find("id=\"elementView\"") != std::string::npos &&
+         html.find("id=\"replicas\"") != std::string::npos,
+         "Cuper X HTML 报告缺少总览、batch 或本地副本视图");
+  expect(html.find("\\u003c/script\\u003e\\u0026b.txt") != std::string::npos,
+         "Cuper X HTML 报告没有安全转义数据源路径");
+
+  EncodedVector invalid = encoded;
+  std::get<cuper::CuperVectorPackage>(invalid.package).batchPointers.pop_back();
+  expectThrows([&invalid]() {
+    std::ostringstream ignored;
+    writeVectorHtmlReport(ignored, invalid, EncodingReportMetadata{});
+  }, "Cuper X HTML 报告未拒绝损坏的 package");
+
+  expectThrows([]() { (void)cuper::encodeVector({}); },
+               "Cuper X 编码未拒绝空输入");
+  cuper::CuperConfig unaligned;
+  unaligned.sliceSize = 3;
+  unaligned.columnSlicesPerBatch = 1;
+  expectThrows([&unaligned]() { (void)cuper::encodeVector({1.0}, unaligned); },
+               "Cuper X 编码未拒绝非 float_v16 对齐的 batch");
+}
+
 }  // namespace
 }  // namespace accelerator_sim::spmv::encoding
 
@@ -300,7 +365,8 @@ int main() {
     accelerator_sim::spmv::encoding::testColumnBatches();
     accelerator_sim::spmv::encoding::testEmptyAndValidation();
     accelerator_sim::spmv::encoding::testOriginalPeMapping();
-    std::cout << "[spmv-encoding-test] Cuper package PASS\n";
+    accelerator_sim::spmv::encoding::testVectorEncoding();
+    std::cout << "[spmv-encoding-test] Cuper A/X packages PASS\n";
     return 0;
   } catch (const std::exception& error) {
     std::cerr << "[spmv-encoding-test] FAIL: " << error.what() << '\n';

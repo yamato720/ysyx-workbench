@@ -92,26 +92,37 @@ make -C am-kernels/tests/cpu-tests run-bat ALL="forwarding matrix-mul fpu" \
 
 ## 独立 SPMV 输入流水
 
-`SpmvInputSimulationConfig` 固定 `SpmvInputConfig.Cuper16Hbm`：一个 16-HBM A 输入封装和一个
-1-HBM X 输入封装，合计暴露 17 个只读 HBM master；其中 `hbmChannelCount=16` 只表示 Cuper A
-编码 channel 数，不包含独立的 X HBM。地址窗口为 `0x80000000` 起始的 128 MiB，channel 基地址按
+`SpmvInputSimulationConfig` 固定 `SpmvInputConfig.Cuper16Hbm`：一个 16-HBM A 输入封装、一个
+2-HBM X 输入封装和一路控制面 HBM，合计暴露 19 个只读 HBM master；其中 `hbmChannelCount=16` 只表示 Cuper A
+编码 channel 数，不包含独立的 X 和控制面 HBM。地址窗口为 `0x80000000` 起始的 128 MiB，channel 基地址按
 4 KiB 对齐，AXI 参数为 64-bit 地址、512-bit 数据、4-bit ID 和 2 笔 outstanding burst。
 `ip-interface` 的 `npc.ip.axi` 是 NPC、加速器和 FPGA 共用的唯一 AXI4 契约；HBM/DDR/PC 只表示
 这些 AXI4 端口最终连接的物理存储。公共 `accelerators.common.IndependentAxiReadPorts`、
 `IndependentAxiWritePorts` 和 `IndependentAxiReadWritePorts` 分别提供可扩展的独立读、写和读写端口；
 每个 lane 保留自己的请求、数据和状态，不做仲裁或拼接。`SpmvAInput` 与 `SpmvXInput` 继承公共读基础模块，并通过
-`hbmCount` 和具体 reader 工厂选择 A/X 实现。当前 16 路 A stream 分别连接 16 个临时消费端，
-单路 X stream 向全部消费端原子广播；消费端记录 beat 数、错误和 64-bit lane XOR，不执行乘加。
+`hbmCount` 和具体 reader 工厂选择 A/X 实现。当前 16 路 A stream 分别连接 16 个临时消费端；FP64 X
+按全局 512-bit beat 的偶/奇序号条带化到 X0/X1，并以双 beat/cycle 向全部消费端原子广播。
+顶层为每个 Cuper PE 各实例化一组 `local_X`：每组为 8192 个 FP64 的窗口（与 Cuper A 分片同宽）、
+4 份副本、16 个 bank，随广播按列序写入。一路控制 HBM 把 Cuper map（header + 每窗 16 路 pointer）
+原子广播到全部消费端，并由 RTL 解释为当前窗口各 A channel 的起止 beat。消费端记录
+beat 数、错误和 64-bit lane XOR。单窗口作业按 `Ctrl -> X -> mulEnable -> A` 执行：host 先载入
+控制 map 和 X，随后拉高 `mulEnable`；`mulReady` 立即拉高，16 路 A 才各读取一次。
+这唯一一次 A 输入同时完成 checksum 和 Mixed-V3 FP64 乘法验证（slot 内 FP32 提升为 FP64，再通过公共
+算术 IP `req/resp` 接口与片上 X 相乘）。当前没有浮点加法、Y RAM 或 Y 写回。
 
 正式构造严格只有 `elaborate -> verilator -> accelerator-host` 三阶段，资产位于 `abi/rtl`、
 `abi/verilator` 和 `abi/spmv`，不会创建 `abi/nemu`、`abi/softfloat` 或 FPGA 目录。profile 固定
-`ACCELERATOR_HOST_ABI=spmv-input-report-v3`、`PROTOCOL_ABI=spmv-input-full-bandwidth-v1`，并通过
-`SPMV_INPUT_*` 冻结输入、消费端和广播契约。`SpmvInputReportConfig` 另以
+`ACCELERATOR_HOST_ABI=spmv-input-report-v10`、`PROTOCOL_ABI=spmv-input-windowed-v9`，并通过
+`SPMV_INPUT_*` 冻结输入、消费端、广播和片上 X 几何。`SpmvInputReportConfig` 另以
 `SPMV_PERFORMANCE_HTML`/`SPMV_PIPELINE_HTML` 控制报告；流水页必须依赖性能主页，公开 Config 默认两项都开。
-host 使用 Cuper A 和 `b.txt` X 驱动无空泡 AXI/HBM 事务；reader 提前发出下一笔 AR，保证跨 4 KiB
-burst 时 R 仍逐拍连续。host 强制检查 16 路 A 和 X 从首个 R 到各自末拍没有空拍，并按其他 construction 的
-规范在 `runtime/<dataset>/<run>/` 写入 `performance.html` 主页和可选 `pipeline.html` 子页；它仍不验证
-SpMV 数值结果。
+host 使用 Cuper A 和 `b.txt` X 驱动 AXI/HBM 事务；reader 提前发出下一笔 AR，Ctrl/X 阶段跨 4 KiB
+burst 时 R 仍逐拍连续。A 阶段每拍接受一个 512-bit Cuper beat，下一拍向 8 条 FP64 IP lane
+并行发射有效 slot；每路 beat 必须完整且只读取一遍。
+报告按其他 construction 的规范写入 `runtime/<dataset>/<run>/performance.html` 主页和可选的
+`input-pipeline.html` 和 `timing-pipeline.html` 子页；后者分别展示 A beat 前端 II 与实际 FMUL 活跃拍、
+每拍 lane mask、在飞深度、全 padding 数据空窗和逐 lane req/resp 时序，从而区分控制气泡与编码造成的
+乘法空窗。
+对 `n512` 这类单窗口矩阵，host 还会把编码 slot 的 FP64 乘积位型 XOR 与硬件 checksum 对照。
 
 独立的 `make -C accelerator-sim/spmv encoding-test`、`cuper-a-test` 和 CPU golden 仍可单独使用，
 它们不依赖该输入 RTL。输入布局通过构造 profile 传给 Cuper A 编码检查；CPU golden 仍读取

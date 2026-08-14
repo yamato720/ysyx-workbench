@@ -63,7 +63,7 @@ abstract class ArithmeticIpModel(
   private val slotValid = RegInit(VecInit(Seq.fill(timing.latency)(false.B)))
   private val slotData = Reg(Vec(timing.latency, new ArithmeticResponse(width, tagWidth)))
   private val responseQueue = Module(new Queue(
-    new ArithmeticResponse(width, tagWidth), timing.responseFifoDepth, flow = false, pipe = true))
+    new ArithmeticResponse(width, tagWidth), timing.responseFifoDepth, flow = true, pipe = true))
 
   responseQueue.io.enq.valid := slotValid(timing.latency - 1)
   responseQueue.io.enq.bits := slotData(timing.latency - 1)

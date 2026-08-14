@@ -154,6 +154,8 @@ void writeHtmlReport(std::ostream& output, const CuperPackage& package,
   writeJsonString(output, datasetName);
   output << ",\"source\":";
   writeJsonString(output, sourcePath);
+  output << ",\"vectorReport\":";
+  writeJsonString(output, std::string(datasetName) + "-x.html");
   output << ",\"shape\":{\"rows\":" << package.rows
          << ",\"columns\":" << package.columns
          << ",\"nonzeros\":" << package.nonzeros << "},\"config\":{"

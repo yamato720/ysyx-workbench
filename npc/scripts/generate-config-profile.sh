@@ -81,6 +81,7 @@ awk -F= '
   $1 == "HOST_ABI" { host_abi=$2 }
   $1 == "ACCELERATOR_HOST_KIND" { accelerator_host_kind=$2 }
   $1 == "ACCELERATOR_HOST_ABI" { accelerator_host_abi=$2 }
+  $1 == "SPMV_INPUT_X_READER_COUNT" { spmv_input_x_reader_count=$2 }
   $1 == "SPMV_PERFORMANCE_HTML" { spmv_performance_html=$2 }
   $1 == "SPMV_PIPELINE_HTML" { spmv_pipeline_html=$2 }
   seen[$1]++ { exit 1 }
@@ -92,14 +93,23 @@ awk -F= '
     if (scope == "spmv") {
       if (capability != "run" || target != "SPMV" || host_abi != "none" ||
           !seen["ACCELERATOR_HOST_KIND"] || !seen["ACCELERATOR_HOST_ABI"] ||
-          accelerator_host_kind != "spmv" || accelerator_host_abi != "spmv-input-report-v3" ||
+          accelerator_host_kind != "spmv" || accelerator_host_abi != "spmv-input-report-v10" ||
+          spmv_input_x_reader_count != "2" ||
           !seen["SPMV_INPUT_A_READER_COUNT"] || !seen["SPMV_INPUT_X_READER_COUNT"] ||
+          !seen["SPMV_INPUT_CTRL_READER_COUNT"] ||
           !seen["SPMV_INPUT_HBM_CHANNEL_COUNT"] || !seen["SPMV_INPUT_HBM_BASE"] ||
           !seen["SPMV_INPUT_HBM_BYTES"] || !seen["SPMV_INPUT_HBM_CHANNEL_ALIGNMENT_BYTES"] ||
           !seen["SPMV_INPUT_AXI_ADDR_WIDTH"] || !seen["SPMV_INPUT_AXI_DATA_WIDTH"] ||
           !seen["SPMV_INPUT_AXI_ID_WIDTH"] || !seen["SPMV_INPUT_MAX_OUTSTANDING_BURSTS"] ||
           !seen["SPMV_INPUT_CONSUMER_COUNT"] ||
-          !seen["SPMV_INPUT_X_BROADCAST"] || !seen["SPMV_PERFORMANCE_HTML"] ||
+          !seen["SPMV_INPUT_X_BROADCAST"] || !seen["SPMV_INPUT_CTRL_BROADCAST"] ||
+          !seen["SPMV_INPUT_X_WINDOW_SIZE"] || !seen["SPMV_INPUT_X_REPLICA_COUNT"] ||
+          !seen["SPMV_INPUT_X_BANK_COUNT"] || !seen["SPMV_INPUT_X_ELEMENT_WIDTH"] ||
+          !seen["SPMV_FP64_MUL_INTERFACE"] || !seen["SPMV_FP64_MUL_LATENCY"] ||
+          !seen["SPMV_FP64_MUL_II"] || !seen["SPMV_FP64_MUL_RESPONSE_FIFO_DEPTH"] ||
+          !seen["SPMV_FP64_MUL_LANES"] || !seen["SPMV_FP64_MUL_CORE_COUNT"] ||
+          !seen["SPMV_FP64_MUL_TOTAL_LANES"] ||
+          !seen["SPMV_PERFORMANCE_HTML"] ||
           !seen["SPMV_PIPELINE_HTML"] || spmv_performance_html !~ /^[01]$/ ||
           spmv_pipeline_html !~ /^[01]$/ ||
           (spmv_pipeline_html == "1" && spmv_performance_html != "1") ||

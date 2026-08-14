@@ -309,4 +309,59 @@ CuperPackage encode(const CsrMatrix& matrix, const CuperConfig& config) {
   return package;
 }
 
+CuperVectorPackage encodeVector(const std::vector<double>& input,
+                                const CuperConfig& config) {
+  validateConfig(config);
+  if (input.empty()) {
+    throw std::invalid_argument("Cuper X 输入不能为空");
+  }
+
+  const std::size_t batchWidth = columnsPerBatch(config);
+  if (batchWidth % kVectorLanesPerBeat != 0) {
+    throw std::invalid_argument("Cuper X column batch 宽度必须按 float_v16 对齐");
+  }
+  const std::size_t batchCount = divideRoundedUp(input.size(), batchWidth);
+  const std::size_t payloadBeats = divideRoundedUp(input.size(), kVectorLanesPerBeat);
+  const std::size_t allocatedElements = divideRoundedUp(
+      input.size(), kVectorStorageAlignmentElements) * kVectorStorageAlignmentElements;
+  const std::size_t allocatedBeats = allocatedElements / kVectorLanesPerBeat;
+  if (payloadBeats > std::numeric_limits<std::uint32_t>::max()) {
+    throw std::overflow_error("Cuper X batch pointer 超过 uint32_t 范围");
+  }
+  if (allocatedBeats > std::numeric_limits<std::uint64_t>::max() / 64U) {
+    throw std::overflow_error("Cuper X HBM 分配字节数溢出");
+  }
+
+  CuperVectorPackage package;
+  package.config = config;
+  package.columns = input.size();
+  package.sourceValues = input;
+  package.batchPointers.resize(batchCount + 1U, 0);
+  package.hbmBeats.resize(allocatedBeats);
+
+  for (std::size_t batch = 0; batch < batchCount; ++batch) {
+    const std::size_t endColumn = std::min((batch + 1U) * batchWidth, input.size());
+    package.batchPointers[batch + 1U] = static_cast<std::uint32_t>(
+        divideRoundedUp(endColumn, kVectorLanesPerBeat));
+  }
+  for (std::size_t column = 0; column < input.size(); ++column) {
+    const float encoded = static_cast<float>(input[column]);
+    std::uint32_t bits = 0;
+    static_assert(sizeof(bits) == sizeof(encoded));
+    std::memcpy(&bits, &encoded, sizeof(bits));
+    package.hbmBeats[column / kVectorLanesPerBeat][column % kVectorLanesPerBeat] = bits;
+  }
+
+  package.stats.batchCount = batchCount;
+  package.stats.payloadBeats = payloadBeats;
+  package.stats.allocatedBeats = allocatedBeats;
+  package.stats.validElements = input.size();
+  package.stats.lanePaddingElements = payloadBeats * kVectorLanesPerBeat - input.size();
+  package.stats.allocationPaddingElements = allocatedElements -
+      payloadBeats * kVectorLanesPerBeat;
+  package.stats.packedBytes = payloadBeats * 64U;
+  package.stats.allocatedBytes = allocatedBeats * 64U;
+  return package;
+}
+
 }  // namespace accelerator_sim::spmv::encoding::cuper

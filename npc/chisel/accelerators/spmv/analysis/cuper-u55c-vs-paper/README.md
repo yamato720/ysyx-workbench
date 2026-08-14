@@ -36,7 +36,8 @@
 
 本报告读取了以下内容：
 
-- 原论文：[Cuper.pdf](../../../../../../ResearchProject/02-architecture-papers/Cuper/Cuper.pdf)
+- 原论文：[Cuper.pdf](../../refer/Cuper/Cuper.pdf)
+- 原版源码：[upstream/src/Cuper.cpp](../../refer/Cuper/upstream/src/Cuper.cpp)
 - 改版源码：`/home/pyx/project-x/Project-XPlus/DLC/Cuper-jacobi-iteration`
 - single SpMV 实验报告：
   `/home/pyx/project-x/Project-XPlus/395bitstream/cuper_spmv_optimization_20260618.html`

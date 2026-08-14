@@ -484,7 +484,7 @@ BUILD_DIR="$spmv_host_build" make --no-print-directory -s -C "$npc_root/.." buil
 "$manager" delete "$npc_root" "$spmv_version" >/dev/null
 [[ ! -d $spmv ]] || fail 'SPMV 回归构造没有从隔离版本库清理'
 
-# 本地 SPMV 正式驱动 16 路 A 与一路 X 广播：三阶段产物全部保存在 abi 下，不能生成
+# 本地 SPMV 正式驱动 16 路 A 与两路 X 条带广播：三阶段产物全部保存在 abi 下，不能生成
 # NEMU、CPU、FPGA 或 SoftFloat 资产；run 直接执行冻结的 Verilator host。
 spmv_input_fqcn=accelerators.spmv.SpmvInputSimulationConfig
 spmv_input="$CONSTRUCTION_TEST_ROOT/$spmv_input_fqcn"
@@ -510,15 +510,28 @@ done
   -s $spmv_input/logs/build/verilator.log &&
   -s $spmv_input/logs/build/accelerator-host.log ]] ||
   fail 'SPMV 正式输入 dry-run 的阶段或 host 边界不正确'
-[[ $(value "$spmv_input/profile.env" ACCELERATOR_HOST_ABI) == spmv-input-report-v3 &&
-  $(value "$spmv_input/profile.env" PROTOCOL_ABI) == spmv-input-full-bandwidth-v1 &&
+[[ $(value "$spmv_input/profile.env" ACCELERATOR_HOST_ABI) == spmv-input-report-v10 &&
+  $(value "$spmv_input/profile.env" PROTOCOL_ABI) == spmv-input-windowed-v9 &&
   $(value "$spmv_input/profile.env" SPMV_INPUT_A_READER_COUNT) == 16 &&
-  $(value "$spmv_input/profile.env" SPMV_INPUT_X_READER_COUNT) == 1 &&
+  $(value "$spmv_input/profile.env" SPMV_INPUT_X_READER_COUNT) == 2 &&
+  $(value "$spmv_input/profile.env" SPMV_INPUT_CTRL_READER_COUNT) == 1 &&
   $(value "$spmv_input/profile.env" SPMV_INPUT_HBM_CHANNEL_COUNT) == 16 &&
   $(value "$spmv_input/profile.env" SPMV_INPUT_AXI_DATA_WIDTH) == 512 &&
   $(value "$spmv_input/profile.env" SPMV_INPUT_MAX_OUTSTANDING_BURSTS) == 2 &&
   $(value "$spmv_input/profile.env" SPMV_INPUT_CONSUMER_COUNT) == 16 &&
   $(value "$spmv_input/profile.env" SPMV_INPUT_X_BROADCAST) == 1 &&
+  $(value "$spmv_input/profile.env" SPMV_INPUT_CTRL_BROADCAST) == 1 &&
+  $(value "$spmv_input/profile.env" SPMV_INPUT_X_WINDOW_SIZE) == 8192 &&
+  $(value "$spmv_input/profile.env" SPMV_INPUT_X_REPLICA_COUNT) == 4 &&
+  $(value "$spmv_input/profile.env" SPMV_INPUT_X_BANK_COUNT) == 16 &&
+  $(value "$spmv_input/profile.env" SPMV_INPUT_X_ELEMENT_WIDTH) == 64 &&
+  $(value "$spmv_input/profile.env" SPMV_FP64_MUL_INTERFACE) == arithmetic-req-resp-v1 &&
+  $(value "$spmv_input/profile.env" SPMV_FP64_MUL_LATENCY) == 4 &&
+  $(value "$spmv_input/profile.env" SPMV_FP64_MUL_II) == 1 &&
+  $(value "$spmv_input/profile.env" SPMV_FP64_MUL_RESPONSE_FIFO_DEPTH) == 4 &&
+  $(value "$spmv_input/profile.env" SPMV_FP64_MUL_LANES) == 8 &&
+  $(value "$spmv_input/profile.env" SPMV_FP64_MUL_CORE_COUNT) == 16 &&
+  $(value "$spmv_input/profile.env" SPMV_FP64_MUL_TOTAL_LANES) == 128 &&
   $(value "$spmv_input/profile.env" SPMV_PERFORMANCE_HTML) == 1 &&
   $(value "$spmv_input/profile.env" SPMV_PIPELINE_HTML) == 1 ]] ||
   fail 'SPMV 正式输入 profile 不完整'

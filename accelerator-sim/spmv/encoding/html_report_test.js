@@ -21,6 +21,9 @@ if (reportStart < 0 || reportEnd < 0) {
   throw new Error("Cuper HTML 报告缺少内嵌 package 数据");
 }
 const report = JSON.parse(scriptMatch[1].slice(reportStart + "const report=".length, reportEnd));
+if (report.vectorReport !== `${report.dataset}-x.html`) {
+  throw new Error("Cuper A HTML 报告的 X 页面链接错误");
+}
 const expectedSlots = report.stats.validSlots + report.stats.paddingSlots;
 if (report.slots.length !== expectedSlots) {
   throw new Error(`slot 数量错误: ${report.slots.length} != ${expectedSlots}`);
@@ -48,7 +51,7 @@ if (report.batchStats.length !== report.stats.batchCount ||
   throw new Error("batch、channel 或 slot 详细数据结构不完整");
 }
 for (const id of [
-  "packageView", "batchGrid", "batchView", "channelGrid", "channelView",
+  "vectorReport", "packageView", "batchGrid", "batchView", "channelGrid", "channelView",
   "slotMatrix", "matrixMode", "beatPageSize", "paddingPrev", "paddingNext",
   "slotView", "bitfield", "peerLanes",
 ]) {

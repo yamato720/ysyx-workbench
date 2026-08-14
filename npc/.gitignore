@@ -30,6 +30,7 @@ out/
 !*.sv
 !*.sh
 !scripts/performance-summary.sh
+!/chisel/accelerators/spmv/refer/Cuper
 
 # Tool-generated trees can contain whitelisted RTL, Tcl, and Markdown files.
 # Keep these exclusions after the file-type whitelist above.

@@ -10,6 +10,10 @@
 namespace accelerator_sim::spmv::encoding::cuper {
 
 constexpr std::size_t kLanesPerBeat = 8;
+constexpr std::size_t kVectorLanesPerBeat = 16;
+constexpr std::size_t kVectorStorageAlignmentElements = 1024;
+constexpr std::size_t kVectorReplicaCount = 4;
+constexpr std::size_t kVectorPartitionFactor = 8;
 constexpr std::uint32_t kColumnBits = 14;
 constexpr std::uint32_t kRowBits = 18;
 constexpr std::uint32_t kPaddingRow = (1U << kRowBits) - 1U;
@@ -25,6 +29,7 @@ struct CuperConfig {
 };
 
 using CuperBeat = std::array<std::uint64_t, kLanesPerBeat>;
+using CuperVectorBeat = std::array<std::uint32_t, kVectorLanesPerBeat>;
 
 struct CuperEncodingStats {
   std::size_t batchCount = 0;
@@ -52,6 +57,34 @@ struct CuperPackage {
   CuperEncodingStats stats;
 };
 
+struct CuperVectorStats {
+  std::size_t batchCount = 0;
+  std::size_t payloadBeats = 0;
+  std::size_t allocatedBeats = 0;
+  std::size_t validElements = 0;
+  std::size_t lanePaddingElements = 0;
+  std::size_t allocationPaddingElements = 0;
+  std::uint64_t packedBytes = 0;
+  std::uint64_t allocatedBytes = 0;
+};
+
+/** Cuper X 的 HBM 布局及其 Core 本地存储映射。
+  *
+  * HBM 中的元素保持原列顺序，FP64 输入先转换成 FP32，再按 float_v16 打包。
+  * Core 按 8192 列 batch 接收数据，并把每个 batch 复制到 4 份、8 路 cyclic partition
+  * 的 local_X 存储中。
+  */
+struct CuperVectorPackage {
+  CuperConfig config;
+  std::size_t columns = 0;
+  std::vector<double> sourceValues;
+  // 累计 batch 边界，单位是 512-bit float_v16 beat；不包含 HBM 分配尾部 padding。
+  std::vector<std::uint32_t> batchPointers;
+  // 包含 host 的 1024-element 对齐尾部，未被 kernel 读取的 beat 保持全零。
+  std::vector<CuperVectorBeat> hbmBeats;
+  CuperVectorStats stats;
+};
+
 struct DecodedCuperSlot {
   bool padding = false;
   std::uint32_t localColumn = 0;
@@ -66,5 +99,7 @@ std::size_t decodeOriginalRow(std::uint32_t encodedRow, std::size_t pe,
                               const CuperConfig& config);
 DecodedCuperSlot decodeSlot(std::uint64_t slot);
 CuperPackage encode(const CsrMatrix& matrix, const CuperConfig& config = {});
+CuperVectorPackage encodeVector(const std::vector<double>& input,
+                                const CuperConfig& config = {});
 
 }  // namespace accelerator_sim::spmv::encoding::cuper

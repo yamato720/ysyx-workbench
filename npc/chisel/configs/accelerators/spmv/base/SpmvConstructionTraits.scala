@@ -12,7 +12,7 @@ object SpmvAcceleratorHostConfig {
 
   val InputReport: AcceleratorHostConfig = AcceleratorHostConfig(
     kind = "spmv",
-    abi = "spmv-input-report-v3"
+    abi = "spmv-input-report-v10"
   )
 }
 
