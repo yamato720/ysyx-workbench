@@ -248,6 +248,40 @@ class CacheControlBehaviorTest extends AnyFlatSpec {
     }
   }
 
+  it should "remove a retained FENCE.I head when maintenance releases its dispatch" in {
+    simulate(new InstructionBuffer(entries = 4, ISAConfig(xlen = 32))) { dut =>
+      dut.io.flush.poke(false)
+      dut.io.dropYounger.poke(false)
+      dut.io.in.valid.poke(false)
+      dut.io.out.ready.poke(false)
+      dut.reset.poke(true)
+      dut.clock.step(2)
+      dut.reset.poke(false)
+
+      def enqueue(pc: Int): Unit = {
+        dut.io.in.bits.pc.poke(pc)
+        dut.io.in.bits.instruction.poke(0x13)
+        dut.io.in.bits.perfFetchCycles.poke(0)
+        dut.io.in.bits.perfDecodeStartCycle.poke(0)
+        dut.io.in.valid.poke(true)
+        dut.io.in.ready.expect(true.B)
+        dut.clock.step()
+        dut.io.in.valid.poke(false)
+      }
+
+      enqueue(0x100)
+      enqueue(0x104)
+      dut.io.dropYounger.poke(true)
+      dut.io.out.ready.poke(true)
+      dut.io.out.valid.expect(true.B)
+      dut.io.out.bits.pc.expect(0x100.U)
+      dut.clock.step()
+
+      dut.io.dropYounger.poke(false)
+      dut.io.out.valid.expect(false.B)
+    }
+  }
+
   "IFetchAXIAdapter" should "discard an outstanding pre-fence response and refetch the same PC" in {
     simulate(new IFetchAXIAdapter(addrWidth = 32, dataWidth = 32)) { dut =>
       dut.io.pc.poke(0x80000004L)

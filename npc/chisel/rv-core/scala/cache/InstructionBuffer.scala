@@ -23,7 +23,9 @@ class InstructionBuffer(entries: Int, cfg: ISAConfig, flowThrough: Boolean = fal
 
   io.in.ready := count =/= entries.U
   // 流水模式下，空队列可把本周期刚到达的取指结果直接交给 ID；非流水模式仍保持一拍寄存行为。
-  io.out.valid := count =/= 0.U || (flowThrough.B && io.in.valid)
+  // FENCE.I 维护期间只允许已保存的队首继续等待或被释放；本周期新到的响应属于
+  // 失效前的年轻取指，不能通过 flow-through 绕过丢弃逻辑。
+  io.out.valid := count =/= 0.U || (flowThrough.B && io.in.valid && !io.dropYounger)
   io.out.bits := Mux(count === 0.U && flowThrough.B, io.in.bits, storage(readPointer))
 
   def next(pointer: UInt): UInt =
@@ -34,10 +36,16 @@ class InstructionBuffer(entries: Int, cfg: ISAConfig, flowThrough: Boolean = fal
     writePointer := 0.U
     count := 0.U
   }.elsewhen(io.dropYounger) {
-    // FENCE.I 在维护完成前保留在队首；其后的指令可能来自失效前的 I$，
-    // 因而当前周期只保留队首，下一拍才允许继续取指。
-    writePointer := next(readPointer)
-    count := Mux(count === 0.U, 0.U, 1.U)
+    // FENCE.I 维护期间丢弃队首之后的预取项。若维护控制器在本周期释放队首且
+    // dispatch 完成握手，必须同时推进读指针；否则 fence 会在下一拍被重新识别。
+    when(io.out.fire) {
+      readPointer := next(readPointer)
+      writePointer := next(readPointer)
+      count := 0.U
+    }.otherwise {
+      writePointer := next(readPointer)
+      count := Mux(count === 0.U, 0.U, 1.U)
+    }
   }.otherwise {
     when(io.in.fire) {
       storage(writePointer) := io.in.bits
