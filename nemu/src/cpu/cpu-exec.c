@@ -1032,6 +1032,7 @@ static void exec_once(Decode *s, vaddr_t pc) {
     }
     isa_exec_once(&nemu_s);
     // cpu.gpr[] has been updated by isa_exec_once
+    const bool reference_terminated = nemu_state.state == NEMU_END;
 
     // Collect all architectural mismatches before printing anything. Floating
     // state is essential here: otherwise an FPU error is only reported when a
@@ -1094,7 +1095,9 @@ static void exec_once(Decode *s, vaddr_t pc) {
       RECORD_STORE_MISMATCH("store_bytes", expected_store_word_bytes, store_word_bytes);
 #undef RECORD_STORE_MISMATCH
     }
-    if (nemu_s.dnpc != s->dnpc) {
+    // 本地 AM 的 EBREAK 会把 NEMU 置为结束状态，其 dnpc 只是监视器结束哨兵，
+    // 不代表还会提交的架构 PC。终止指令仍比较寄存器和内存副作用。
+    if (!reference_terminated && nemu_s.dnpc != s->dnpc) {
       snprintf(mm[nm].name, sizeof(mm[nm].name), "next_pc");
       mm[nm].nemu_val = nemu_s.dnpc;
       mm[nm].npc_val  = s->dnpc;
