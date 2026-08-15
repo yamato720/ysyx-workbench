@@ -80,6 +80,9 @@ class NpcBackend(
   val registerFile = Module(new RegisterFile(width = cfg.xlen, debug = true))
   val floatingRegisterFile = if (localF) Some(Module(new FloatingRegisterFile(cfg.xlen))) else None
   val integerAlu = Module(new IntegerAlu(cfg.xlen))
+  // ID 直通只用于本地热路径。在 ID/EX 仍可正常接收的条件下保留独立 ALU，
+  // 避免把派发侧的宽译码与普通 EX 输入选择重新并到同一条关键路径。
+  val directDispatchIntegerAlu = if (directIntegerWritebackBypass) Some(Module(new IntegerAlu(cfg.xlen))) else None
   // 可选的串行 ALU 供 CSR、异常和 mret 路径使用。三拍模式下它只消费
   // serialExecuteControlReg，避免 executeState 经共享输入 mux 重新穿过结果级 ALU。
   val serialIntegerAlu = if (separateSerialIntegerAlu) Some(Module(new IntegerAlu(cfg.xlen))) else None
@@ -446,6 +449,21 @@ class NpcBackend(
     serialExecuteControlReg.io.out.valid || serialExecuteResultReg.io.out.valid ||
     (executeState =/= executeIdle) || executeMemoryReg.io.out.valid ||
     (memoryState =/= memoryIdle && !pipelinedMemory.B) || memoryWritebackReg.io.out.valid || memoryStageBusy
+  val memoryPipelineDrained = pipelinedMemoryStage.map(_.io.drained).getOrElse(true.B)
+  // 直通仅在 WB 之外的全部旧项都排空时发生。WB 中的旧项会于当前时钟边沿提交，
+  // 因此新项可同时写入 MEM/WB 而不改变退休顺序。
+  val directDispatchOlderInstructionsDrained = !decodeExecuteReg.io.out.valid &&
+    !integerExecuteReg.io.out.valid && !serialExecuteControlReg.io.out.valid &&
+    !serialExecuteResultReg.io.out.valid && !arithmeticResponseReg.io.out.valid &&
+    executeState === executeIdle && !executeMemoryReg.io.out.valid &&
+    memoryState === memoryIdle && !memoryStageBusy && memoryPipelineDrained && !commitRedirectValid
+  val directDispatchWritebackInstruction = directIntegerWritebackBypass.B && !twoStageIntegerExecute.B &&
+    pipelineMode && dispatch.executionUnit === NpcExecutionUnit.integer && dispatch.registerWriteEnable &&
+    !dispatch.branch && !dispatch.loadEnable && !dispatch.storeEnable && !dispatch.csrEnable &&
+    !dispatch.trapEnable && !dispatch.mretEnable && !dispatch.floatingInstruction &&
+    !dispatch.privilegedInstruction
+  val directDispatchWritebackCandidate = directDispatchWritebackInstruction &&
+    directDispatchOlderInstructionsDrained && !redirectBarrier
   // 本拍的算术发射不能同时给 ID/EX 填入更年轻的指令；这样 M/F 从请求到 EX/MEM
   // 均是单项按序路径，后续派发只会在响应被 EX/MEM 接收后恢复。
   val arithmeticWillIssue = decodeExecuteReg.io.out.valid && executeInputIsArithmetic && arithmeticCanAccept
@@ -458,8 +476,13 @@ class NpcBackend(
     !busyAfterDecode && !machineExternalInterruptPending && !frontendRedirectValid
   )
   decodeExecuteReg.io.flush := frontendRedirectValid
-  decodeExecuteReg.io.in.valid := io.dispatch.valid && decodeCanIssue
-  io.dispatch.ready := decodeExecuteReg.io.in.ready && decodeCanIssue
+  // 不能直通的纯整数项照常进入 ID/EX。禁止在此等待旁路条件恢复，否则分支或
+  // 访存后的连续热指令会堆积在 IF/ID，反而拉长平均延迟。
+  val directDispatchCanWriteback = directDispatchWritebackCandidate && memoryWritebackReg.io.in.ready
+  val directDispatchWriteback = io.dispatch.valid && decodeCanIssue && directDispatchCanWriteback
+  decodeExecuteReg.io.in.valid := io.dispatch.valid && decodeCanIssue && !directDispatchCanWriteback
+  io.dispatch.ready := decodeCanIssue && Mux(directDispatchCanWriteback,
+    true.B, decodeExecuteReg.io.in.ready)
   decodeExecuteReg.io.in.bits.pc := dispatch.pc
   decodeExecuteReg.io.in.bits.instruction := dispatch.instruction
   decodeExecuteReg.io.in.bits.predictedNextPc := dispatch.predictedNextPc
@@ -490,6 +513,15 @@ class NpcBackend(
   decodeExecuteReg.io.in.bits.storeData := Mux(dispatch.usesFrs2,
     forwardingUnit.io.idFrs2Forwarded, forwardingUnit.io.idRs2Forwarded)
   decodeExecuteReg.io.in.bits.operandC := forwardingUnit.io.idFrs3Forwarded
+  val directDispatchRs1Data = forwardingUnit.io.idRs1Forwarded
+  val directDispatchRs2Data = forwardingUnit.io.idRs2Forwarded
+  directDispatchIntegerAlu.foreach { alu =>
+    alu.io.a := directDispatchRs1Data
+    alu.io.b := Mux(dispatch.useImmediate, dispatch.immediate, directDispatchRs2Data)
+    alu.io.pc := dispatch.pc
+    alu.io.control := dispatch.aluCtrl
+  }
+  val directDispatchAluResult = directDispatchIntegerAlu.map(_.io.result).getOrElse(0.U(cfg.xlen.W))
   decodeExecuteReg.io.in.bits.immediate := dispatch.immediate
   decodeExecuteReg.io.in.bits.rd := dispatch.rd
   decodeExecuteReg.io.in.bits.rs1 := dispatch.rs1
@@ -927,6 +959,27 @@ class NpcBackend(
     dst.mretEnable := src.mretEnable
   }
 
+  val directDispatchExecuteMemory = WireDefault(0.U.asTypeOf(new ExecuteMemoryPayload(cfg)))
+  directDispatchExecuteMemory.pc := dispatch.pc
+  directDispatchExecuteMemory.instruction := dispatch.instruction
+  directDispatchExecuteMemory.predictedNextPc := dispatch.predictedNextPc
+  directDispatchExecuteMemory.perfFetchStartCycle := dispatch.perfFetchStartCycle
+  directDispatchExecuteMemory.perfFetchCycles := dispatch.perfFetchCycles
+  directDispatchExecuteMemory.perfDecodeStartCycle := dispatch.perfDecodeStartCycle
+  directDispatchExecuteMemory.perfDecodeCycles := 0.U
+  directDispatchExecuteMemory.perfExecuteStartCycle := performanceCycle
+  directDispatchExecuteMemory.perfExecuteCycles := 1.U
+  directDispatchExecuteMemory.perfMemoryStartCycle := performanceCycle
+  directDispatchExecuteMemory.perfMemoryQueueStartCycle := performanceCycle
+  directDispatchExecuteMemory.aluResult := directDispatchAluResult
+  directDispatchExecuteMemory.branchTarget := dispatch.pc + dispatch.immediate
+  directDispatchExecuteMemory.jalrTarget := Cat(
+    (directDispatchRs1Data + dispatch.immediate)(cfg.xlen - 1, 1), 0.U(1.W))
+  directDispatchExecuteMemory.storeData := directDispatchRs2Data
+  directDispatchExecuteMemory.rd := dispatch.rd
+  directDispatchExecuteMemory.funct3 := dispatch.funct3
+  directDispatchExecuteMemory.registerWriteEnable := dispatch.registerWriteEnable
+
   memoryWritebackReg.io.flush := false.B
   memoryWritebackReg.io.in.valid := false.B
   memoryWritebackReg.io.in.bits := 0.U.asTypeOf(new MemoryWritebackPayload(cfg))
@@ -950,11 +1003,21 @@ class NpcBackend(
     // 普通整数项也能同拍接收新项，PipelineRegister 会在该时钟边界保持提交顺序。
     directIntegerWriteback := directIntegerWritebackCandidate && stage.io.drained &&
       !stage.io.response.valid && memoryWritebackReg.io.in.ready
+    // EX/MEM 的反压只取决于该级已保存载荷的去向。派发直通只会在 EX/MEM
+    // 为空时发生，不能参与 ready 选择，否则分支恢复会绕回 ID 的派发许可。
+    executeMemoryReg.io.out.ready := Mux(nonMemoryWritebackBypass,
+      memoryWritebackReg.io.in.ready, stage.io.request.ready && memoryStageInputAllowed)
     stage.io.request.valid := executeMemoryReg.io.out.valid && !nonMemoryWritebackBypass &&
       memoryStageInputAllowed
     stage.io.request.bits := executeMemoryReg.io.out.bits
     stage.io.response.ready := memoryWritebackReg.io.in.ready
-    when(directIntegerWriteback) {
+    when(directDispatchWriteback) {
+      memoryWritebackReg.io.in.valid := true.B
+      driveMemoryWritebackPayload(memoryWritebackReg.io.in.bits, directDispatchExecuteMemory, 0.U(cfg.xlen.W))
+      memoryWritebackReg.io.in.bits.perfMemoryCycles := 0.U
+      memoryWritebackReg.io.in.bits.perfMemoryQueueCycles := 0.U
+      memoryWritebackReg.io.in.bits.perfMemoryServiceCycles := 0.U
+    }.elsewhen(directIntegerWriteback) {
       memoryWritebackReg.io.in.valid := true.B
       driveMemoryWritebackPayload(memoryWritebackReg.io.in.bits, executeMemoryInput, 0.U(cfg.xlen.W))
       memoryWritebackReg.io.in.bits.perfMemoryCycles := 0.U
@@ -968,9 +1031,7 @@ class NpcBackend(
       memoryWritebackReg.io.in.bits.perfMemoryCycles := 0.U
       memoryWritebackReg.io.in.bits.perfMemoryQueueCycles := 0.U
       memoryWritebackReg.io.in.bits.perfMemoryServiceCycles := 0.U
-      executeMemoryReg.io.out.ready := memoryWritebackReg.io.in.ready
     }.otherwise {
-      executeMemoryReg.io.out.ready := stage.io.request.ready && memoryStageInputAllowed
       memoryWritebackReg.io.in.valid := stage.io.response.valid
       memoryWritebackReg.io.in.bits := stage.io.response.bits
     }
