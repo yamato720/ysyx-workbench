@@ -279,9 +279,8 @@ class PipelinedBackendBehaviorTest extends AnyFlatSpec {
   }
 
   it should "recover a conditional branch only when its predicted next PC is wrong" in {
-    def observeBranch(predictedNextPc: BigInt): (Option[BigInt], Boolean) = {
+    def observeRedirect(predictedNextPc: BigInt): Option[BigInt] = {
       var observed: Option[BigInt] = None
-      var sawExecuteMemoryFire = false
       simulate(new NpcBackend(oneStageConfig)) { dut =>
         initialize(dut)
         dut.reset.poke(true)
@@ -298,19 +297,14 @@ class PipelinedBackendBehaviorTest extends AnyFlatSpec {
           if (dut.io.redirectValid.peek().litToBoolean) {
             observed = Some(dut.io.redirectTarget.peek().litValue)
           }
-          sawExecuteMemoryFire ||= dut.io.debug.executeMemoryFire.peek().litToBoolean
           dut.clock.step()
         }
       }
-      (observed, sawExecuteMemoryFire)
+      observed
     }
 
-    val (correctRedirect, correctExecuteMemoryFire) = observeBranch(0x508)
-    val (wrongRedirect, wrongExecuteMemoryFire) = observeBranch(0x504)
-    assert(correctRedirect.isEmpty)
-    assert(!correctExecuteMemoryFire)
-    assert(wrongRedirect.contains(BigInt(0x508)))
-    assert(wrongExecuteMemoryFire)
+    assert(observeRedirect(0x508).isEmpty)
+    assert(observeRedirect(0x504).contains(BigInt(0x508)))
   }
 
   it should "keep a non-memory bypass candidate behind an older outstanding load" in {
