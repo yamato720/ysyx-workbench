@@ -327,6 +327,7 @@ class CacheControlBehaviorTest extends AnyFlatSpec {
       dut.io.restartPc.poke(0x80000000L)
       dut.io.responseReady.poke(true)
       dut.io.performanceCycle.poke(0)
+      dut.io.issueHold.poke(false)
       dut.io.predictionValid.poke(false)
       dut.io.predictionTarget.poke(0)
       dut.io.flush.poke(false)
@@ -378,6 +379,7 @@ class CacheControlBehaviorTest extends AnyFlatSpec {
       dut.io.restartPc.poke(0x80000000L)
       dut.io.responseReady.poke(true)
       dut.io.performanceCycle.poke(0)
+      dut.io.issueHold.poke(false)
       dut.io.predictionValid.poke(false)
       dut.io.predictionTarget.poke(0)
       dut.io.flush.poke(false)
@@ -424,6 +426,7 @@ class CacheControlBehaviorTest extends AnyFlatSpec {
       dut.io.restartPc.poke(0)
       dut.io.responseReady.poke(true)
       dut.io.performanceCycle.poke(0)
+      dut.io.issueHold.poke(false)
       dut.io.predictionValid.poke(false)
       dut.io.predictionTarget.poke(0)
       dut.io.flush.poke(false)
@@ -456,6 +459,36 @@ class CacheControlBehaviorTest extends AnyFlatSpec {
       dut.io.axi.ar.valid.expect(true.B)
       dut.io.axi.ar.bits.addr.expect(0x80000100L.U)
       dut.clock.step()
+    }
+  }
+
+  it should "hold the next AR without advancing the sequential fetch address" in {
+    simulate(new PipelinedIFetchAXIAdapter(addrWidth = 32, dataWidth = 32, outstandingDepth = 4)) { dut =>
+      dut.io.pc.poke(0x80000200L)
+      dut.io.restartPc.poke(0)
+      dut.io.responseReady.poke(true)
+      dut.io.performanceCycle.poke(0)
+      dut.io.issueHold.poke(true)
+      dut.io.predictionValid.poke(false)
+      dut.io.predictionTarget.poke(0)
+      dut.io.flush.poke(false)
+      dut.io.axi.aw.ready.poke(false)
+      dut.io.axi.w.ready.poke(false)
+      dut.io.axi.b.valid.poke(false)
+      dut.io.axi.b.bits.resp.poke(0)
+      dut.io.axi.ar.ready.poke(true)
+      dut.io.axi.r.valid.poke(false)
+      dut.io.axi.r.bits.data.poke(0)
+      dut.io.axi.r.bits.resp.poke(0)
+      dut.reset.poke(true)
+      dut.clock.step(2)
+      dut.reset.poke(false)
+
+      dut.io.axi.ar.valid.expect(false.B)
+      dut.clock.step()
+      dut.io.issueHold.poke(false)
+      dut.io.axi.ar.valid.expect(true.B)
+      dut.io.axi.ar.bits.addr.expect(0x80000200L.U)
     }
   }
 

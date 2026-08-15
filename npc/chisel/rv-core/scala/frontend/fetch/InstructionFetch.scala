@@ -188,6 +188,9 @@ class PipelinedIFetchAXIAdapter(
     val responseValid = Output(Bool())
     val responseReady = Input(Bool())
     val performanceCycle = Input(UInt(64.W))
+    // 后端排空直通路径的过渡拍不再发出新的 AR，避免已保持的 R 在缓存响应 FIFO 中
+    // 形成持续占用；保持解除后仍由同一 nextPc 重新发起该请求。
+    val issueHold = Input(Bool())
     val predictionValid = Input(Bool())
     val predictionTarget = Input(UInt(addrWidth.W))
     val flush = Input(Bool())
@@ -212,7 +215,7 @@ class PipelinedIFetchAXIAdapter(
   val issuePc = Mux(initialized, nextPc, io.pc)
   val issueNextPc = issuePc + 4.U
   val issueMisaligned = issuePc(1, 0).orR
-  val issueAllowed = (allowRedirectRequestOverlap.B || !drainingOld) && !io.flush &&
+  val issueAllowed = (allowRedirectRequestOverlap.B || !drainingOld) && !io.flush && !io.issueHold &&
     !io.predictionValid && !faultValid && !issueMisaligned
   io.axi.aw.valid := false.B
   io.axi.aw.bits.addr := 0.U

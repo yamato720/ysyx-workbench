@@ -43,6 +43,9 @@ class NpcBackend(
     val axi = new AxiLiteMasterIO(axiConfig.addrWidth, axiConfig.dataWidth)
     val redirectValid = Output(Bool())
     val redirectTarget = Output(UInt(cfg.xlen.W))
+    // ID/EX 正在把最后一条普通整数送入 WB 时，前端暂缓接收新的 I$ 响应，
+    // 使下一拍的整数能直接从 dispatch 写入 WB。
+    val holdIncomingFetch = Output(Bool())
     val memoryFault = Output(new MemoryFault(axiConfig.addrWidth))
     val debug = Output(new NpcBackendDebugBundle(cfg))
   })
@@ -464,6 +467,16 @@ class NpcBackend(
     !dispatch.privilegedInstruction
   val directDispatchWritebackCandidate = directDispatchWritebackInstruction &&
     directDispatchOlderInstructionsDrained && !redirectBarrier
+  // 当前 ID/EX 的纯整数会在本拍直达 WB 时，新派发项不能同时占用该寄存器。
+  // 前端只在这个过渡拍保留 I$ 响应；旧项排空后，保留项从 dispatch 进入 WB，
+  // 连续热命中整数流便不会重新落入 ID/EX 的一拍自维持路径。
+  val directDispatchTransitionHold = directIntegerWritebackBypass.B && !twoStageIntegerExecute.B &&
+    pipelineMode && decodeExecuteReg.io.out.valid && !executeInputIsSerial &&
+    !executeInputIsArithmetic && executeInput.registerWriteEnable && !executeInput.branch &&
+    !executeInput.loadEnable && !executeInput.storeEnable && executeState === executeIdle &&
+    !serialControlStagePending && !serialResultStagePending && !executeMemoryReg.io.out.valid &&
+    !commitRedirectValid && memoryPipelineDrained && memoryWritebackReg.io.in.ready
+  io.holdIncomingFetch := directDispatchTransitionHold
   // 本拍的算术发射不能同时给 ID/EX 填入更年轻的指令；这样 M/F 从请求到 EX/MEM
   // 均是单项按序路径，后续派发只会在响应被 EX/MEM 接收后恢复。
   val arithmeticWillIssue = decodeExecuteReg.io.out.valid && executeInputIsArithmetic && arithmeticCanAccept

@@ -278,6 +278,48 @@ class PipelinedBackendBehaviorTest extends AnyFlatSpec {
     }
   }
 
+  it should "keep dispatch-to-WB bypass active for consecutive independent integers" in {
+    simulate(new NpcBackend(oneStageConfig)) { dut =>
+      initialize(dut)
+      dut.reset.poke(true)
+      dut.clock.step(2)
+      dut.reset.poke(false)
+
+      val instructionCount = 12
+      var instructionIndex = 0
+      val decodeCycles = mutable.ArrayBuffer.empty[BigInt]
+      def sampleCommit(): Unit = {
+        if (dut.io.debug.sampleCommitValid.peek().litToBoolean) {
+          decodeCycles += dut.io.debug.sampleDecodeCycles.peek().litValue
+        }
+      }
+      dut.io.dispatch.valid.poke(true)
+      while (instructionIndex < instructionCount) {
+        sampleCommit()
+        val cycle = dut.io.debug.cycleCount.peek().litValue
+        setAddi(dut, 0x380 + instructionIndex * 4, rd = 5 + instructionIndex % 11,
+          rs1 = 0, immediate = instructionIndex + 1)
+        dut.io.dispatch.bits.perfFetchStartCycle.poke(cycle - 1)
+        dut.io.dispatch.bits.perfFetchCycles.poke(1)
+        dut.io.dispatch.bits.perfDecodeStartCycle.poke(cycle)
+        dut.io.dispatch.ready.expect(true.B)
+        dut.clock.step()
+        instructionIndex += 1
+      }
+      dut.io.dispatch.valid.poke(false)
+
+      var guard = 0
+      while (decodeCycles.size < instructionCount && guard < 40) {
+        sampleCommit()
+        dut.clock.step()
+        guard += 1
+      }
+
+      assert(decodeCycles.size == instructionCount)
+      assert(decodeCycles.forall(_ == 0), s"unexpected ID/EX residency: $decodeCycles")
+    }
+  }
+
   it should "recover a conditional branch only when its predicted next PC is wrong" in {
     def observeRedirect(predictedNextPc: BigInt): Option[BigInt] = {
       var observed: Option[BigInt] = None

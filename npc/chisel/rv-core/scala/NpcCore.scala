@@ -57,6 +57,7 @@ class NpcCore(
 
   frontend.io.redirectValid := backend.io.redirectValid
   frontend.io.redirectTarget := backend.io.redirectTarget
+  frontend.io.holdIncomingFetch := backend.io.holdIncomingFetch
   val fenceHold = WireDefault(false.B)
   frontend.io.fenceHold := fenceHold
   val externalDispatchPermit = WireDefault(true.B)

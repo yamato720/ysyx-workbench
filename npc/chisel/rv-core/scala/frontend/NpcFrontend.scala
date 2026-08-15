@@ -20,6 +20,8 @@ class NpcFrontend(config: NpcConfig) extends Module {
     val redirectValid = Input(Bool())
     val redirectTarget = Input(UInt(cfg.xlen.W))
     val fenceHold = Input(Bool())
+    // 后端排空 ID/EX 到 WB 的唯一过渡拍。此时保持 I$ R 通道，不能把响应写入 IF/ID。
+    val holdIncomingFetch = Input(Bool())
     val dispatch = Decoupled(new DecodedDispatchPayload(cfg))
     // 两条已提交指令之间若要接收异步中断，后端以此作为 mepc。取指级至多
     // 缓冲一条尚未派发的指令，因此该值不会跳过任何未提交的架构指令。
@@ -87,7 +89,10 @@ class NpcFrontend(config: NpcConfig) extends Module {
       Mux(pipelinedFetch.B, fetchBufferIn.bits.predictedNextPc, programCounter.io.pcPlus4)))
   programCounter.io.writeEnable := pcWriteEnable
 
-  fetchBufferIn.valid := fetchResponseValid && !fetchFlush
+  // 该保持只影响后端明确请求的一个过渡拍。AXI R 保持 valid，取指适配器不会出队，
+  // 因而下一拍仍能把同一条 I$ 响应直接交给 dispatch。
+  val fetchResponseAccept = !fetchFlush && !io.holdIncomingFetch
+  fetchBufferIn.valid := fetchResponseValid && fetchResponseAccept
   fetchBufferIn.bits.pc := Mux(pipelinedFetch.B, fetchResponsePc, programCounter.io.pc)
   fetchBufferIn.bits.instruction := fetchInstruction
   fetchBufferIn.bits.predictedNextPc := fetchPredictedNextPc
@@ -101,11 +106,12 @@ class NpcFrontend(config: NpcConfig) extends Module {
     instructionFetchUnit.io.pc := programCounter.io.pc(31, 0)
     instructionFetchUnit.io.restartPc := fetchRestartPc
     instructionFetchUnit.io.performanceCycle := performanceCycle
+    instructionFetchUnit.io.issueHold := io.holdIncomingFetch
     instructionFetchUnit.io.predictionValid := fetchBufferIn.fire &&
       fetchStaticPrediction && fetchPredictedNextPc =/= fetchPcForPrediction + 4.U
     instructionFetchUnit.io.predictionTarget := fetchPredictedNextPc(axiConfig.addrWidth - 1, 0)
     instructionFetchUnit.io.flush := fetchFlush
-    instructionFetchUnit.io.responseReady := fetchBufferIn.ready && !fetchFlush
+    instructionFetchUnit.io.responseReady := fetchBufferIn.ready && fetchResponseAccept
     instructionFetchUnit.io.axi <> io.axi
     fetchInstruction := instructionFetchUnit.io.inst
     fetchResponsePc := instructionFetchUnit.io.responsePc
@@ -119,7 +125,7 @@ class NpcFrontend(config: NpcConfig) extends Module {
     instructionFetchUnit.io.pc := programCounter.io.pc(31, 0)
     instructionFetchUnit.io.performanceCycle := performanceCycle
     instructionFetchUnit.io.flush := fetchFlush
-    instructionFetchUnit.io.responseReady := fetchBufferIn.ready && !fetchFlush
+    instructionFetchUnit.io.responseReady := fetchBufferIn.ready && fetchResponseAccept
     instructionFetchUnit.io.axi <> io.axi
     fetchInstruction := instructionFetchUnit.io.inst
     fetchResponseValid := instructionFetchUnit.io.responseValid
