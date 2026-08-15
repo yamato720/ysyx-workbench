@@ -68,7 +68,8 @@ int main(void) {
   assert(strstr(content, "stage.error") != NULL);
   assert(strstr(content, "nextBySequence") != NULL);
   assert(strstr(content, "TIMING OVERLAP") != NULL);
-  assert(strstr(content, "function controlTransfer(record)") != NULL);
+  assert(strstr(content, "function controlTransfer(record,next)") != NULL);
+  assert(strstr(content, "Number.parseInt(next.pc,16)!==fallthrough") != NULL);
   assert(strstr(content, "按序等待较老指令") != NULL);
   assert(strstr(content, "b.addEventListener('click'") != NULL);
   assert(strstr(content, ".stage.handoff{background:var(--handoff)") != NULL);
