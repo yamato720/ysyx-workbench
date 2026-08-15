@@ -290,7 +290,9 @@ class PipelinedCacheController(
   val s0Miss = state === sRun && s0Valid && s0ReadReady &&
     !s0HitResponse && !s0WriteThroughHit
 
-  requestQueue.io.deq.ready := state === sRun && !io.maintenanceRequest &&
+  // 维护请求会关闭新入口，但先前已经完成 AR/AW/W 握手的请求必须继续排空；
+  // 否则维护起始条件等待 FIFO 为空，而 FIFO 又被维护请求禁止出队，形成死锁。
+  requestQueue.io.deq.ready := state === sRun &&
     (!s0Valid || s0CanComplete)
   val s0Issue = requestQueue.io.deq.fire
 

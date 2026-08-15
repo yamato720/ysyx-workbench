@@ -107,6 +107,86 @@ class CacheControllerBehaviorTest extends AnyFlatSpec {
     }
   }
 
+  it should "drain requests accepted before cache maintenance" in {
+    val cache = CacheConfig(
+      enabled = true,
+      geometry = CacheGeometry(64, 16, CacheMapping.DirectMapped),
+      replacement = CacheReplacement.TreePLRU,
+      storage = CacheStorage.Registers
+    )
+    val base = BigInt("80000000", 16)
+    val firstLine = BigInt("1111111111111111", 16)
+    val secondLine = BigInt("2222222222222222", 16)
+    val backing = Map(base -> firstLine, base + 16 -> secondLine)
+
+    simulate(new PipelinedCacheController(cache, 32, 64, 0x80000000L, 0x10000000L,
+      readOnly = true, PipelinedCacheQueueConfig.TwoCycleLocal)) { dut =>
+      var pendingRead: Option[BigInt] = None
+
+      def driveMemory(): Unit = {
+        dut.io.memory.ar.ready.poke(pendingRead.isEmpty)
+        dut.io.memory.r.valid.poke(pendingRead.nonEmpty)
+        dut.io.memory.r.bits.data.poke(pendingRead.flatMap(backing.get).getOrElse(BigInt(0)))
+        dut.io.memory.r.bits.resp.poke(0)
+        dut.io.memory.aw.ready.poke(true)
+        dut.io.memory.w.ready.poke(true)
+        dut.io.memory.b.valid.poke(false)
+        dut.io.memory.b.bits.resp.poke(0)
+      }
+
+      def cycle(): Option[BigInt] = {
+        driveMemory()
+        val arFire = dut.io.memory.ar.valid.peek().litToBoolean && pendingRead.isEmpty
+        val arAddress = dut.io.memory.ar.bits.addr.peek().litValue
+        val rFire = pendingRead.nonEmpty && dut.io.memory.r.ready.peek().litToBoolean
+        val cpuRead = Option.when(dut.io.cpu.r.valid.peek().litToBoolean &&
+          dut.io.cpu.r.ready.peek().litToBoolean)(dut.io.cpu.r.bits.data.peek().litValue)
+        dut.clock.step()
+        if (rFire) pendingRead = None
+        if (arFire) pendingRead = Some(arAddress)
+        cpuRead
+      }
+
+      def acceptRead(address: BigInt): Unit = {
+        dut.io.cpu.ar.bits.addr.poke(address)
+        dut.io.cpu.ar.bits.size.poke(3)
+        dut.io.cpu.ar.bits.prot.poke(4)
+        dut.io.cpu.ar.valid.poke(true)
+        driveMemory()
+        dut.io.cpu.ar.ready.expect(true.B)
+        cycle()
+        dut.io.cpu.ar.valid.poke(false)
+      }
+
+      dut.io.cpu.aw.valid.poke(false)
+      dut.io.cpu.w.valid.poke(false)
+      dut.io.cpu.ar.valid.poke(false)
+      dut.io.cpu.b.ready.poke(true)
+      dut.io.cpu.r.ready.poke(true)
+      dut.io.maintenanceRequest.poke(false)
+      dut.io.maintenanceInvalidate.poke(false)
+      dut.reset.poke(true)
+      dut.clock.step(2)
+      dut.reset.poke(false)
+
+      // 第二笔在第一笔 miss 阻塞时进入 FIFO；维护必须继续服务这两个旧请求。
+      acceptRead(base)
+      acceptRead(base + 16)
+      dut.io.maintenanceRequest.poke(true)
+      dut.io.maintenanceInvalidate.poke(true)
+      val responses = mutable.ArrayBuffer.empty[BigInt]
+      var guard = 0
+      while ((!dut.io.maintenanceDone.peek().litToBoolean || responses.size < 2) && guard < 120) {
+        cycle().foreach(responses += _)
+        guard += 1
+      }
+      assert(guard < 120, "maintenance must drain already accepted requests")
+      assert(responses.toSeq == Seq(firstLine, secondLine))
+      dut.io.maintenanceRequest.poke(false)
+      cycle()
+    }
+  }
+
   it should "keep queued reads ordered when an earlier line miss invalidates S0 prefetch data" in {
     val cache = CacheConfig(
       enabled = true,
