@@ -98,7 +98,7 @@ package npc
 
 /** 本地教学缓存核心；默认 SimulationConfig 保持完全无缓存。 */
 class CacheSimulationCoreConfig extends ConfigBundle(
-  new WithTeachingCacheConfig ++
+  new WithPipelinedTwoCycleTeachingCacheConfig ++
     new SimulationCoreConfig
 )
 
@@ -113,7 +113,7 @@ class CacheSimulationCoreConfig extends ConfigBundle(
 class HbmJitterCacheSimulationCoreConfig extends ConfigBundle(
   new WithDpiMemoryTimingConfig(DpiMemoryTimingConfig.HbmJitter73To81) ++
     new WithLocalDpiCacheMemoryWidthConfig(512) ++
-    new WithWideHbmCacheConfig ++
+    new WithPipelinedTwoCycleWideHbmCacheConfig ++
     new Rv64IMZicsrConfig ++
     new PipelineDualFwdTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecutePerformConfig ++
     new WithTopDebugConfig ++
@@ -125,7 +125,7 @@ class HbmJitterCacheSimulationCoreConfig extends ConfigBundle(
 class HbmJitterL2CacheSimulationCoreConfig extends ConfigBundle(
   new WithDpiMemoryTimingConfig(DpiMemoryTimingConfig.HbmJitter73To81) ++
     new WithLocalDpiCacheMemoryWidthConfig(512) ++
-    new WithWideHbmL2CacheConfig ++
+    new WithPipelinedTwoCycleWideHbmL2CacheConfig ++
     new Rv64IMZicsrConfig ++
     new PipelineDualFwdTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecutePerformConfig ++
     new WithTopDebugConfig ++
@@ -135,7 +135,7 @@ class HbmJitterL2CacheSimulationCoreConfig extends ConfigBundle(
 
 /**
   * 本地两拍 L1/L2 仿真：64-byte L1/L2 line 与 512-bit DPI 主存端口一一对应。
-  * 命中经过 S0/S1 后在握手两拍后返回；miss、MMIO 和维护仍以按序阻塞方式完成。
+  * 命中在 S0 同步读出的后续一拍返回；miss、MMIO 和维护仍以按序阻塞方式完成。
   */
 class PipelinedTwoCycleWideL2SimulationCoreConfig extends ConfigBundle(
   new WithNpcOutstandingCompletionForwardingConfig ++

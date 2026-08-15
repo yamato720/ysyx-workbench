@@ -8,7 +8,7 @@ import scala.collection.mutable
 class CacheControllerBehaviorTest extends AnyFlatSpec {
   private case class CycleResult(read: Option[BigInt], writeResponse: Boolean)
 
-  "PipelinedCacheController" should "return a warmed hit two clocks after its AR handshake" in {
+  "PipelinedCacheController" should "return a warmed synchronous hit without an extra response register" in {
     val cache = CacheConfig(
       enabled = true,
       geometry = CacheGeometry(64, 16, CacheMapping.DirectMapped),
@@ -77,10 +77,6 @@ class CacheControllerBehaviorTest extends AnyFlatSpec {
         .contains(line), "first access must refill the cache")
 
       issueRead()
-      dut.io.cpu.r.valid.expect(false.B)
-      cycle()
-      dut.io.cpu.r.valid.expect(false.B)
-      cycle()
       dut.io.cpu.r.valid.expect(true.B)
       dut.io.cpu.r.bits.data.expect(line.U)
       cycle()
@@ -106,7 +102,7 @@ class CacheControllerBehaviorTest extends AnyFlatSpec {
         guard += 1
       }
       assert(warmResponses.toSeq == Seq(line, line, line, line))
-      assert(warmResponseCycles.head == warmHandshakeCycles.head + 2)
+      assert(warmResponseCycles.head == warmHandshakeCycles.head)
       assert(warmResponseCycles.sliding(2).forall(pair => pair(1) == pair.head + 1))
     }
   }

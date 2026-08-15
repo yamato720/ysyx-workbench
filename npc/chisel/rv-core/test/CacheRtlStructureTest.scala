@@ -33,7 +33,7 @@ class CacheRtlStructureTest extends AnyFlatSpec {
     assert(uramSystemVerilog.contains("ram_style = \"ultra\""))
   }
 
-  "PipelinedCacheController" should "elaborate S0/S1 stages, ordered queues, and blocking maintenance" in {
+  "PipelinedCacheController" should "elaborate direct S0 hits, ordered queues, and blocking maintenance" in {
     val cache = CacheConfig(enabled = true, geometry = geometry, storage = CacheStorage.Auto)
     val chirrtl = _root_.circt.stage.ChiselStage.emitCHIRRTL(
       new PipelinedCacheController(cache, 32, 64, 0x80000000L, 0x10000000L,
@@ -41,7 +41,7 @@ class CacheRtlStructureTest extends AnyFlatSpec {
 
     assert(chirrtl.contains("module PipelinedCacheController"))
     assert(chirrtl.contains("s0Valid"))
-    assert(chirrtl.contains("s1Valid"))
+    assert(chirrtl.contains("s0HitResponse"))
     assert(chirrtl.contains("requestQueue"))
     assert(chirrtl.contains("responseQueue"))
     assert(chirrtl.contains("maintenanceCanStart"))
@@ -75,9 +75,11 @@ class CacheRtlStructureTest extends AnyFlatSpec {
     assert(cached.contains("l2Flush"))
   }
 
-  it should "elaborate the local two-cycle hierarchy without changing the blocking presets" in {
+  it should "elaborate both local two-cycle L1 and L1/L2 hierarchies" in {
     val pipelined = _root_.circt.stage.ChiselStage.emitCHIRRTL(
       new NpcCore(new PipelinedTwoCycleWideL2SimulationCoreConfig().build))
+    val l1Only = _root_.circt.stage.ChiselStage.emitCHIRRTL(
+      new NpcCore(new HbmJitterCacheSimulationCoreConfig().build))
 
     assert(pipelined.contains("module PipelinedCacheController"))
     assert(pipelined.contains("module PipelinedIFetchAXIAdapter"))
@@ -85,5 +87,9 @@ class CacheRtlStructureTest extends AnyFlatSpec {
     assert(pipelined.contains("module PipelinedAxiLiteArbiter2"))
     assert(pipelined.contains("module PipelinedAxiLiteCrossbar"))
     assert(pipelined.contains("module PipelinedAxiLiteDpiRamSlave"))
+    assert(l1Only.contains("module PipelinedCacheController"))
+    assert(l1Only.contains("module PipelinedIFetchAXIAdapter"))
+    assert(l1Only.contains("module PipelinedAxiLiteCrossbar"))
+    assert(l1Only.contains("module PipelinedAxiLiteDpiRamSlave"))
   }
 }

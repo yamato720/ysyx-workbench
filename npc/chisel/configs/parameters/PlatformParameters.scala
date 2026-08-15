@@ -72,7 +72,7 @@ sealed trait CacheAccessMode { def name: String }
 object CacheAccessMode {
   /** 保持历史单 MSHR、一次只接受一笔 CPU 请求的行为。 */
   case object Blocking extends CacheAccessMode { override val name: String = "blocking" }
-  /** 命中请求经 S0 阵列读和 S1 比较后，在握手两拍后按序返回。 */
+  /** 命中请求由 S0 发起同步阵列读，下一拍直接比较阵列输出并按序返回。 */
   case object PipelinedTwoCycle extends CacheAccessMode {
     override val name: String = "pipelined-two-cycle"
   }
@@ -253,7 +253,21 @@ object CacheHierarchyConfig {
     )
   )
 
-  /** 仅本地仿真的两拍 L1/L2 组合；L1 命中后固定两拍产生有序响应。 */
+  /** 仅本地仿真的 PipelinedTwoCycle 教学 L1 组合；L1 命中在 AR 握手后的下一拍按序返回。 */
+  val PipelinedTwoCycleTeaching: CacheHierarchyConfig = Teaching.copy(
+    instructionBuffer = InstructionBufferConfig(enabled = true, entries = 8),
+    accessMode = CacheAccessMode.PipelinedTwoCycle,
+    pipelinedQueues = PipelinedCacheQueueConfig.TwoCycleLocal
+  )
+
+  /** 仅本地仿真的两拍宽 HBM L1 组合；保持原有 64-byte line 与主存时序。 */
+  val PipelinedTwoCycleWideHbm: CacheHierarchyConfig = WideHbm.copy(
+    instructionBuffer = InstructionBufferConfig(enabled = true, entries = 8),
+    accessMode = CacheAccessMode.PipelinedTwoCycle,
+    pipelinedQueues = PipelinedCacheQueueConfig.TwoCycleLocal
+  )
+
+  /** 仅本地仿真的 PipelinedTwoCycle 宽 HBM L1/L2 组合；L1 命中在 AR 握手后的下一拍按序返回。 */
   val PipelinedTwoCycleWideHbmWithL2: CacheHierarchyConfig = WideHbmWithL2.copy(
     instructionBuffer = InstructionBufferConfig(enabled = true, entries = 8),
     accessMode = CacheAccessMode.PipelinedTwoCycle,
@@ -395,8 +409,8 @@ case class NpcConfig(
     cache.dcache.validateMemoryBus(memoryDataWidth)
     cache.l2cache.validateMemoryBus(memoryDataWidth)
     require(cache.accessMode != CacheAccessMode.PipelinedTwoCycle ||
-      (!axi.useExternalMaster && cache.icache.enabled && cache.dcache.enabled && cache.l2cache.enabled),
-      "PipelinedTwoCycle cache access is limited to the local complete L1/L2 DPI hierarchy")
+      (!axi.useExternalMaster && cache.icache.enabled && cache.dcache.enabled),
+      "PipelinedTwoCycle cache access is limited to the local complete L1 DPI hierarchy")
     this
   }
 }

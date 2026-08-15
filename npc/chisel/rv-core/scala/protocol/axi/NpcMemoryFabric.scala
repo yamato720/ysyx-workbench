@@ -123,23 +123,45 @@ class NpcMemoryFabric(config: NpcConfig) extends Module {
         io.l2Statistics := l2.io.statistics
       }
     } else {
-      val instructionMemory = Module(new AxiLiteDpiRamSlave(
-        axiConfig.addrWidth, memoryDataWidth, memoryConfig.dpiTiming))
-      val dataMemory = Module(new AxiLiteDpiRamSlave(
-        axiConfig.addrWidth, memoryDataWidth, memoryConfig.dpiTiming))
-      val dataCrossbar = Module(new AxiLiteCrossbar(
-        axiConfig.addrWidth,
-        memoryDataWidth,
-        Seq(
-          AxiLiteSlaveRange(memoryConfig.mainMemoryBase, memoryConfig.mainMemorySize),
-          AxiLiteSlaveRange(memoryConfig.mmioBase, memoryConfig.mmioSize)
-        )
-      ))
+      if (config.cache.accessMode == npc.CacheAccessMode.PipelinedTwoCycle) {
+        val depth = config.cache.pipelinedQueues.memoryDepth
+        val instructionMemory = Module(new PipelinedAxiLiteDpiRamSlave(
+          axiConfig.addrWidth, memoryDataWidth, depth, memoryConfig.dpiTiming))
+        val dataMemory = Module(new PipelinedAxiLiteDpiRamSlave(
+          axiConfig.addrWidth, memoryDataWidth, depth, memoryConfig.dpiTiming))
+        val dataCrossbar = Module(new PipelinedAxiLiteCrossbar(
+          axiConfig.addrWidth,
+          memoryDataWidth,
+          Seq(
+            AxiLiteSlaveRange(memoryConfig.mainMemoryBase, memoryConfig.mainMemorySize),
+            AxiLiteSlaveRange(memoryConfig.mmioBase, memoryConfig.mmioSize)
+          ),
+          depth
+        ))
 
-      io.instruction <> instructionMemory.io.axi
-      io.data <> dataCrossbar.io.master
-      dataCrossbar.io.slaves(0) <> dataMemory.io.axi
-      dataCrossbar.io.slaves(1) <> mmioSlave.io.axi
+        io.instruction <> instructionMemory.io.axi
+        io.data <> dataCrossbar.io.master
+        dataCrossbar.io.slaves(0) <> dataMemory.io.axi
+        dataCrossbar.io.slaves(1) <> mmioSlave.io.axi
+      } else {
+        val instructionMemory = Module(new AxiLiteDpiRamSlave(
+          axiConfig.addrWidth, memoryDataWidth, memoryConfig.dpiTiming))
+        val dataMemory = Module(new AxiLiteDpiRamSlave(
+          axiConfig.addrWidth, memoryDataWidth, memoryConfig.dpiTiming))
+        val dataCrossbar = Module(new AxiLiteCrossbar(
+          axiConfig.addrWidth,
+          memoryDataWidth,
+          Seq(
+            AxiLiteSlaveRange(memoryConfig.mainMemoryBase, memoryConfig.mainMemorySize),
+            AxiLiteSlaveRange(memoryConfig.mmioBase, memoryConfig.mmioSize)
+          )
+        ))
+
+        io.instruction <> instructionMemory.io.axi
+        io.data <> dataCrossbar.io.master
+        dataCrossbar.io.slaves(0) <> dataMemory.io.axi
+        dataCrossbar.io.slaves(1) <> mmioSlave.io.axi
+      }
       io.l2FlushDone := true.B
       io.l2Drained := true.B
       io.l2Statistics := 0.U.asTypeOf(new CacheStatistics)

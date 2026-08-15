@@ -42,6 +42,16 @@ class WithWideHbmL2CacheConfig extends ConfigBundle(
   new WithCacheHierarchyConfig(CacheHierarchyConfig.WideHbmWithL2)
 )
 
+/** 本地两拍教学 L1：请求、响应、取指和访存队列均固定为四项。 */
+class WithPipelinedTwoCycleTeachingCacheConfig extends ConfigBundle(
+  new WithCacheHierarchyConfig(CacheHierarchyConfig.PipelinedTwoCycleTeaching)
+)
+
+/** 本地两拍宽 HBM L1：保留宽主存端口与既定 DPI 时序。 */
+class WithPipelinedTwoCycleWideHbmCacheConfig extends ConfigBundle(
+  new WithCacheHierarchyConfig(CacheHierarchyConfig.PipelinedTwoCycleWideHbm)
+)
+
 /** 本地两拍 L1/L2：请求、响应、取指和访存队列均固定为四项。 */
 class WithPipelinedTwoCycleWideHbmL2CacheConfig extends ConfigBundle(
   new WithCacheHierarchyConfig(CacheHierarchyConfig.PipelinedTwoCycleWideHbmWithL2)

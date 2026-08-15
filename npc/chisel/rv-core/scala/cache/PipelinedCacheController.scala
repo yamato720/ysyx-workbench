@@ -24,9 +24,9 @@ class PipelinedCacheResponse(dataWidth: Int) extends Bundle {
 /**
   * 本地仿真专用的两拍、按序缓存控制器。
   *
-  * S0 在请求握手当拍向同步阵列发起读，S1 在下一拍比较 tag 并生成结果，结果先进入
-  * 非直通响应 FIFO，因而首次命中在握手后的第二拍可见。命中流水每拍可推进一笔；一旦
-  * S1 发现 miss 或 MMIO，入口立即关闭，已接收的流水项保留，随后以单 MSHR 完成
+  * S0 在请求握手当拍向同步阵列发起读，下一拍直接以阵列输出比较 tag 并生成结果。响应 FIFO
+  * 在空时直通这笔结果，因此 CPU 可在该拍完成握手；命中流水每拍可推进一笔。一旦
+  * S0 的阵列输出直接发现 miss 或 MMIO 后，入口立即关闭，已接收的流水项保留，随后以单 MSHR 完成
   * refill、writeback 或旁路事务。维护请求同样先等待流水和 FIFO 排空，再按 D$/L2
   * 控制器已有的逐 set/way 顺序写回或失效。
   */
@@ -80,7 +80,7 @@ class PipelinedCacheController(
   val requestQueue = Module(new Queue(new PipelinedCacheRequest(addrWidth, dataWidth),
     queues.requestDepth, pipe = false, flow = true))
   val responseQueue = Module(new Queue(new PipelinedCacheResponse(dataWidth),
-    queues.responseDepth, pipe = false, flow = false))
+    queues.responseDepth, pipe = false, flow = true))
 
   val sRun :: sWritebackSend :: sWritebackResponse :: sRefillAddress :: sRefillData :: sPassReadAddress :: sPassReadData :: sPassWriteSend :: sPassWriteResponse :: sRespond :: sMaintenanceIssue :: sMaintenanceInspect :: sMaintenanceDone :: Nil = Enum(13)
   val state = RegInit(sRun)
@@ -88,16 +88,8 @@ class PipelinedCacheController(
   val s0Valid = RegInit(false.B)
   val s0Request = Reg(new PipelinedCacheRequest(addrWidth, dataWidth))
   // S0 在接收请求的同一拍发起同步阵列读；该位表示下一拍的阵列输出仍与当前
-  // S0 请求对应。前一笔 miss 完成 refill 后，保留在 S0 的年轻请求必须重新读阵列。
+  // S0 请求对应。miss 在进入 MSHR 前不再接收年轻请求，因此不会保留旧读结果。
   val s0ReadReady = RegInit(false.B)
-  val s1Valid = RegInit(false.B)
-  val s1Request = Reg(new PipelinedCacheRequest(addrWidth, dataWidth))
-  val s1MainMemory = RegInit(false.B)
-  val s1Hit = RegInit(false.B)
-  val s1Way = RegInit(0.U(wayWidth.W))
-  val s1VictimWay = RegInit(0.U(wayWidth.W))
-  val s1Lines = Reg(Vec(ways, UInt(lineWidth.W)))
-  val s1Meta = Reg(Vec(ways, new CacheTagMeta(tagWidth)))
 
   val missRequest = Reg(new PipelinedCacheRequest(addrWidth, dataWidth))
   val victimWay = RegInit(0.U(wayWidth.W))
@@ -268,29 +260,38 @@ class PipelinedCacheController(
   io.cpu.b.bits.resp := responseQueue.io.deq.bits.resp
   responseQueue.io.deq.ready := Mux(responseQueue.io.deq.bits.write, io.cpu.b.ready, io.cpu.r.ready)
 
-  val s1SelectedLine = if (ways == 1) s1Lines(0) else s1Lines(s1Way)
-  val s1SelectedMeta = if (ways == 1) s1Meta(0) else s1Meta(s1Way)
-  val s1Beat = cpuBeat(s1Request.addr)
-  val s1ForwardedLine = Mux(lastStoreValid && lastStoreLine === lineBase(s1Request.addr),
-    lastStoreLineData, s1SelectedLine)
-  val s1ReadWord = cpuLineBeat(s1ForwardedLine, s1Beat)
+  val hitVector = VecInit(array.io.readMeta.map(meta => meta.valid &&
+    meta.tag === CacheAddress.tag(s0Request.addr, geometry, addrWidth)))
+  val readHit = hitVector.asUInt.orR
+  val readHitWay = PriorityEncoder(hitVector.asUInt)
+  val invalidVector = VecInit(array.io.readMeta.map(meta => !meta.valid))
+  val selectedVictim = Mux(invalidVector.asUInt.orR,
+    PriorityEncoder(invalidVector.asUInt), replacement.io.victimWay)
+
+  val s0SelectedLine = if (ways == 1) array.io.readLines(0) else array.io.readLines(readHitWay)
+  val s0SelectedMeta = if (ways == 1) array.io.readMeta(0) else array.io.readMeta(readHitWay)
+  val s0Beat = cpuBeat(s0Request.addr)
+  val s0ForwardedLine = Mux(lastStoreValid && lastStoreLine === lineBase(s0Request.addr),
+    lastStoreLineData, s0SelectedLine)
+  val s0ReadWord = cpuLineBeat(s0ForwardedLine, s0Beat)
   // 同一 line 的相邻 store 即使落在不同 CPU word，也必须从完整转发 line 继续合并。
-  val s1WriteBase = s1ReadWord
-  val s1LoadData = s1WriteBase
-  val s1UpdatedWord = mergeWrite(s1WriteBase, s1Request.data, s1Request.strb)
-  val s1UpdatedLine = replaceCpuBeat(s1ForwardedLine, s1Beat, s1UpdatedWord)
-  val s1HitResponse = s1Valid && s1MainMemory && s1Hit &&
-    (!s1Request.write || readOnly.B || (cache.policy.write == CacheWritePolicy.WriteBack).B)
-  val s1WriteThroughHit = s1Valid && s1MainMemory && s1Hit && s1Request.write &&
+  val s0WriteBase = s0ReadWord
+  val s0LoadData = s0WriteBase
+  val s0UpdatedWord = mergeWrite(s0WriteBase, s0Request.data, s0Request.strb)
+  val s0UpdatedLine = replaceCpuBeat(s0ForwardedLine, s0Beat, s0UpdatedWord)
+  val s0MainMemory = isMainMemory(s0Request.addr)
+  val s0HitResponse = s0Valid && s0ReadReady && s0MainMemory && readHit &&
+    (!s0Request.write || readOnly.B || (cache.policy.write == CacheWritePolicy.WriteBack).B)
+  val s0WriteThroughHit = s0Valid && s0ReadReady && s0MainMemory && readHit && s0Request.write &&
     !readOnly.B && (cache.policy.write == CacheWritePolicy.WriteThrough).B
-  // refill、旁路和维护期间必须冻结 S0/S1。否则较新的 hit 会在较早 miss 的响应
-  // 之前进入响应 FIFO，破坏 L2 对 I$/D$ 保证的全局请求顺序。
-  val s1CanAdvance = state === sRun &&
-    (!s1Valid || (s1HitResponse && responseQueue.io.enq.ready))
-  val s0CanAdvance = state === sRun && s0Valid && s0ReadReady && s1CanAdvance
+  // S0 的 hit 在同步阵列读出的本拍直接进入响应 FIFO；miss 或 MMIO 在本拍关闭
+  // 新入口，因此不会让较新的命中越过较早的阻塞请求。
+  val s0CanComplete = state === sRun && s0HitResponse && responseQueue.io.enq.ready
+  val s0Miss = state === sRun && s0Valid && s0ReadReady &&
+    !s0HitResponse && !s0WriteThroughHit
 
   requestQueue.io.deq.ready := state === sRun && !io.maintenanceRequest &&
-    (!s0Valid || s0CanAdvance)
+    (!s0Valid || s0CanComplete)
   val s0Issue = requestQueue.io.deq.fire
 
   val responseEmit = WireDefault(false.B)
@@ -302,10 +303,10 @@ class PipelinedCacheController(
   responseQueue.io.enq.bits.data := responseEmitData
   responseQueue.io.enq.bits.resp := responseEmitCode
 
-  when(s1HitResponse) {
+  when(s0HitResponse) {
     responseEmit := true.B
-    responseEmitWrite := s1Request.write
-    responseEmitData := Mux(s1Request.write, 0.U, s1LoadData)
+    responseEmitWrite := s0Request.write
+    responseEmitData := Mux(s0Request.write, 0.U, s0LoadData)
   }
   when(state === sRespond) {
     responseEmit := true.B
@@ -322,18 +323,18 @@ class PipelinedCacheController(
     Mux(s0Issue, CacheAddress.set(requestQueue.io.deq.bits.addr, geometry),
       CacheAddress.set(s0Request.addr, geometry)))
   array.io.dataWriteEnable := false.B
-  array.io.dataWriteSet := CacheAddress.set(s1Request.addr, geometry)
-  array.io.dataWriteWay := s1Way
-  array.io.dataWriteLine := s1UpdatedLine
+  array.io.dataWriteSet := CacheAddress.set(s0Request.addr, geometry)
+  array.io.dataWriteWay := readHitWay
+  array.io.dataWriteLine := s0UpdatedLine
   array.io.metaWriteEnable := false.B
-  array.io.metaWriteSet := CacheAddress.set(s1Request.addr, geometry)
-  array.io.metaWriteWay := s1Way
+  array.io.metaWriteSet := CacheAddress.set(s0Request.addr, geometry)
+  array.io.metaWriteWay := readHitWay
   array.io.metaWrite := 0.U.asTypeOf(new CacheTagMeta(tagWidth))
   replacement.io.querySet := CacheAddress.set(s0Request.addr, geometry)
   replacement.io.accessValid := false.B
   replacement.io.replaceValid := false.B
-  replacement.io.accessSet := CacheAddress.set(s1Request.addr, geometry)
-  replacement.io.accessWay := s1Way
+  replacement.io.accessSet := CacheAddress.set(s0Request.addr, geometry)
+  replacement.io.accessWay := readHitWay
 
   // 下游 AXI-Lite 默认保持静止；阻塞状态只驱动唯一的 refill、writeback 或旁路事务。
   io.memory.aw.valid := false.B
@@ -350,108 +351,83 @@ class PipelinedCacheController(
   io.memory.ar.bits.prot := missRequest.prot
   io.memory.r.ready := false.B
 
-  val hitVector = VecInit(array.io.readMeta.map(meta => meta.valid &&
-    meta.tag === CacheAddress.tag(s0Request.addr, geometry, addrWidth)))
-  val readHit = hitVector.asUInt.orR
-  val readHitWay = PriorityEncoder(hitVector.asUInt)
-  val invalidVector = VecInit(array.io.readMeta.map(meta => !meta.valid))
-  val selectedVictim = Mux(invalidVector.asUInt.orR,
-    PriorityEncoder(invalidVector.asUInt), replacement.io.victimWay)
-  val s1SelectedVictimLine = if (ways == 1) s1Lines(0) else s1Lines(s1VictimWay)
-  val s1SelectedVictimMeta = if (ways == 1) s1Meta(0) else s1Meta(s1VictimWay)
-  val s1Allocates = Mux(s1Request.write,
+  val s0SelectedVictimLine = if (ways == 1) array.io.readLines(0) else array.io.readLines(selectedVictim)
+  val s0SelectedVictimMeta = if (ways == 1) array.io.readMeta(0) else array.io.readMeta(selectedVictim)
+  val s0Allocates = Mux(s0Request.write,
     (cache.policy.writeMiss == CacheWriteMissPolicy.WriteAllocate).B,
     (cache.policy.readMiss == CacheReadMissPolicy.ReadAllocate).B)
 
   val writebackAddress = victimBase(victimTag, victimSet) + writebackBeat * memoryBeatBytes.U
   val refillAddress = lineBase(missRequest.addr) + refillBeat * memoryBeatBytes.U
 
-  // S0/S1 仅在运行状态推进。S1 的 miss 在本拍转交 MSHR，因而不会覆盖尚未处理的阵列结果。
-  when(s0CanAdvance) {
-    s1Valid := true.B
-    s1Request := s0Request
-    s1MainMemory := isMainMemory(s0Request.addr)
-    s1Hit := readHit
-    s1Way := readHitWay
-    s1VictimWay := selectedVictim
-    s1Lines := array.io.readLines
-    s1Meta := array.io.readMeta
-  }
+  // S0 命中完成的同拍可接收下一笔请求；miss 和 write-through 则在入口关闭后
+  // 清空 S0，再把当前请求交给原有阻塞状态机。
   when(s0Issue) {
     s0Valid := true.B
     s0Request := requestQueue.io.deq.bits
     s0ReadReady := true.B
-  }.elsewhen(s0CanAdvance) {
+  }.elsewhen(s0CanComplete || s0WriteThroughHit || s0Miss) {
     s0Valid := false.B
     s0ReadReady := false.B
   }.elsewhen(s0ReplayRead) {
     s0ReadReady := true.B
   }
 
-  when(s1HitResponse && responseQueue.io.enq.fire) {
+  when(s0HitResponse && responseQueue.io.enq.fire) {
     hits := hits + 1.U
     replacement.io.accessValid := true.B
-    replacement.io.accessSet := CacheAddress.set(s1Request.addr, geometry)
-    replacement.io.accessWay := s1Way
-    when(s1Request.write) {
+    replacement.io.accessSet := CacheAddress.set(s0Request.addr, geometry)
+    replacement.io.accessWay := readHitWay
+    when(s0Request.write) {
       if (!readOnly) {
         array.io.dataWriteEnable := true.B
-        array.io.dataWriteSet := CacheAddress.set(s1Request.addr, geometry)
-        array.io.dataWriteWay := s1Way
-        array.io.dataWriteLine := s1UpdatedLine
+        array.io.dataWriteSet := CacheAddress.set(s0Request.addr, geometry)
+        array.io.dataWriteWay := readHitWay
+        array.io.dataWriteLine := s0UpdatedLine
         array.io.metaWriteEnable := true.B
-        array.io.metaWriteSet := CacheAddress.set(s1Request.addr, geometry)
-        array.io.metaWriteWay := s1Way
+        array.io.metaWriteSet := CacheAddress.set(s0Request.addr, geometry)
+        array.io.metaWriteWay := readHitWay
         array.io.metaWrite.valid := true.B
         array.io.metaWrite.dirty := (cache.policy.write == CacheWritePolicy.WriteBack).B
-        array.io.metaWrite.tag := s1SelectedMeta.tag
+        array.io.metaWrite.tag := s0SelectedMeta.tag
         when((cache.policy.write == CacheWritePolicy.WriteBack).B) { drained := false.B }
         lastStoreValid := true.B
-        lastStoreLine := lineBase(s1Request.addr)
-        lastStoreLineData := s1UpdatedLine
+        lastStoreLine := lineBase(s0Request.addr)
+        lastStoreLineData := s0UpdatedLine
       }
     }
-    // 连续命中时本拍可同时把 S0 的下一笔送入 S1。只有 S0 没有替代请求时才
-    // 清空 S1；否则后写的清空会吞掉每隔一笔的请求并破坏响应 FIFO 的顺序。
-    when(!s0CanAdvance) { s1Valid := false.B }
   }
 
-  when(state === sRun && s1WriteThroughHit) {
+  when(state === sRun && s0WriteThroughHit) {
     // 命中也要经过真实下游写事务；B 返回前不能让 CPU 观察到未确认的数据。
-    missRequest := s1Request
+    missRequest := s0Request
     completeWrite := true.B
     completeData := 0.U
     completeResp := AxiLiteResp.OKAY
     writeThroughPending := true.B
-    writeThroughWay := s1Way
-    writeThroughLine := s1UpdatedLine
+    writeThroughWay := readHitWay
+    writeThroughLine := s0UpdatedLine
     sendAwDone := false.B
     sendWDone := false.B
     state := sPassWriteSend
-    s1Valid := false.B
-  }.elsewhen(state === sRun && s1Valid && !s1HitResponse) {
+  }.elsewhen(s0Miss) {
     misses := misses + 1.U
-    missRequest := s1Request
-    completeWrite := s1Request.write
+    missRequest := s0Request
+    completeWrite := s0Request.write
     completeData := 0.U
     completeResp := AxiLiteResp.OKAY
     lastStoreValid := false.B
-    // S0 已在本拍之前预读过下一笔。refill 可能改写同一 set，因此丢弃该旧输出，
-    // 等控制器回到 sRun 后以保留的 S0 请求重新发起同步读。
-    // S0 可能在本拍刚由 request FIFO 接收而尚未反映在 s0Valid 中；两种情况的
-    // 阵列输出都早于 refill，回到运行态后必须重新读取。
-    when(s0Valid || s0Issue) { s0ReadReady := false.B }
-    when(!s1MainMemory || !s1Allocates) {
+    when(!s0MainMemory || !s0Allocates) {
       sendAwDone := false.B
       sendWDone := false.B
-      state := Mux(s1Request.write, sPassWriteSend, sPassReadAddress)
+      state := Mux(s0Request.write, sPassWriteSend, sPassReadAddress)
     }.otherwise {
-      victimWay := s1VictimWay
-      victimTag := s1SelectedVictimMeta.tag
-      victimLine := s1SelectedVictimLine
-      victimSet := CacheAddress.set(s1Request.addr, geometry)
-      when(s1SelectedVictimMeta.valid) { evictions := evictions + 1.U }
-      when(s1SelectedVictimMeta.valid && s1SelectedVictimMeta.dirty) {
+      victimWay := selectedVictim
+      victimTag := s0SelectedVictimMeta.tag
+      victimLine := s0SelectedVictimLine
+      victimSet := CacheAddress.set(s0Request.addr, geometry)
+      when(s0SelectedVictimMeta.valid) { evictions := evictions + 1.U }
+      when(s0SelectedVictimMeta.valid && s0SelectedVictimMeta.dirty) {
         writebackBeat := 0.U
         writebackMaintenance := false.B
         sendAwDone := false.B
@@ -464,7 +440,6 @@ class PipelinedCacheController(
         state := sRefillAddress
       }
     }
-    s1Valid := false.B
   }
 
   switch(state) {
@@ -694,8 +669,8 @@ class PipelinedCacheController(
     }
   }
 
-  // 维护仅在入口、S0/S1 和两个 FIFO 均空时启动，防止 FENCE 观察到较早的命中响应。
-  val maintenanceCanStart = state === sRun && io.maintenanceRequest && !s0Valid && !s1Valid &&
+  // 维护仅在入口、S0 和两个 FIFO 均空时启动，防止 FENCE 观察到较早的命中响应。
+  val maintenanceCanStart = state === sRun && io.maintenanceRequest && !s0Valid &&
     !requestQueue.io.deq.valid && !responseQueue.io.deq.valid && !awHeld && !wHeld
   when(maintenanceCanStart) {
     maintenanceSet := 0.U

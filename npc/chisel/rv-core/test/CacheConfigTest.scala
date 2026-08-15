@@ -58,7 +58,9 @@ class CacheConfigTest extends AnyFlatSpec {
     assert(cached.cache.dcache.geometry.lineBytes == 16)
     assert(cached.cache.dcache.policy.write == CacheWritePolicy.WriteBack)
     assert(cached.cache.dcache.policy.writeMiss == CacheWriteMissPolicy.WriteAllocate)
-    assert(cached.cache.instructionBuffer == InstructionBufferConfig(enabled = true, entries = 4))
+    assert(cached.cache.accessMode == CacheAccessMode.PipelinedTwoCycle)
+    assert(cached.cache.pipelinedQueues == PipelinedCacheQueueConfig.TwoCycleLocal)
+    assert(cached.cache.instructionBuffer == InstructionBufferConfig(enabled = true, entries = 8))
     assert(cached.isa.Zifencei)
   }
 
@@ -87,9 +89,11 @@ class CacheConfigTest extends AnyFlatSpec {
     assert(localL2.memoryDataWidth == 512)
   }
 
-  it should "freeze the local two-cycle access mode and its four queue depths" in {
+  it should "freeze every public local cache profile to two-cycle access and four queue depths" in {
     val pipelined = new PipelinedTwoCycleWideL2SimulationCoreConfig().build
     val noCompletionForwarding = new PipelinedTwoCycleWideL2NoCompletionForwardingSimulationCoreConfig().build
+    val hbmL1 = new HbmJitterCacheSimulationConfig().config
+    val hbmL2 = new HbmJitterL2CacheSimulationConfig().config
     assert(pipelined.cache.accessMode == CacheAccessMode.PipelinedTwoCycle)
     assert(pipelined.cache.pipelinedQueues == PipelinedCacheQueueConfig.TwoCycleLocal)
     assert(pipelined.cache.instructionBuffer == InstructionBufferConfig(enabled = true, entries = 8))
@@ -100,6 +104,11 @@ class CacheConfigTest extends AnyFlatSpec {
     assert(!noCompletionForwarding.pipeline.forwarding.enableOutstandingCompletionForwarding)
     assert(noCompletionForwarding.cache == pipelined.cache)
     assert(!pipelined.memory.dpiTiming.enabled)
+    Seq(hbmL1, hbmL2).foreach { profile =>
+      assert(profile.cache.accessMode == CacheAccessMode.PipelinedTwoCycle)
+      assert(profile.cache.pipelinedQueues == PipelinedCacheQueueConfig.TwoCycleLocal)
+      assert(profile.cache.instructionBuffer == InstructionBufferConfig(enabled = true, entries = 8))
+    }
     assert(NpcConfig().validated.cache.accessMode == CacheAccessMode.Blocking)
     assertThrows[IllegalArgumentException](pipelined.copy(
       axi = pipelined.axi.copy(useExternalMaster = true)).validated)
