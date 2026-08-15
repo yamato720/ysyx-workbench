@@ -133,15 +133,9 @@ class NpcCore(
     instructionInvalidate := maintenance.io.icacheInvalidate
     maintenanceDispatchPermit := maintenance.io.dispatchPermit
     // FENCE 只保证数据可见性，保留已经预取的指令；只有 FENCE.I 在 I$ 失效前
-    // 丢弃这些年轻取指，避免之后执行旧指令字。流水模式打一拍后再关闭前端，
-    // 切断“当前派发的 FENCE.I -> fetchFlush -> 当前响应”的组合环；阻塞模式
-    // 保持原来的即时暂停时序。
-    val fenceHoldValue = if (cacheConfig.accessMode == CacheAccessMode.PipelinedTwoCycle) {
-      RegNext(fenceIPending && !maintenance.io.dispatchPermit, false.B)
-    } else {
-      fenceIPending && !maintenance.io.dispatchPermit
-    }
-    fenceHold := fenceHoldValue
+    // 丢弃这些年轻取指，避免之后执行旧指令字。所有缓存模式均在下一拍关闭前端，
+    // 从而切断“当前派发的 FENCE.I -> fetchFlush -> 当前响应”的组合环。
+    fenceHold := RegNext(fenceIPending && !maintenance.io.dispatchPermit, false.B)
     cacheMaintenanceBusy := !maintenance.io.dispatchPermit
     io.cacheMaintenance.foreach(_.drained := maintenance.io.externalDrained && dataCacheDrained && l2Drained)
   } else {

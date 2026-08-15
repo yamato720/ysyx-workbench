@@ -71,9 +71,6 @@ classpath、Make 和 construction manager 在启动前解析公开终端。该�
 | `CacheSimulationConfig` | NPC | 显式启用教学 I$/D$、Zifencei 和 4 项 instruction buffer 的 RV64IM 本地仿真 |
 | `HbmJitterCacheSimulationConfig` | NPC | L1-only 宽 512-bit DPI、64-byte I$/D$ 和固定种子 73--81 cycle 主存响应的 U55C 宽 L1 功能时序对比 |
 | `HbmJitterL2CacheSimulationConfig` | NPC | 上述宽 L1 模型加统一 256 KiB、8-way、64-byte L2 的本地 DPI 时序对比 |
-| `HbmJitterCacheVcdSimulationConfig` | NPC | 上述宽 L1 本地时序模型，加可由 SDB `start`/`stop` 控制的 Verilator VCD；需完整构造 |
-| `PipelinedTwoCycleWideL2SimulationConfig` | NPC | 仅本地仿真的 RV64IM 两拍 I$/D$/L2，512-bit DPI Fabric；命中 N+2 返回，四项 FIFO 深度和 8 项 instruction buffer 固化 |
-| `PipelinedTwoCycleWideL2NoCompletionForwardingSimulationConfig` | NPC | 与两拍 I$/D$/L2 端点相同，但关闭完成表结果前递，供本地 A/B 对照 |
 | `PipelineSimulationConfig` | NPC | 启用 ID/EX 前递的流水 NPC 本地仿真 |
 | `FullIsa64NoPipelineSimulationConfig` | NPC | RV64IMF_Zicsr 无流水线性能基线 |
 | `FullIsa64PipelineNoForwardingSimulationConfig` | NPC | RV64IMF_Zicsr 流水线无 ID/EX 前递 |
@@ -82,19 +79,11 @@ classpath、Make 和 construction manager 在启动前解析公开终端。该�
 | `U55cRv32OperatorSimulationConfig` | NPC | U55C RV32 M/F IP 时序的本地周期模型 |
 | `U55cRv64OperatorSimulationConfig` | NPC | U55C RV64 M/F IP 时序的本地周期模型，覆盖 W 指令 |
 | `YsyxSimulationConfig` | SoC | 默认 ysyxSoC 本地仿真 |
-| `CacheYsyxSimulationConfig` | SoC | 显式启用教学缓存层级的 ysyxSoC 本地仿真 |
 | `U55cNpcFpgaConfig` | FPGA（`TARGET=NPC`） | U55C 裸 NPC 上板运行 |
-| `U55cCacheNpcFpgaConfig` | FPGA（`TARGET=NPC`） | U55C RV32 教学缓存裸 NPC；需要独立构造 |
 | `U55cRv64NpcFpgaConfig` | FPGA（`TARGET=NPC`） | U55C RV64IM_Zicsr 裸 NPC 上板运行 |
 | `U55cRv64Npc300MHzFpgaConfig` | FPGA（`TARGET=NPC`） | U55C RV64IM_Zicsr 300 MHz 单实现时序实验 |
-| `U55cRv64CacheNpc300MHzFpgaConfig` | FPGA（`TARGET=NPC`） | 上述 RV64 300 MHz 核心的教学缓存版本 |
 | `U55cRv64Npc{100,125,150,200,250,300}MHzPerformanceMonitorFpgaConfig` | FPGA（`TARGET=NPC`） | U55C RV64IM 批处理性能监测；核心按后缀运行 |
-| `U55cRv64CacheNpc150MHzPerformanceMonitorFpgaConfig` | FPGA（`TARGET=NPC`） | U55C RV64 150 MHz 教学缓存批处理性能监测；核心通过 MMCM/FIFO 接入固定 300 MHz 平台，报告读取硬件 cache mailbox 状态 |
-| `U55cRv64CacheNpc300MHzPerformanceMonitorFpgaConfig` | FPGA（`TARGET=NPC`） | U55C RV64 300 MHz 教学缓存批处理性能监测；报告读取硬件 cache mailbox 状态 |
-| `U55cRv64Hbm512CacheNpc150MHzPerformanceMonitorFpgaConfig` | FPGA（`TARGET=NPC`） | RV64 CPU/64-bit MMIO 加 512-bit HBM、64-byte L1 line 的 batch 性能监测基线 |
-| `U55cRv64Hbm512L2CacheNpc150MHzPerformanceMonitorFpgaConfig` | FPGA（`TARGET=NPC`） | 上述宽 HBM L1 基线加统一 256 KiB/8-way/64-byte write-back L2；需独立 rebuild |
 | `U55cYsyxSocFpgaConfig` | FPGA（`TARGET=SOC`） | U55C ysyxSoC 上板运行 |
-| `U55cCacheYsyxSocFpgaConfig` | FPGA（`TARGET=SOC`） | U55C ysyxSoC 教学缓存版本 |
 | `U55cSpmv32PcFp32X8192UramResourceProbeConfig` | FPGA（`TARGET=SPMV`） | 32 路 HBM、每路 8192 项 FP32 UltraRAM X cache 的只综合资源探针 |
 | `U55cSpmv32PcFp64X8192UramBitstreamConfig` | FPGA（`TARGET=SPMV`） | 32 路 HBM、每路四 bank 双端口 FP64 X cache 的 bitstream 压力探针 |
 | `SpmvInputSimulationConfig` | SPMV | 16 路 A、2 路 X 条带输入顶层的 Verilator 结构 smoke |
@@ -158,20 +147,6 @@ FPGA 上板和 check-only Config 保持关闭。
 `HbmJitterL2CacheSimulationConfig` 复用同一 DPI 抖动和宽 L1，仅把 NpcMemoryFabric 的本地主存路径
 改为 IF/LSU 仲裁器 -> 统一 L2 -> 512-bit DPI RAM；MMIO 仍在 L2 外部旁路。它是本地功能时序模型，
 用于比较 L2 命中收益，不等同于 FPGA HBM bank/queue 的完整时序。
-
-`PipelinedTwoCycleWideL2SimulationConfig` 选择 `CacheAccessMode.PipelinedTwoCycle`，并将
-`CACHE_REQUEST_QUEUE_DEPTH`、`CACHE_RESPONSE_QUEUE_DEPTH`、`CACHE_FETCH_QUEUE_DEPTH` 与
-`CACHE_MEMORY_QUEUE_DEPTH` 全部冻结为 4。I$/D$/L2 使用同步 `CacheStorage.Auto` 阵列：S0 锁存并发起
-读，S1 比较 tag，命中响应经有序 FIFO 在 N+2 可见。local DPI 分支以轮转 I$/D$ 仲裁和返回路由 FIFO
-服务单端口 L2；MMIO 保持阻塞、非缓存、按序。redirect/FENCE.I 通过取指 epoch 丢弃旧响应，维护操作在
-入口、流水和 FIFO 为空后执行。该端点不能用于 FPGA/SoC/外部 AXI 构建。
-同层级的 `PipelinedTwoCycleWideL2NoCompletionForwardingSimulationConfig` 只关闭完成表
-前递开关，保留相同的缓存层次、DPI 和队列深度，适合以 `make config=` 比较该旁路的周期收益。
-
-`HbmJitterCacheVcdSimulationConfig` 只覆盖运行 host 为 `NemuHostConfig.LocalVcdTrace`，其 L1 和
-DPI 时序参数与前者一致。由于 VCD 要求 Verilator 在生成时带 `--trace`，它是单独的仿真 ABI：新建时使用
-`make -C npc build config=HbmJitterCacheVcdSimulationConfig`，已有构造更新时使用 `rebuild`，不能以
-`host-build` 把无 VCD 的 Verilator 库升级为可追踪版本。运行目录中的 VCD 由 SDB `start`/`stop` 分段产生。
 
 `HostConstruction`、`AcceleratorHostConstruction`、`NemuSimulationConstruction`、`FpgaConstruction` 和 `MakeTerminal` 是
 `common/base/ConstructionTraits.scala` 中的底层接口，只供 terminal 层组合，终端不能直接混入。
@@ -266,10 +241,10 @@ construction 报告的指标、统计 band 和表格布局；`timing-pipeline.ht
 FMUL 活跃拍；每个物理 A slot 都读取 X 并发射 FMUL，页面只统计控制气泡。流水页沿用全屏搜索、缩放与横向时间线布局。
 矩阵能放入 8192 列窗口时会对照编码 slot 的 FP64 乘积 checksum；更大的矩阵仍按相同 `Ctrl -> X -> A`
 单遍输入顺序校验，但跳过乘法。
-缓存 profile 还会写入 `CACHE_ACCESS_MODE` 与四项 `CACHE_*_QUEUE_DEPTH`。缓存 FPGA 终端会把相同的
-`ICACHE_*`、`DCACHE_*`、`L2CACHE_*`、`INSTRUCTION_BUFFER_*` 和 `NPC_ZIFENCEI`
-写入 elaboration manifest。任何几何、策略或存储风格变化都必须完整 `rebuild`；普通无缓存终端的字段
-保持 disabled，外部 AXI/HBM 端口不变。
+三个本地缓存 profile 会写入 `CACHE_ACCESS_MODE` 与四项 `CACHE_*_QUEUE_DEPTH`，以及
+`ICACHE_*`、`DCACHE_*`、`L2CACHE_*`、`INSTRUCTION_BUFFER_*` 和 `NPC_ZIFENCEI`。
+任何几何、策略或存储风格变化都必须完整 `rebuild`；普通无缓存终端的字段保持 disabled，外部 AXI/HBM
+端口不变。
 `host-build` 在没有正式构造时，对本地 NPC/SoC 仍创建 `constructions/.hosts/<FQCN>/`；对 FPGA 则创建
 `constructions/.compatible/<FQCN>/`，并预先建立 `fpga/artifacts/`。外部平台生成的 U55C
 `npc-<FPGA_PLATFORM>.xclbin` 或 ZCU102 `npc.bit`/`npc-zcu102.env` 放入该目录后，兼容 host 可直接运行。

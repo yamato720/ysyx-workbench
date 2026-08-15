@@ -97,17 +97,14 @@ if grep -q '^FPGA_BOARD=' "$soc_profile"; then
   fail 'SoC profile 意外包含 FPGA 板卡字段'
 fi
 
-for name in U55cNpcFpgaConfig U55cCacheNpcFpgaConfig U55cRv64NpcFpgaConfig \
-  U55cRv64Npc300MHzFpgaConfig U55cRv64CacheNpc300MHzFpgaConfig \
-  U55cRv64CacheNpc150MHzPerformanceMonitorFpgaConfig U55cRv64CacheNpc300MHzPerformanceMonitorFpgaConfig \
-  U55cRv64Hbm512CacheNpc150MHzPerformanceMonitorFpgaConfig \
-  U55cRv64Hbm512L2CacheNpc150MHzPerformanceMonitorFpgaConfig \
+for name in U55cNpcFpgaConfig U55cRv64NpcFpgaConfig \
+  U55cRv64Npc300MHzFpgaConfig \
   U55cRv64Npc100MHzPerformanceMonitorFpgaConfig U55cRv64Npc125MHzPerformanceMonitorFpgaConfig \
   U55cRv64Npc150MHzPerformanceMonitorFpgaConfig U55cRv64Npc200MHzPerformanceMonitorFpgaConfig \
   U55cRv64Npc250MHzPerformanceMonitorFpgaConfig U55cRv64Npc300MHzPerformanceMonitorFpgaConfig \
   U55cSpmv32PcFp32X8192UramResourceProbeConfig \
   U55cSpmv32PcFp64X8192UramBitstreamConfig \
-  U55cYsyxSocFpgaConfig U55cCacheYsyxSocFpgaConfig \
+  U55cYsyxSocFpgaConfig \
   Zcu102NpcFpgaConfig Zcu102YsyxSocFpgaConfig; do
   grep -Eq "^${name}[[:space:]]" "$catalog" || fail "自动目录缺少 $name"
 done
@@ -167,16 +164,12 @@ check_terminal() {
   expected_memory_data_width=$expected_xlen
   expected_cache_line_bytes=16
   case "$config" in
-    U55cRv64Npc300MHzFpgaConfig|U55cRv64CacheNpc300MHzFpgaConfig) expected_xrt_mode=unset; expected_protocol_abi=npc-fpga-runtime-v11; expected_integer_execute_stages=2; expected_serial_execute_stages=3; expected_register_initial_fetch_request=1; expected_separate_serial_integer_alu=1; expected_serial_execute_result_forwarding=0; expected_divider_non_blocking=1 ;;
-    U55cRv64Hbm512*CacheNpc*MHzPerformanceMonitorFpgaConfig|U55cRv64CacheNpc*MHzPerformanceMonitorFpgaConfig|U55cRv64Npc*MHzPerformanceMonitorFpgaConfig) expected_xrt_mode=unset; expected_protocol_abi=npc-fpga-runtime-v13-performance-monitor; expected_capability=batch; expected_sdb=0; expected_trace=1; expected_integer_execute_stages=2; expected_serial_execute_stages=3; expected_register_initial_fetch_request=1; expected_separate_serial_integer_alu=1; expected_serial_execute_result_forwarding=0; expected_divider_non_blocking=1 ;;
+    U55cRv64Npc300MHzFpgaConfig) expected_xrt_mode=unset; expected_protocol_abi=npc-fpga-runtime-v11; expected_integer_execute_stages=2; expected_serial_execute_stages=3; expected_register_initial_fetch_request=1; expected_separate_serial_integer_alu=1; expected_serial_execute_result_forwarding=0; expected_divider_non_blocking=1 ;;
+    U55cRv64Npc*MHzPerformanceMonitorFpgaConfig) expected_xrt_mode=unset; expected_protocol_abi=npc-fpga-runtime-v13-performance-monitor; expected_capability=batch; expected_sdb=0; expected_trace=1; expected_integer_execute_stages=2; expected_serial_execute_stages=3; expected_register_initial_fetch_request=1; expected_separate_serial_integer_alu=1; expected_serial_execute_result_forwarding=0; expected_divider_non_blocking=1 ;;
     U55c*) expected_xrt_mode=unset; expected_protocol_abi=npc-fpga-runtime-v11 ;;
     Zcu102*) expected_xrt_mode=inherit; expected_protocol_abi=npc-fpga-runtime-v7 ;;
     *) fail "$config 缺少 Vitis XRT 环境策略预期" ;;
   esac
-  if [[ $config == U55cRv64Hbm512*CacheNpc* ]]; then
-    expected_memory_data_width=512
-    expected_cache_line_bytes=64
-  fi
   resolved=$($manager resolve "$npc_root" "$config" '')
   profile=${resolved##*|}
   grep -qx "CAPABILITY=$expected_capability" "$profile" || fail "$config capability 错误"
@@ -318,14 +311,8 @@ check_operator_routes() {
 }
 
 check_terminal U55cNpcFpgaConfig u55c NPC 32 300
-check_terminal U55cCacheNpcFpgaConfig u55c NPC 32 300
 check_terminal U55cRv64NpcFpgaConfig u55c NPC 64 300
 check_terminal U55cRv64Npc300MHzFpgaConfig u55c NPC 64 300
-check_terminal U55cRv64CacheNpc300MHzFpgaConfig u55c NPC 64 300
-check_terminal U55cRv64CacheNpc150MHzPerformanceMonitorFpgaConfig u55c NPC 64 150
-check_terminal U55cRv64CacheNpc300MHzPerformanceMonitorFpgaConfig u55c NPC 64 300
-check_terminal U55cRv64Hbm512CacheNpc150MHzPerformanceMonitorFpgaConfig u55c NPC 64 150
-check_terminal U55cRv64Hbm512L2CacheNpc150MHzPerformanceMonitorFpgaConfig u55c NPC 64 150
 check_terminal U55cRv64Npc100MHzPerformanceMonitorFpgaConfig u55c NPC 64 100
 check_terminal U55cRv64Npc125MHzPerformanceMonitorFpgaConfig u55c NPC 64 125
 check_terminal U55cRv64Npc150MHzPerformanceMonitorFpgaConfig u55c NPC 64 150
@@ -333,7 +320,6 @@ check_terminal U55cRv64Npc200MHzPerformanceMonitorFpgaConfig u55c NPC 64 200
 check_terminal U55cRv64Npc250MHzPerformanceMonitorFpgaConfig u55c NPC 64 250
 check_terminal U55cRv64Npc300MHzPerformanceMonitorFpgaConfig u55c NPC 64 300
 check_terminal U55cYsyxSocFpgaConfig u55c SOC 32 300
-check_terminal U55cCacheYsyxSocFpgaConfig u55c SOC 32 300
 check_terminal Zcu102NpcFpgaConfig zcu102 NPC 32 300
 check_terminal Zcu102YsyxSocFpgaConfig zcu102 SOC 32 300
 

@@ -49,7 +49,8 @@ class CacheRtlStructureTest extends AnyFlatSpec {
 
   "NpcCore" should "insert both caches and the maintenance controller only for the explicit Config" in {
     val legacy = _root_.circt.stage.ChiselStage.emitCHIRRTL(new NpcCore(new SimulationConfig().config))
-    val cached = _root_.circt.stage.ChiselStage.emitCHIRRTL(new NpcCore(new CacheSimulationConfig().config))
+    val cached = _root_.circt.stage.ChiselStage.emitSystemVerilog(
+      new NpcCore(new CacheSimulationConfig().config))
 
     assert(!legacy.contains("module InstructionCache"))
     assert(!legacy.contains("module DataCache"))
@@ -76,7 +77,7 @@ class CacheRtlStructureTest extends AnyFlatSpec {
 
   it should "elaborate the local two-cycle hierarchy without changing the blocking presets" in {
     val pipelined = _root_.circt.stage.ChiselStage.emitCHIRRTL(
-      new NpcCore(new PipelinedTwoCycleWideL2SimulationConfig().config))
+      new NpcCore(new PipelinedTwoCycleWideL2SimulationCoreConfig().build))
 
     assert(pipelined.contains("module PipelinedCacheController"))
     assert(pipelined.contains("module PipelinedIFetchAXIAdapter"))

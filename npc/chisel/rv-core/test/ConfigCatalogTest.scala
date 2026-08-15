@@ -37,13 +37,12 @@ class ConfigCatalogTest extends AnyFlatSpec {
     val names = generated.map(_.shortName).toSet
 
     assert(names.contains("StandaloneConfig"))
-    assert(names.contains("CacheSimulationConfig"))
-    assert(names.contains("HbmJitterL2CacheSimulationConfig"))
-    assert(names.contains("HbmJitterCacheVcdSimulationConfig"))
-    assert(names.contains("PipelinedTwoCycleWideL2SimulationConfig"))
-    assert(names.contains("PipelinedTwoCycleWideL2NoCompletionForwardingSimulationConfig"))
+    assert(names.filter(_.contains("Cache")) == Set(
+      "CacheSimulationConfig",
+      "HbmJitterCacheSimulationConfig",
+      "HbmJitterL2CacheSimulationConfig"
+    ))
     assert(names.contains("YsyxSimulationConfig"))
-    assert(names.contains("CacheYsyxSimulationConfig"))
     assert(names.contains("U55cYsyxSocFpgaConfig"))
     assert(names.contains("Zcu102NpcFpgaConfig"))
     assert(names.contains("FullIsa64PipelineDualForwardingSimulationConfig"))
@@ -53,16 +52,11 @@ class ConfigCatalogTest extends AnyFlatSpec {
     assert(names.contains("U55cRv64NpcFpgaConfig"))
     assert(names.contains("U55cRv64Npc300MHzFpgaConfig"))
     assert(names.contains("U55cRv64Npc300MHzPerformanceMonitorFpgaConfig"))
-    assert(names.contains("U55cRv64CacheNpc300MHzPerformanceMonitorFpgaConfig"))
-    assert(names.contains("U55cRv64CacheNpc150MHzPerformanceMonitorFpgaConfig"))
     assert(names.contains("U55cSpmv32PcFp32X8192UramResourceProbeConfig"))
     assert(names.contains("SpmvInputSimulationConfig"))
     assert(!names.contains("SpmvOneHbmCsr5MulSimulationConfig"))
     assert(!names.contains("SpmvOneHbmCsr5MulCachedXSimulationConfig"))
     assert(!names.contains("SpmvOneHbmCsr5MulPerformanceMonitorSimulationConfig"))
-    assert(names.contains("U55cCacheNpcFpgaConfig"))
-    assert(names.contains("U55cRv64CacheNpc300MHzFpgaConfig"))
-    assert(names.contains("U55cCacheYsyxSocFpgaConfig"))
     Seq(100, 125, 150, 200, 250, 300).foreach { frequency =>
       assert(names.contains(s"U55cRv64Npc${frequency}MHzPerformanceMonitorFpgaConfig"))
     }
@@ -267,6 +261,9 @@ class ConfigCatalogTest extends AnyFlatSpec {
     val enabled = Seq(
       new StandaloneConfig,
       new SimulationConfig,
+      new CacheSimulationConfig,
+      new HbmJitterCacheSimulationConfig,
+      new HbmJitterL2CacheSimulationConfig,
       new PipelineSimulationConfig,
       new FullIsa64NoPipelineSimulationConfig,
       new FullIsa64PipelineNoForwardingSimulationConfig,
@@ -295,21 +292,6 @@ class ConfigCatalogTest extends AnyFlatSpec {
     assert(scalarValues("NEMU_PIPELINE_HTML") == "1")
   }
 
-  it should "make VCD a separately frozen local Verilator ABI" in {
-    val construction = new HbmJitterCacheVcdSimulationConfig
-    val entry = ConfigCatalog.resolve(construction.getClass.getName, Set("npc"))
-    val values = ConstructionProfile.values(entry, construction, construction.config).toMap
-
-    assert(values("NEMU_PRESET") == "LocalVcdTrace")
-    assert(values("NEMU_BACKEND") == "local")
-    assert(values("NEMU_TRACE") == "1")
-    assert(values("NEMU_VCD") == "1")
-    assert(values("NEMU_PERFORMANCE_HTML") == "1")
-    assert(values("NEMU_CACHE_HTML") == "1")
-    assert(values("NEMU_PIPELINE_HTML") == "1")
-    assert(values("NEMU_NPC_DIFFTEST") == "1")
-  }
-
   it should "describe the local wide-HBM L2 timing endpoint" in {
     val construction = new HbmJitterL2CacheSimulationConfig
     val entry = ConfigCatalog.resolve(construction.getClass.getName, Set("npc"))
@@ -325,22 +307,4 @@ class ConfigCatalogTest extends AnyFlatSpec {
     assert(values("DPI_MEMORY_READ_RESPONSE_MAX_CYCLES") == "81")
   }
 
-  it should "freeze the two-cycle cache mode and local FIFO depths in the profile" in {
-    val construction = new PipelinedTwoCycleWideL2SimulationConfig
-    val entry = ConfigCatalog.resolve(construction.getClass.getName, Set("npc"))
-    val values = ConstructionProfile.values(entry, construction, construction.config).toMap
-
-    assert(values("CACHE_ACCESS_MODE") == "pipelined-two-cycle")
-    assert(values("CACHE_REQUEST_QUEUE_DEPTH") == "4")
-    assert(values("CACHE_RESPONSE_QUEUE_DEPTH") == "4")
-    assert(values("CACHE_FETCH_QUEUE_DEPTH") == "4")
-    assert(values("CACHE_MEMORY_QUEUE_DEPTH") == "4")
-    assert(values("INSTRUCTION_BUFFER_ENTRIES") == "8")
-    assert(values("OUTSTANDING_COMPLETION_FWD") == "1")
-
-    val disabled = new PipelinedTwoCycleWideL2NoCompletionForwardingSimulationConfig
-    val disabledEntry = ConfigCatalog.resolve(disabled.getClass.getName, Set("npc"))
-    val disabledValues = ConstructionProfile.values(disabledEntry, disabled, disabled.config).toMap
-    assert(disabledValues("OUTSTANDING_COMPLETION_FWD") == "0")
-  }
 }

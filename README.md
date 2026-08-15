@@ -52,7 +52,7 @@ make config-list
 make build config=SimulationConfig
 make rebuild config=SimulationConfig
 make rebuild version=1
-make resume-post-link config=U55cRv64CacheNpc150MHzPerformanceMonitorFpgaConfig
+make resume-post-link config=U55cRv64Npc150MHzPerformanceMonitorFpgaConfig
 make host-config-list
 make host-build config=SimulationConfig
 make build-host config=SimulationConfig

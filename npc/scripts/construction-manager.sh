@@ -2582,31 +2582,33 @@ case "$command" in
     echo '=== 构造属性位图（+ 表示启用）==='
     printf '%-8s %-4s %-4s %-2s %-2s %-5s %-4s %-3s %-3s %-6s %-5s %-12s %s\n' \
       Version RV32 RV64 M F Zicsr Pipe ID EX 'valid?' Arch RunningTime Config
-    while IFS= read -r version_index; do
-      directory=${final_valid[$version_index]:-${final_any[$version_index]:-}}
-      [[ -n $directory ]] || continue
-      info=$(version_info_file "$directory")
-      fqcn=$(value "$info" CONFIG_FQCN)
-      short=$(value "$info" CONFIG_SHORT_NAME)
-      [[ -z $selector || $selector == "$version_index" || $selector == "$fqcn" || $selector == "$short" ]] || continue
-      found=$((found + 1))
-      valid=''
-      version_directory_is_valid "$directory" && valid=+
-      printf '%-8s %-4s %-4s %-2s %-2s %-5s %-4s %-3s %-3s %-6s %-5s %-12s %s\n' \
-        "$version_index" \
-        "$(feature_mark "$(value "$info" RV32)")" \
-        "$(feature_mark "$(value "$info" RV64)")" \
-        "$(feature_mark "$(value "$info" M)")" \
-        "$(feature_mark "$(value "$info" F)")" \
-        "$(feature_mark "$(value "$info" ZICSR)")" \
-        "$(feature_mark "$(value "$info" PIPE)")" \
-        "$(feature_mark "$(value "$info" ID)")" \
-        "$(feature_mark "$(value "$info" EX)")" \
-        "$valid" \
-        "$(value "$info" ARCH)" \
-        "$(value "$info" RUNNING_TIME)" \
-        "$short"
-    done < <(printf '%s\n' "${!indexes[@]}" | LC_ALL=C sort -n)
+    if (( ${#indexes[@]} != 0 )); then
+      while IFS= read -r version_index; do
+        directory=${final_valid[$version_index]:-${final_any[$version_index]:-}}
+        [[ -n $directory ]] || continue
+        info=$(version_info_file "$directory")
+        fqcn=$(value "$info" CONFIG_FQCN)
+        short=$(value "$info" CONFIG_SHORT_NAME)
+        [[ -z $selector || $selector == "$version_index" || $selector == "$fqcn" || $selector == "$short" ]] || continue
+        found=$((found + 1))
+        valid=''
+        version_directory_is_valid "$directory" && valid=+
+        printf '%-8s %-4s %-4s %-2s %-2s %-5s %-4s %-3s %-3s %-6s %-5s %-12s %s\n' \
+          "$version_index" \
+          "$(feature_mark "$(value "$info" RV32)")" \
+          "$(feature_mark "$(value "$info" RV64)")" \
+          "$(feature_mark "$(value "$info" M)")" \
+          "$(feature_mark "$(value "$info" F)")" \
+          "$(feature_mark "$(value "$info" ZICSR)")" \
+          "$(feature_mark "$(value "$info" PIPE)")" \
+          "$(feature_mark "$(value "$info" ID)")" \
+          "$(feature_mark "$(value "$info" EX)")" \
+          "$valid" \
+          "$(value "$info" ARCH)" \
+          "$(value "$info" RUNNING_TIME)" \
+          "$short"
+      done < <(printf '%s\n' "${!indexes[@]}" | LC_ALL=C sort -n)
+    fi
     if [[ $selector_is_version == 1 && $found != 1 ]]; then
       echo "版本序号 $selector 不存在" >&2
       exit 1

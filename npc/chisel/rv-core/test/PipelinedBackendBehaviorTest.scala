@@ -8,7 +8,7 @@ import scala.collection.mutable
 
 /** 直接驱动后端派发口，检查两拍整数 EX 与流水 MEM 重叠时仍保持 RAW 前递。 */
 class PipelinedBackendBehaviorTest extends AnyFlatSpec {
-  private val config = new PipelinedTwoCycleWideL2SimulationConfig().config
+  private val config = new PipelinedTwoCycleWideL2SimulationCoreConfig().build
 
   private def clearDispatch(dut: NpcBackend): Unit = {
     val bits = dut.io.dispatch.bits

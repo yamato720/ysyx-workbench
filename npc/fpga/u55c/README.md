@@ -13,15 +13,9 @@ U55C RTL kernel 使用显式 `ip_c`、`ap_ctrl_hs`、4 KiB `s_axi_control` 元�
 重新导入 RTL 时退回 32-bit。NPC 的启动、复位和停止仍由该窗口上的 mailbox 寄存器处理，不使用 AP 控制寄存器传递运行状态。
 
 普通 U55C wrapper 只暴露 `m_axi_gmem`，对应 v11。`U55cRv64Npc{100,125,150,200,250,300}MHzPerformanceMonitorFpgaConfig`
-和 `U55cRv64CacheNpc{150,300}MHzPerformanceMonitorFpgaConfig`
 在打包时定义 `NPC_FPGA_RUNTIME_TRACE`，额外暴露固定 256-bit 的 `m_axi_trace`，并在构造生成的
 Vitis link 配置中绑定 `HBM[1]`；guest memory 始终独占 `HBM[0]`。这些 v13 终端只支持
 `run-bat`，并以 `FPGA_RUNTIME_SDB=0` 移除交互 halt/step 与宽架构快照路径。
-
-缓存版 monitor 不增加 wrapper 端口或 HBM 写通道。它通过现有 4 KiB `s_axi_control` mailbox 的只读区导出
-I$/D$ 启用状态、容量、line、sets/ways、映射/替换/写策略、instruction buffer 深度及 hits、misses、refills、
-writebacks、evictions。`mtestexit` 会在 D$ drain 后、core reset 前把这些状态快照到 mailbox，NEMU 性能页
-据此显示硬件实际 cache 配置和命中率。
 
 `xilinx_u55c_gen3x16_xdma_3_202210_1` 对这类 HBM-connected RTL kernel 提供固定 300 MHz 的
 `DATA_CLK`（另有 500 MHz kernel clock 和不可选作 kernel `ap_clk` 的固定 100 MHz freerun clock）。

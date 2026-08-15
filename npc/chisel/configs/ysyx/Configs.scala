@@ -7,8 +7,3 @@ import _root_.npc.{LocalSocTerminal, NemuSimulationIpTerminal}
 class YsyxSimulationConfig extends CDEConfig(
   new YsyxSocConfig
 ) with LocalSocTerminal with NemuSimulationIpTerminal
-
-/** 显式启用教学缓存层级的 ysyxSoC 本地仿真终端。 */
-class CacheYsyxSimulationConfig extends CDEConfig(
-  new CacheYsyxSocConfig
-) with LocalSocTerminal with NemuSimulationIpTerminal

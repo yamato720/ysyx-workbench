@@ -25,7 +25,6 @@
 | U55C RV64IM 裸 NPC 终端 | `new U55cRv64NpcFpgaConfig` | `npc/Configs.scala` | 是；F/D 禁用 |
 | U55C RV64IM 300 MHz 时序实验终端 | `new U55cRv64Npc300MHzFpgaConfig` | `npc/Configs.scala` | 是；F/D 禁用 |
 | U55C RV64IM 性能监测终端 | `new U55cRv64Npc{100,125,150,200,250,300}MHzPerformanceMonitorFpgaConfig` | `npc/Configs.scala` | 是；仅 `run-bat`，v13 HBM trace ABI，SDB 硬件关闭 |
-| U55C RV64 缓存性能监测终端 | `new U55cRv64CacheNpc{150,300}MHzPerformanceMonitorFpgaConfig` | `npc/Configs.scala` | 是；仅 `run-bat`，教学 I$/D$，v13 trace 加 mailbox cache 状态 |
 | U55C SPMV FP32 资源探针 | `new U55cSpmv32PcFp32X8192UramResourceProbeConfig` | `spmv/Configs.scala` | 是；`synthesize-only` 资产，另挂载软件 golden host |
 | U55C SPMV FP64/8-lane bitstream 探针 | `new U55cSpmv32PcFp64X8192UramBitstreamConfig` | `spmv/Configs.scala` | 是；`bitstream-only` 资产，另挂载软件 golden host |
 | U55C SoC 终端 | `new U55cYsyxSocFpgaConfig` | `ysyx/Configs.scala` | 是 |
@@ -55,8 +54,7 @@ attachment 封装为命名板卡策略，仍保持 `II=1`。`U55cRv64Npc300MHzFp
 
 普通 U55C v11 终端固定 `FPGA_RUNTIME_TRACE=0`、`NEMU_PERFORMANCE_HTML=0` 与
 `NEMU_PIPELINE_HTML=0`，不会生成第二个 HBM master、trace BO 或 URAM FIFO，且仍支持 SDB 的单步、继续执行、
-寄存器和内存调试。`U55cRv64Npc{100,125,150,200,250,300}MHzPerformanceMonitorFpgaConfig` 与
-`U55cRv64CacheNpc{150,300}MHzPerformanceMonitorFpgaConfig` 是独立 v13 batch-only 终端：
-它在 HBM[1] 分配 8 MiB trace BO，写入前 200000 条 32-byte 记录，并使用 2048-record URAM FIFO 和
-16-record 256-bit AXI bursts。缓存版本还将当前 I$/D$ 配置、instruction buffer 深度和五类计数映射到 4 KiB
-mailbox 的只读寄存器，保持 trace record 不变。它支持上述核心频点，`FPGA_RUNTIME_SDB=0` 与 trace 互斥；每个频点要求独立完整 `rebuild`。
+寄存器和内存调试。`U55cRv64Npc{100,125,150,200,250,300}MHzPerformanceMonitorFpgaConfig` 是独立
+v13 batch-only 终端：它在 HBM[1] 分配 8 MiB trace BO，写入前 200000 条 32-byte 记录，并使用
+2048-record URAM FIFO 和 16-record 256-bit AXI bursts。它支持上述核心频点，`FPGA_RUNTIME_SDB=0` 与
+trace 互斥；每个频点要求独立完整 `rebuild`。
