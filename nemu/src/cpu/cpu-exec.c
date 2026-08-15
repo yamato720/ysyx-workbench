@@ -64,8 +64,10 @@ extern uint64_t npc_get_pipeline_stall_count(uint32_t counter);
 extern uint64_t npc_get_timing_sample_count(uint32_t timing_class);
 extern uint64_t npc_get_timing_total_cycles(uint32_t timing_class, uint32_t stage);
 extern uint64_t npc_get_timing_max_total_cycles(uint32_t timing_class);
+extern uint64_t npc_get_timing_total_latency(uint32_t timing_class);
 extern uint64_t npc_get_timing_memory_queue_cycles(uint32_t timing_class);
 extern uint64_t npc_get_timing_last_memory_queue_cycles(uint32_t timing_class);
+extern uint64_t npc_get_timing_last_total_latency(uint32_t timing_class);
 extern uint64_t npc_get_timing_last_pc(uint32_t timing_class);
 extern uint32_t npc_get_timing_last_instruction(uint32_t timing_class);
 extern uint64_t npc_get_timing_last_stage_cycles(uint32_t timing_class, uint32_t stage);
@@ -467,17 +469,16 @@ static void npc_print_pipeline_timing(const char *mode) {
     uint64_t count = npc_get_timing_sample_count(timing_class);
     if (count == 0) continue;
     double average[NPC_TIMING_STAGE_COUNT] = {};
-    double total_average = 0.0;
     if (count != 0) {
       for (int stage = 0; stage < NPC_TIMING_STAGE_COUNT; stage++) {
         average[stage] = (double)npc_get_timing_total_cycles(timing_class, stage) / (double)count;
-        total_average += average[stage];
       }
     }
     printf("| %-10s | %5" PRIu64 " | %7.2f | %7.2f | %7.2f | %7.2f | %7.2f | %9.2f | %9" PRIu64 " |\n",
            npc_timing_class_names[timing_class], count,
            average[NPC_TIMING_IF], average[NPC_TIMING_ID], average[NPC_TIMING_EX],
-           average[NPC_TIMING_MEM], average[NPC_TIMING_WB], total_average,
+           average[NPC_TIMING_MEM], average[NPC_TIMING_WB],
+           (double)npc_get_timing_total_latency(timing_class) / (double)count,
            npc_get_timing_max_total_cycles(timing_class));
   }
   printf("+------------+-------+---------+---------+---------+---------+---------+-----------+-----------+\n");
@@ -496,11 +497,9 @@ static void npc_print_pipeline_timing(const char *mode) {
     const uint64_t count = npc_get_timing_sample_count(timing_class);
     if (!npc_is_detailed_timing_class(timing_class) || count == 0) continue;
 
-    uint64_t total = 0;
     uint64_t stage[NPC_TIMING_STAGE_COUNT];
     for (int index = 0; index < NPC_TIMING_STAGE_COUNT; index++) {
       stage[index] = npc_get_timing_last_stage_cycles(timing_class, index);
-      total += stage[index];
     }
     printf("| %-10s | %5" PRIu64 " | 0x%08" PRIx64 " | 0x%08" PRIx32
            " | %4" PRIu64 " | %4" PRIu64 " | %4" PRIu64 " | %4" PRIu64
@@ -509,7 +508,8 @@ static void npc_print_pipeline_timing(const char *mode) {
            npc_get_timing_last_pc(timing_class),
            npc_get_timing_last_instruction(timing_class),
            stage[NPC_TIMING_IF], stage[NPC_TIMING_ID], stage[NPC_TIMING_EX],
-           stage[NPC_TIMING_MEM], stage[NPC_TIMING_WB], total);
+           stage[NPC_TIMING_MEM], stage[NPC_TIMING_WB],
+           npc_get_timing_last_total_latency(timing_class));
   }
   printf("+------------+-------+------------+------------+------+------+------+------+------+-------+\n");
 }
@@ -647,6 +647,7 @@ static void npc_finish_performance_html(void) {
     rows[timing_class].name = npc_timing_class_names[timing_class];
     rows[timing_class].count = npc_get_timing_sample_count(timing_class);
     rows[timing_class].max_total = npc_get_timing_max_total_cycles(timing_class);
+    rows[timing_class].total_latency = npc_get_timing_total_latency(timing_class);
     rows[timing_class].detailed = npc_is_detailed_timing_class(timing_class);
     for (uint32_t stage = 0; stage < NPC_TIMING_STAGE_COUNT; stage++) {
       rows[timing_class].stage_total[stage] = npc_get_timing_total_cycles(timing_class, stage);
@@ -657,6 +658,8 @@ static void npc_finish_performance_html(void) {
         npc_get_timing_memory_queue_cycles(timing_class);
     rows[timing_class].last_memory_queue =
         npc_get_timing_last_memory_queue_cycles(timing_class);
+    rows[timing_class].last_total_latency =
+        npc_get_timing_last_total_latency(timing_class);
  #endif
     rows[timing_class].last_pc = npc_get_timing_last_pc(timing_class);
     rows[timing_class].last_instruction = npc_get_timing_last_instruction(timing_class);
@@ -744,6 +747,7 @@ static void npc_finish_performance_html(void) {
 #ifndef NPC_FPGA_REMOTE
   report.last_memory_queue = npc_get_last_timing_memory_queue_cycles();
 #endif
+  report.last_total_latency = npc_get_last_timing_total_cycles();
 
   const char *directory = getenv("NEMU_RUNTIME_OUTPUT_DIR");
   const char *base = directory == NULL || directory[0] == '\0' ? "." : directory;

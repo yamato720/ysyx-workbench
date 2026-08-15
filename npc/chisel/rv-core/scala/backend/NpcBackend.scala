@@ -23,6 +23,7 @@ class NpcBackend(
   private val pipelinedSerialExecute = pipelineConfig.serialExecuteStages >= 2
   private val separateSerialIntegerAlu = pipelineConfig.separateSerialIntegerAlu
   private val serialExecuteResultForwarding = pipelineConfig.serialExecuteResultForwarding
+  private val directIntegerWritebackBypass = pipelineConfig.directIntegerWritebackBypass
   private val operatorConfig = config.operators
   private val localM = cfg.M
   private val localF = cfg.F
@@ -849,8 +850,18 @@ class NpcBackend(
   }
   executeMemoryInput.perfMemoryStartCycle := performanceCycle
   executeMemoryInput.perfMemoryQueueStartCycle := performanceCycle
+  // 该旁路只能处理会写 GPR 的纯整数指令。FENCE、分支、访存和串行控制仍必须
+  // 经过 EX/MEM，保持维护、redirect 与异常的原有顺序边界。
+  // 这里故意只观察已经锁存的 ID/EX 载荷和寄存器状态，不能使用
+  // `directIntegerExecuteFire`。后者经 EX/MEM 的 ready 反馈形成组合环。
+  val directIntegerWritebackCandidate = directIntegerWritebackBypass.B && !twoStageIntegerExecute.B &&
+    pipelineMode && decodeExecuteReg.io.out.valid && !executeInputIsSerial && !executeInputIsArithmetic &&
+    executeInput.registerWriteEnable && !executeInput.branch && !executeInput.loadEnable &&
+    !executeInput.storeEnable && executeState === executeIdle && !serialControlStagePending &&
+    !serialResultStagePending && !executeMemoryReg.io.out.valid && !commitRedirectValid
+  val directIntegerWriteback = WireDefault(false.B)
   executeMemoryReg.io.flush := false.B
-  executeMemoryReg.io.in.valid := !executeMemoryRedirectPending &&
+  executeMemoryReg.io.in.valid := !directIntegerWriteback && !executeMemoryRedirectPending &&
     (directIntegerExecuteFire || arithmeticResponseAvailable ||
       (if (pipelinedSerialExecute) serialExecuteResultAvailable else executeState === executeDone))
   executeMemoryReg.io.in.bits := executeMemoryInput
@@ -930,11 +941,21 @@ class NpcBackend(
     // 它仍必须进入 orderQueue，不能在提交顺序上越过较老访存或其可能产生的 fault。
     val nonMemoryWritebackBypass = !outstandingCompletionForwarding.B &&
       executeMemoryReg.io.out.valid && !memoryAccess && stage.io.drained
+    // EX->WB 只在没有旧的 EX/MEM 或 MEM 项时可用。MEM/WB 即使正在提交更老的
+    // 普通整数项也能同拍接收新项，PipelineRegister 会在该时钟边界保持提交顺序。
+    directIntegerWriteback := directIntegerWritebackCandidate && stage.io.drained &&
+      !stage.io.response.valid && memoryWritebackReg.io.in.ready
     stage.io.request.valid := executeMemoryReg.io.out.valid && !nonMemoryWritebackBypass &&
       memoryStageInputAllowed
     stage.io.request.bits := executeMemoryReg.io.out.bits
     stage.io.response.ready := memoryWritebackReg.io.in.ready
-    when(nonMemoryWritebackBypass) {
+    when(directIntegerWriteback) {
+      memoryWritebackReg.io.in.valid := true.B
+      driveMemoryWritebackPayload(memoryWritebackReg.io.in.bits, executeMemoryInput, 0.U(cfg.xlen.W))
+      memoryWritebackReg.io.in.bits.perfMemoryCycles := 0.U
+      memoryWritebackReg.io.in.bits.perfMemoryQueueCycles := 0.U
+      memoryWritebackReg.io.in.bits.perfMemoryServiceCycles := 0.U
+    }.elsewhen(nonMemoryWritebackBypass) {
       memoryWritebackReg.io.in.valid := true.B
       driveMemoryWritebackPayload(memoryWritebackReg.io.in.bits, executeMemoryReg.io.out.bits,
         0.U(cfg.xlen.W))

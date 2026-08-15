@@ -123,6 +123,7 @@ struct NPCPipelineTimingAggregate {
     uint64_t sample_count = 0;
     uint64_t total_stage_cycles[NPC_TIMING_STAGE_COUNT] = {};
     uint64_t total_memory_queue_cycles = 0;
+    uint64_t total_latency_cycles = 0;
     uint64_t max_total_cycles = 0;
 };
 
@@ -138,12 +139,33 @@ static uint32_t last_commit_timing_class = NPC_TIMING_NORMAL;
 static NPCPipelineTimingAggregate pipeline_timing_aggregates[NPC_TIMING_CLASS_COUNT] = {};
 static NPCPipelineTimingSample pipeline_timing_latest_samples[NPC_TIMING_CLASS_COUNT] = {};
 
+static uint64_t pipeline_timing_end(uint64_t start, uint64_t cycles) {
+    if (cycles == 0) return start;
+    return start > UINT64_MAX - cycles ? UINT64_MAX : start + cycles;
+}
+
 static uint64_t pipeline_timing_total(const NPCPipelineTiming &timing) {
-    uint64_t total = 0;
+    // 各级可重叠，端到端延迟不是阶段驻留的简单相加。以 IF 起点为基准，取所有
+    // 有效阶段以及 MEM 排队/服务区间的最晚结束点，才能准确表示 EX->WB 快速通路。
+    const uint64_t fetch_start = timing.start[NPC_TIMING_IF];
+    uint64_t complete = fetch_start;
     for (int stage = 0; stage < NPC_TIMING_STAGE_COUNT; stage++) {
-        total += timing.stage[stage];
+        if (timing.stage[stage] != 0) {
+            const uint64_t end = pipeline_timing_end(timing.start[stage], timing.stage[stage]);
+            if (end > complete) complete = end;
+        }
     }
-    return total + timing.memory_queue_cycles;
+    if (timing.memory_queue_cycles != 0) {
+        const uint64_t end = pipeline_timing_end(
+            timing.memory_queue_start, timing.memory_queue_cycles);
+        if (end > complete) complete = end;
+    }
+    if (timing.memory_service_cycles != 0) {
+        const uint64_t end = pipeline_timing_end(
+            timing.memory_service_start, timing.memory_service_cycles);
+        if (end > complete) complete = end;
+    }
+    return complete >= fetch_start ? complete - fetch_start : 0;
 }
 
 static uint32_t classify_pipeline_timing(uint32_t instruction) {
@@ -224,6 +246,7 @@ static void update_pipeline_timing_aggregate(
         aggregate.total_stage_cycles[stage] += timing.stage[stage];
     }
     aggregate.total_memory_queue_cycles += timing.memory_queue_cycles;
+    aggregate.total_latency_cycles += total;
     if (total > aggregate.max_total_cycles) {
         aggregate.max_total_cycles = total;
     }
@@ -866,6 +889,11 @@ uint64_t get_npc_timing_max_total_cycles(uint32_t timing_class) {
     return pipeline_timing_aggregates[timing_class].max_total_cycles;
 }
 
+uint64_t get_npc_timing_total_latency(uint32_t timing_class) {
+    if (timing_class >= NPC_TIMING_CLASS_COUNT) return 0;
+    return pipeline_timing_aggregates[timing_class].total_latency_cycles;
+}
+
 uint64_t get_npc_timing_memory_queue_cycles(uint32_t timing_class) {
     if (timing_class >= NPC_TIMING_CLASS_COUNT) return 0;
     return pipeline_timing_aggregates[timing_class].total_memory_queue_cycles;
@@ -874,6 +902,11 @@ uint64_t get_npc_timing_memory_queue_cycles(uint32_t timing_class) {
 uint64_t get_npc_timing_last_memory_queue_cycles(uint32_t timing_class) {
     if (timing_class >= NPC_TIMING_CLASS_COUNT) return 0;
     return pipeline_timing_latest_samples[timing_class].timing.memory_queue_cycles;
+}
+
+uint64_t get_npc_timing_last_total_latency(uint32_t timing_class) {
+    if (timing_class >= NPC_TIMING_CLASS_COUNT) return 0;
+    return pipeline_timing_total(pipeline_timing_latest_samples[timing_class].timing);
 }
 
 uint64_t get_npc_timing_last_pc(uint32_t timing_class) {
@@ -1081,12 +1114,20 @@ extern "C" {
         return get_npc_timing_max_total_cycles(timing_class);
     }
 
+    uint64_t npc_get_timing_total_latency(uint32_t timing_class) {
+        return get_npc_timing_total_latency(timing_class);
+    }
+
     uint64_t npc_get_timing_memory_queue_cycles(uint32_t timing_class) {
         return get_npc_timing_memory_queue_cycles(timing_class);
     }
 
     uint64_t npc_get_timing_last_memory_queue_cycles(uint32_t timing_class) {
         return get_npc_timing_last_memory_queue_cycles(timing_class);
+    }
+
+    uint64_t npc_get_timing_last_total_latency(uint32_t timing_class) {
+        return get_npc_timing_last_total_latency(timing_class);
     }
 
     uint64_t npc_get_timing_last_pc(uint32_t timing_class) {

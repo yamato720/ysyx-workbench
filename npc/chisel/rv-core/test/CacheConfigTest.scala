@@ -112,6 +112,7 @@ class CacheConfigTest extends AnyFlatSpec {
       assert(profile.pipeline.serialExecuteStages == 3)
       assert(profile.pipeline.separateSerialIntegerAlu)
       assert(!profile.pipeline.serialExecuteResultForwarding)
+      assert(profile.pipeline.directIntegerWritebackBypass)
     }
     assert(NpcConfig().validated.cache.accessMode == CacheAccessMode.Blocking)
     assertThrows[IllegalArgumentException](pipelined.copy(

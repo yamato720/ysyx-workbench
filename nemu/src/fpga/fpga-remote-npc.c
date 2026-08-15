@@ -719,6 +719,13 @@ uint64_t npc_get_timing_max_total_cycles(uint32_t timing_class) {
       ? read64(NEMU_FPGA_TRACE_CLASS_MAX_LOW, NEMU_FPGA_TRACE_CLASS_MAX_HIGH) : 0;
 }
 
+uint64_t npc_get_timing_total_latency(uint32_t timing_class) {
+  uint64_t total = 0;
+  for (uint32_t stage = 0; stage < NPC_FPGA_TRACE_STAGE_COUNT; stage++)
+    total += npc_get_timing_total_cycles(timing_class, stage);
+  return total;
+}
+
 uint64_t npc_get_timing_last_pc(uint32_t timing_class) {
   if (!select_trace_class(timing_class)) return 0;
   if (runtime_trace_loaded) return runtime_trace_last[timing_class].valid
@@ -738,6 +745,13 @@ uint64_t npc_get_timing_last_stage_cycles(uint32_t timing_class, uint32_t stage)
   if (runtime_trace_loaded) return runtime_trace_last[timing_class].valid
       ? runtime_trace_last[timing_class].stage[stage] : 0;
   return read64(NEMU_FPGA_TRACE_CLASS_LAST_STAGE_LOW, NEMU_FPGA_TRACE_CLASS_LAST_STAGE_HIGH);
+}
+
+uint64_t npc_get_timing_last_total_latency(uint32_t timing_class) {
+  uint64_t total = 0;
+  for (uint32_t stage = 0; stage < NPC_FPGA_TRACE_STAGE_COUNT; stage++)
+    total += npc_get_timing_last_stage_cycles(timing_class, stage);
+  return total;
 }
 
 uint32_t npc_get_last_timing_class(void) {

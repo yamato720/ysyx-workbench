@@ -38,12 +38,6 @@ static bool memory_statistics_split(const PerformanceHtmlReport *report) {
          strcmp(report->memory_statistics_mode, "ServiceOnly") != 0;
 }
 
-static uint64_t sum_stages(const uint64_t stages[PERFORMANCE_HTML_STAGE_COUNT]) {
-  uint64_t total = 0;
-  for (size_t index = 0; index < PERFORMANCE_HTML_STAGE_COUNT; index++) total += stages[index];
-  return total;
-}
-
 static const char *row_group(const char *name) {
   if (name == NULL) return "summary";
   if (strncmp(name, "load", 4) == 0) return "load";
@@ -219,18 +213,16 @@ static int write_document(FILE *output, const PerformanceHtmlReport *report) {
     fprintf(output, "<tr data-group=\"%s\"><td>", row_group(row->name));
     write_html_string(output, row->name);
     fprintf(output, "</td><td>%'" PRIu64 "</td>", row->count);
-    double total_average = 0.0;
     for (size_t stage = 0; stage < PERFORMANCE_HTML_STAGE_COUNT; stage++) {
       const double average = ratio(row->stage_total[stage], row->count);
       if (split_memory && stage == 3) {
         const double queue_average = ratio(row->memory_queue_total, row->count);
         fprintf(output, "<td>%.2f</td>", queue_average);
-        total_average += queue_average;
       }
-      total_average += average;
       fprintf(output, "<td>%.2f</td>", average);
     }
-    fprintf(output, "<td>%.2f</td><td>%'" PRIu64 "</td></tr>", total_average, row->max_total);
+    fprintf(output, "<td>%.2f</td><td>%'" PRIu64 "</td></tr>",
+            ratio(row->total_latency, row->count), row->max_total);
   }
   fputs("</tbody></table></div></section><section><h2>", output);
   fputs(report->latest_samples_are_trace_prefix ? "分类 trace 前缀中的最近样本" : "最近一次分类样本", output);
@@ -249,8 +241,7 @@ static int write_document(FILE *output, const PerformanceHtmlReport *report) {
       }
       fprintf(output, "<td>%'" PRIu64 "</td>", row->last_stage[stage]);
     }
-    fprintf(output, "<td>%'" PRIu64 "</td></tr>",
-            sum_stages(row->last_stage) + (split_memory ? row->last_memory_queue : 0));
+    fprintf(output, "<td>%'" PRIu64 "</td></tr>", row->last_total_latency);
   }
   fputs("</tbody></table></div></section><section><h2>最后提交</h2>", output);
   if (report->last_commit_valid) {
@@ -260,6 +251,8 @@ static int write_document(FILE *output, const PerformanceHtmlReport *report) {
     fputs("<div><span>提交序号</span><strong>", output);
     fprintf(output, "%'" PRIu64 " → %'" PRIu64, report->last_commits_before, report->last_commits_after);
     fputs("</strong></div>", output);
+    fprintf(output, "<div><span>端到端延迟</span><strong>%'" PRIu64
+            " cycles</strong></div>", report->last_total_latency);
     for (size_t stage = 0; stage < PERFORMANCE_HTML_STAGE_COUNT; stage++) {
       if (split_memory && stage == 3) {
         fprintf(output, "<div><span>QUEUE 驻留</span><strong>%'"

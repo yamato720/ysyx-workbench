@@ -291,7 +291,8 @@ case class PipelineConfig(
   serialExecuteStages: Int = 1,
   registerInitialFetchRequest: Boolean = false,
   separateSerialIntegerAlu: Boolean = false,
-  serialExecuteResultForwarding: Boolean = true
+  serialExecuteResultForwarding: Boolean = true,
+  directIntegerWritebackBypass: Boolean = false
 ) {
   require(integerExecuteStages == 1 || integerExecuteStages == 2,
     s"integerExecuteStages must be 1 or 2, got $integerExecuteStages")

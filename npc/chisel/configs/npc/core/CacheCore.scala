@@ -115,7 +115,7 @@ class HbmJitterCacheSimulationCoreConfig extends ConfigBundle(
     new WithLocalDpiCacheMemoryWidthConfig(512) ++
     new WithPipelinedTwoCycleWideHbmCacheConfig ++
     new Rv64IMZicsrConfig ++
-    new PipelineDualFwdOneStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecutePerformConfig ++
+    new PipelineDualFwdOneStageIntegerExecuteDirectWritebackRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecutePerformConfig ++
     new WithTopDebugConfig ++
     new WithFpgaMainMemoryConfig ++
     new BaseConfig
@@ -127,7 +127,7 @@ class HbmJitterL2CacheSimulationCoreConfig extends ConfigBundle(
     new WithLocalDpiCacheMemoryWidthConfig(512) ++
     new WithPipelinedTwoCycleWideHbmL2CacheConfig ++
     new Rv64IMZicsrConfig ++
-    new PipelineDualFwdOneStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecutePerformConfig ++
+    new PipelineDualFwdOneStageIntegerExecuteDirectWritebackRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecutePerformConfig ++
     new WithTopDebugConfig ++
     new WithFpgaMainMemoryConfig ++
     new BaseConfig

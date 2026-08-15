@@ -75,3 +75,10 @@ class PipelineDualFwdOneStageIntegerExecuteRegisteredFetchSeparateSerialIntegerA
       new WithRegisteredInitialFetchRequestConfig ++
       new PipelineDualFwdPerformConfig
   )
+
+/** 本地缓存热路径：普通整数在 MEM 空闲时从 EX 直接锁入 WB，省去空 EX/MEM 驻留。 */
+class PipelineDualFwdOneStageIntegerExecuteDirectWritebackRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecutePerformConfig
+  extends PerformBundle(
+    new WithDirectIntegerWritebackBypassConfig ++
+      new PipelineDualFwdOneStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecutePerformConfig
+  )

@@ -14,7 +14,8 @@ class BasePerformConfig extends ConfigFragment {
       serialExecuteStages = 1,
       registerInitialFetchRequest = false,
       separateSerialIntegerAlu = false,
-      serialExecuteResultForwarding = true
+      serialExecuteResultForwarding = true,
+      directIntegerWritebackBypass = false
     )
   )
 }
@@ -134,5 +135,12 @@ class WithSeparateSerialIntegerAluConfig extends ConfigFragment {
 class WithoutSerialExecuteResultForwardingConfig extends ConfigFragment {
   override private[npc] def applyTo(base: NpcConfig): NpcConfig = base.copy(
     pipeline = base.pipeline.copy(serialExecuteResultForwarding = false)
+  )
+}
+
+/** 空闲 MEM 时让普通整数 EX 结果直接进入 WB；仅用于本地热路径时序实验。 */
+class WithDirectIntegerWritebackBypassConfig extends ConfigFragment {
+  override private[npc] def applyTo(base: NpcConfig): NpcConfig = base.copy(
+    pipeline = base.pipeline.copy(directIntegerWritebackBypass = true)
   )
 }

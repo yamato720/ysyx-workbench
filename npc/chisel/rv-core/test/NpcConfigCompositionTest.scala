@@ -193,6 +193,7 @@ class NpcConfigCompositionTest extends AnyFlatSpec {
     assert(!dual.pipeline.registerInitialFetchRequest)
     assert(!dual.pipeline.separateSerialIntegerAlu)
     assert(dual.pipeline.serialExecuteResultForwarding)
+    assert(!dual.pipeline.directIntegerWritebackBypass)
     assert(twoStage.pipeline.enablePipeline)
     assert(twoStage.pipeline.forwarding.enableIdForwarding)
     assert(twoStage.pipeline.forwarding.enableExecuteForwarding)

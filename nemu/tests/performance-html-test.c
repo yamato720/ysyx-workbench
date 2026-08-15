@@ -35,16 +35,19 @@ int main(void) {
       .name = "load.<&\"test",
       .count = 4,
       .stage_total = {8, 12, 4, 24, 4},
+      .total_latency = 60,
       .max_total = 17,
       .detailed = true,
       .last_pc = 0x80000010,
       .last_instruction = 0x00052503,
       .last_stage = {2, 3, 1, 6, 1},
+      .last_total_latency = 10,
     },
     {
       .name = "all",
       .count = 10,
       .stage_total = {20, 25, 10, 30, 10},
+      .total_latency = 80,
       .max_total = 17,
     },
   };
@@ -95,6 +98,7 @@ int main(void) {
     .last_commits_before = 9,
     .last_commits_after = 10,
     .last_stage = {2, 3, 1, 6, 1},
+    .last_total_latency = 10,
     .timing_rows = rows,
     .timing_row_count = 2,
     .aggregate_row = 1,
@@ -113,6 +117,8 @@ int main(void) {
   assert(strstr(content, "MEM backpressure") != NULL);
   assert(strstr(content, "MEM 统计: Split") != NULL);
   assert(strstr(content, "QUEUE avg") != NULL);
+  assert(strstr(content, ">15.00<") != NULL);
+  assert(strstr(content, "端到端延迟") != NULL);
   assert(strstr(content, "缓存统计") == NULL);
   assert(strstr(content, "缓存配置") == NULL);
   assert(strstr(content, "href=\"cache.html\" target=\"_blank\"") != NULL);

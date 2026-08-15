@@ -227,7 +227,7 @@ class PipelinedBackendBehaviorTest extends AnyFlatSpec {
     }
   }
 
-  it should "report a one-stage integer EX after the ID/EX register boundary" in {
+  it should "write a one-stage integer EX directly into WB after the ID/EX register boundary" in {
     simulate(new NpcBackend(oneStageConfig)) { dut =>
       initialize(dut)
       dut.reset.poke(true)
@@ -252,8 +252,10 @@ class PipelinedBackendBehaviorTest extends AnyFlatSpec {
           dut.io.debug.commitDecodeStartCycle.expect(decodeStart.U)
           dut.io.debug.commitExecuteStartCycle.expect((decodeStart + 1).U)
           dut.io.debug.commitMemoryStartCycle.expect((decodeStart + 1).U)
+          dut.io.debug.commitWritebackStartCycle.expect((decodeStart + 1).U)
           dut.io.debug.commitDecodeCycles.expect(1.U)
           dut.io.debug.commitExecuteCycles.expect(1.U)
+          dut.io.debug.commitMemoryCycles.expect(0.U)
           observed = true
         }
         guard += 1

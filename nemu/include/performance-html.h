@@ -22,12 +22,14 @@ typedef struct {
   uint64_t count;
   uint64_t stage_total[PERFORMANCE_HTML_STAGE_COUNT];
   uint64_t memory_queue_total;
+  uint64_t total_latency;
   uint64_t max_total;
   bool detailed;
   uint64_t last_pc;
   uint32_t last_instruction;
   uint64_t last_stage[PERFORMANCE_HTML_STAGE_COUNT];
   uint64_t last_memory_queue;
+  uint64_t last_total_latency;
 } PerformanceHtmlTimingRow;
 
 typedef struct {
@@ -76,6 +78,7 @@ typedef struct {
   uint64_t last_commits_after;
   uint64_t last_stage[PERFORMANCE_HTML_STAGE_COUNT];
   uint64_t last_memory_queue;
+  uint64_t last_total_latency;
   const PerformanceHtmlTimingRow *timing_rows;
   size_t timing_row_count;
   size_t aggregate_row;
