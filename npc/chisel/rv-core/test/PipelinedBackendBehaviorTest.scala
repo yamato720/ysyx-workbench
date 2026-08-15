@@ -15,6 +15,7 @@ class PipelinedBackendBehaviorTest extends AnyFlatSpec {
     val bits = dut.io.dispatch.bits
     bits.pc.poke(0)
     bits.instruction.poke(0)
+    bits.predictedNextPc.poke(4)
     bits.perfFetchStartCycle.poke(0)
     bits.perfFetchCycles.poke(0)
     bits.perfDecodeStartCycle.poke(0)
@@ -56,6 +57,7 @@ class PipelinedBackendBehaviorTest extends AnyFlatSpec {
     clearDispatch(dut)
     dut.io.dispatch.bits.pc.poke(pc)
     dut.io.dispatch.bits.instruction.poke(0x00000013L)
+    dut.io.dispatch.bits.predictedNextPc.poke(pc + 4)
     dut.io.dispatch.bits.rd.poke(rd)
     dut.io.dispatch.bits.rs1.poke(rs1)
     dut.io.dispatch.bits.immediate.poke(immediate)
@@ -68,6 +70,7 @@ class PipelinedBackendBehaviorTest extends AnyFlatSpec {
     clearDispatch(dut)
     dut.io.dispatch.bits.pc.poke(pc)
     dut.io.dispatch.bits.instruction.poke(0x00003003L)
+    dut.io.dispatch.bits.predictedNextPc.poke(pc + 4)
     dut.io.dispatch.bits.rd.poke(rd)
     dut.io.dispatch.bits.immediate.poke(address)
     dut.io.dispatch.bits.funct3.poke(3)
@@ -81,6 +84,7 @@ class PipelinedBackendBehaviorTest extends AnyFlatSpec {
     clearDispatch(dut)
     dut.io.dispatch.bits.pc.poke(pc)
     dut.io.dispatch.bits.instruction.poke(0x00000023L)
+    dut.io.dispatch.bits.predictedNextPc.poke(pc + 4)
     dut.io.dispatch.bits.rs1.poke(rs1)
     dut.io.dispatch.bits.rs2.poke(rs2)
     dut.io.dispatch.bits.immediate.poke(immediate)
@@ -89,6 +93,16 @@ class PipelinedBackendBehaviorTest extends AnyFlatSpec {
     dut.io.dispatch.bits.useImmediate.poke(true)
     dut.io.dispatch.bits.usesRs1.poke(true)
     dut.io.dispatch.bits.usesRs2.poke(true)
+  }
+
+  private def setBeq(dut: NpcBackend, pc: BigInt, predictedNextPc: BigInt, target: BigInt): Unit = {
+    clearDispatch(dut)
+    dut.io.dispatch.bits.pc.poke(pc)
+    dut.io.dispatch.bits.instruction.poke(0x00000463L)
+    dut.io.dispatch.bits.predictedNextPc.poke(predictedNextPc)
+    dut.io.dispatch.bits.immediate.poke(target - pc)
+    dut.io.dispatch.bits.branch.poke(true)
+    dut.io.dispatch.bits.aluCtrl.poke(NpcAluOp.Integer.BEQ.asUInt)
   }
 
   private def initialize(dut: NpcBackend): Unit = {
@@ -262,6 +276,35 @@ class PipelinedBackendBehaviorTest extends AnyFlatSpec {
       }
       assert(observed)
     }
+  }
+
+  it should "recover a conditional branch only when its predicted next PC is wrong" in {
+    def observeRedirect(predictedNextPc: BigInt): Option[BigInt] = {
+      var observed: Option[BigInt] = None
+      simulate(new NpcBackend(oneStageConfig)) { dut =>
+        initialize(dut)
+        dut.reset.poke(true)
+        dut.clock.step(2)
+        dut.reset.poke(false)
+
+        setBeq(dut, pc = 0x500, predictedNextPc = predictedNextPc, target = 0x508)
+        dut.io.dispatch.valid.poke(true)
+        dut.io.dispatch.ready.expect(true.B)
+        dut.clock.step()
+        dut.io.dispatch.valid.poke(false)
+
+        for (_ <- 0 until 12) {
+          if (dut.io.redirectValid.peek().litToBoolean) {
+            observed = Some(dut.io.redirectTarget.peek().litValue)
+          }
+          dut.clock.step()
+        }
+      }
+      observed
+    }
+
+    assert(observeRedirect(0x508).isEmpty)
+    assert(observeRedirect(0x504).contains(BigInt(0x508)))
   }
 
   it should "keep a non-memory bypass candidate behind an older outstanding load" in {

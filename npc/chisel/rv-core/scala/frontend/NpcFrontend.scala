@@ -62,17 +62,30 @@ class NpcFrontend(config: NpcConfig) extends Module {
   val fetchResponseValid = WireDefault(false.B)
   val fetchBusy = WireDefault(false.B)
   val fetchFault = WireDefault(0.U.asTypeOf(new MemoryFault(axiConfig.addrWidth)))
+  val fetchPcForPrediction = if (cfg.xlen > axiConfig.addrWidth) {
+    Cat(0.U((cfg.xlen - axiConfig.addrWidth).W), fetchResponsePc)
+  } else fetchResponsePc
+  val fetchIssuedPredictedNextPc = WireDefault(fetchPcForPrediction + 4.U)
+  val fetchImmediate = RiscvImmediateGenerator(fetchInstruction, cfg.xlen)
+  val fetchOpcode = fetchInstruction(6, 0)
+  val fetchIsJal = fetchOpcode === "b1101111".U
+  val fetchIsBackwardBranch = fetchOpcode === "b1100011".U && fetchImmediate(cfg.xlen - 1)
+  // 只预测目标由当前指令字直接给出的控制流；JAL 必跳，条件分支只预测后向边。
+  val fetchStaticPrediction = pipelinedFetch.B && (fetchIsJal || fetchIsBackwardBranch)
+  val fetchPredictedNextPc = Mux(fetchStaticPrediction,
+    fetchPcForPrediction + fetchImmediate, fetchIssuedPredictedNextPc)
   val fetchFlush = io.redirectValid || io.fenceHold
   val fetchRestartPc = Mux(io.redirectValid, io.redirectTarget(31, 0), fetchBufferOut.bits.pc + 4.U)
   val pcWriteEnable = WireDefault(false.B)
   programCounter.io.nextPc := Mux(io.redirectValid, io.redirectTarget,
     Mux(io.fenceHold, fetchBufferOut.bits.pc + 4.U,
-      Mux(pipelinedFetch.B, fetchBufferIn.bits.pc + 4.U, programCounter.io.pcPlus4)))
+      Mux(pipelinedFetch.B, fetchBufferIn.bits.predictedNextPc, programCounter.io.pcPlus4)))
   programCounter.io.writeEnable := pcWriteEnable
 
   fetchBufferIn.valid := fetchResponseValid && !fetchFlush
   fetchBufferIn.bits.pc := Mux(pipelinedFetch.B, fetchResponsePc, programCounter.io.pc)
   fetchBufferIn.bits.instruction := fetchInstruction
+  fetchBufferIn.bits.predictedNextPc := fetchPredictedNextPc
   fetchBufferIn.bits.perfFetchStartCycle := fetchResponseIssueCycle
   fetchBufferIn.bits.perfFetchCycles := performanceCycle - fetchResponseIssueCycle
   fetchBufferIn.bits.perfDecodeStartCycle := performanceCycle
@@ -82,11 +95,17 @@ class NpcFrontend(config: NpcConfig) extends Module {
     instructionFetchUnit.io.pc := programCounter.io.pc(31, 0)
     instructionFetchUnit.io.restartPc := fetchRestartPc
     instructionFetchUnit.io.performanceCycle := performanceCycle
+    instructionFetchUnit.io.predictionValid := fetchBufferIn.fire &&
+      fetchStaticPrediction && fetchPredictedNextPc =/= fetchIssuedPredictedNextPc
+    instructionFetchUnit.io.predictionTarget := fetchPredictedNextPc(axiConfig.addrWidth - 1, 0)
     instructionFetchUnit.io.flush := fetchFlush
     instructionFetchUnit.io.responseReady := fetchBufferIn.ready && !fetchFlush
     instructionFetchUnit.io.axi <> io.axi
     fetchInstruction := instructionFetchUnit.io.inst
     fetchResponsePc := instructionFetchUnit.io.responsePc
+    fetchIssuedPredictedNextPc := (if (cfg.xlen > axiConfig.addrWidth) {
+      Cat(0.U((cfg.xlen - axiConfig.addrWidth).W), instructionFetchUnit.io.responsePredictedNextPc)
+    } else instructionFetchUnit.io.responsePredictedNextPc)
     fetchResponseIssueCycle := instructionFetchUnit.io.responseIssueCycle
     fetchResponseValid := instructionFetchUnit.io.responseValid
     fetchBusy := instructionFetchUnit.io.busy
@@ -118,6 +137,7 @@ class NpcFrontend(config: NpcConfig) extends Module {
   io.interruptPc := Mux(fetchBufferOut.valid, fetchBufferOut.bits.pc, programCounter.io.pc)
   io.dispatch.bits.pc := fetchBufferOut.bits.pc
   io.dispatch.bits.instruction := instruction
+  io.dispatch.bits.predictedNextPc := fetchBufferOut.bits.predictedNextPc
   io.dispatch.bits.perfFetchStartCycle := fetchBufferOut.bits.perfFetchStartCycle
   io.dispatch.bits.perfFetchCycles := fetchBufferOut.bits.perfFetchCycles
   // 保留取指响应进入 IF/ID 的时刻。若缓冲中已有更老指令，这段驻留必须归入

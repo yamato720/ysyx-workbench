@@ -61,6 +61,8 @@ class PipelineRegister[T <: Data](gen: T) extends Module {
 class FetchDecodePayload(cfg: ISAConfig) extends Bundle {
   val pc = UInt(cfg.xlen.W)
   val instruction = UInt(32.W)
+  // 预测只影响前端续取；EX 用它和实际 next-PC 比较，决定是否需要恢复。
+  val predictedNextPc = UInt(cfg.xlen.W)
   val perfFetchStartCycle = UInt(64.W)
   // 仿真性能侧带：从 PC 生效到进入 IF/ID 的取指周期数，以及 ID 起点。
   val perfFetchCycles = UInt(64.W)
@@ -77,6 +79,7 @@ class FetchDecodePayload(cfg: ISAConfig) extends Bundle {
 class DecodedDispatchPayload(cfg: ISAConfig) extends Bundle {
   val pc = UInt(cfg.xlen.W)
   val instruction = UInt(32.W)
+  val predictedNextPc = UInt(cfg.xlen.W)
   val perfFetchStartCycle = UInt(64.W)
   val perfFetchCycles = UInt(64.W)
   val perfDecodeStartCycle = UInt(64.W)
@@ -123,6 +126,7 @@ class DecodedDispatchPayload(cfg: ISAConfig) extends Bundle {
 class DecodeExecutePayload(cfg: ISAConfig) extends Bundle {
   val pc = UInt(cfg.xlen.W)
   val instruction = UInt(32.W)
+  val predictedNextPc = UInt(cfg.xlen.W)
   val perfFetchStartCycle = UInt(64.W)
   val perfFetchCycles = UInt(64.W)
   val perfDecodeStartCycle = UInt(64.W)
@@ -173,6 +177,7 @@ class DecodeExecutePayload(cfg: ISAConfig) extends Bundle {
 class ExecuteMemoryPayload(cfg: ISAConfig) extends Bundle {
   val pc = UInt(cfg.xlen.W)
   val instruction = UInt(32.W)
+  val predictedNextPc = UInt(cfg.xlen.W)
   val perfFetchStartCycle = UInt(64.W)
   val perfFetchCycles = UInt(64.W)
   val perfDecodeStartCycle = UInt(64.W)
