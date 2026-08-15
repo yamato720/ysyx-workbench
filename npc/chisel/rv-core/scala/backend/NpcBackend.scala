@@ -465,8 +465,10 @@ class NpcBackend(
   decodeExecuteReg.io.in.bits.perfFetchCycles := dispatch.perfFetchCycles
   decodeExecuteReg.io.in.bits.perfDecodeStartCycle := dispatch.perfDecodeStartCycle
   decodeExecuteReg.io.in.bits.perfDecodeCycles := 0.U
+  // 单级 EX 的 ID/EX 在本拍锁存，ALU 组合逻辑从下一拍开始。性能时间线必须把
+  // EX 起点放在该寄存器边界之后，不能与刚完成的 ID 驻留重叠。
   decodeExecuteReg.io.in.bits.perfExecuteStartCycle := Mux(
-    twoStageIntegerExecute.B, 0.U(64.W), performanceCycle)
+    twoStageIntegerExecute.B, 0.U(64.W), performanceCycle + 1.U(64.W))
   def normalizedFpr(raw: UInt): UInt =
     if (cfg.xlen == 64) Mux(raw(63, 32) === Fill(32, 1.U(1.W)), raw, Cat(Fill(32, 1.U(1.W)), "h7fc00000".U(32.W)))
     else raw

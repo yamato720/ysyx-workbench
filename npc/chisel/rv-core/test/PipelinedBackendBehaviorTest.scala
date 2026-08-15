@@ -9,6 +9,7 @@ import scala.collection.mutable
 /** 直接驱动后端派发口，检查两拍整数 EX 与流水 MEM 重叠时仍保持 RAW 前递。 */
 class PipelinedBackendBehaviorTest extends AnyFlatSpec {
   private val config = new PipelinedTwoCycleWideL2SimulationCoreConfig().build
+  private val oneStageConfig = new HbmJitterCacheSimulationCoreConfig().build
 
   private def clearDispatch(dut: NpcBackend): Unit = {
     val bits = dut.io.dispatch.bits
@@ -223,6 +224,41 @@ class PipelinedBackendBehaviorTest extends AnyFlatSpec {
 
       assert(commits.toSeq == Seq(BigInt(0x300)))
       assert(!sawMemoryStageBusy)
+    }
+  }
+
+  it should "report a one-stage integer EX after the ID/EX register boundary" in {
+    simulate(new NpcBackend(oneStageConfig)) { dut =>
+      initialize(dut)
+      dut.reset.poke(true)
+      dut.clock.step(2)
+      dut.reset.poke(false)
+
+      val decodeStart = dut.io.debug.cycleCount.peek().litValue
+      setAddi(dut, 0x340, rd = 5, rs1 = 0, immediate = 7)
+      dut.io.dispatch.bits.perfFetchStartCycle.poke(decodeStart - 1)
+      dut.io.dispatch.bits.perfFetchCycles.poke(1)
+      dut.io.dispatch.bits.perfDecodeStartCycle.poke(decodeStart)
+      dut.io.dispatch.valid.poke(true)
+      dut.io.dispatch.ready.expect(true.B)
+      dut.clock.step()
+      dut.io.dispatch.valid.poke(false)
+
+      var observed = false
+      var guard = 0
+      while (!observed && guard < 40) {
+        dut.clock.step()
+        if (dut.io.debug.commitValid.peek().litToBoolean) {
+          dut.io.debug.commitDecodeStartCycle.expect(decodeStart.U)
+          dut.io.debug.commitExecuteStartCycle.expect((decodeStart + 1).U)
+          dut.io.debug.commitMemoryStartCycle.expect((decodeStart + 1).U)
+          dut.io.debug.commitDecodeCycles.expect(1.U)
+          dut.io.debug.commitExecuteCycles.expect(1.U)
+          observed = true
+        }
+        guard += 1
+      }
+      assert(observed)
     }
   }
 

@@ -65,3 +65,13 @@ class PipelineDualFwdTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerA
     new WithSerialExecuteAdditionalStagesConfig(2) ++
       new PipelineDualFwdTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluPerformConfig
   )
+
+/** 本地缓存性能路径：普通整数保持单拍 EX，串行控制和首个外部取指仍保留时序切分。 */
+class PipelineDualFwdOneStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecutePerformConfig
+  extends PerformBundle(
+    new WithSerialExecuteAdditionalStagesConfig(2) ++
+      new WithoutSerialExecuteResultForwardingConfig ++
+      new WithSeparateSerialIntegerAluConfig ++
+      new WithRegisteredInitialFetchRequestConfig ++
+      new PipelineDualFwdPerformConfig
+  )

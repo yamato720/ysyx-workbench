@@ -108,6 +108,10 @@ class CacheConfigTest extends AnyFlatSpec {
       assert(profile.cache.accessMode == CacheAccessMode.PipelinedTwoCycle)
       assert(profile.cache.pipelinedQueues == PipelinedCacheQueueConfig.TwoCycleLocal)
       assert(profile.cache.instructionBuffer == InstructionBufferConfig(enabled = true, entries = 8))
+      assert(profile.pipeline.integerExecuteStages == 1)
+      assert(profile.pipeline.serialExecuteStages == 3)
+      assert(profile.pipeline.separateSerialIntegerAlu)
+      assert(!profile.pipeline.serialExecuteResultForwarding)
     }
     assert(NpcConfig().validated.cache.accessMode == CacheAccessMode.Blocking)
     assertThrows[IllegalArgumentException](pipelined.copy(
