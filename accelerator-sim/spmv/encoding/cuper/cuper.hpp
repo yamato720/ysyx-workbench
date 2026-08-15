@@ -14,17 +14,38 @@ constexpr std::size_t kVectorLanesPerBeat = 16;
 constexpr std::size_t kVectorStorageAlignmentElements = 1024;
 constexpr std::size_t kVectorReplicaCount = 4;
 constexpr std::size_t kVectorPartitionFactor = 8;
-constexpr std::uint32_t kColumnBits = 14;
-constexpr std::uint32_t kRowBits = 18;
-constexpr std::uint32_t kPaddingRow = (1U << kRowBits) - 1U;
-constexpr std::uint32_t kMaximumValidRow = (1U << (kRowBits - 1U)) - 1U;
-constexpr std::uint64_t kPaddingSlot = static_cast<std::uint64_t>(kPaddingRow) << 32U;
+
+/** Cuper A slot v3：`localColumn[63:51] | tag[50:48] | row[47:32] | fp32[31:0]`。
+  *
+  * `row` 是直接的 CSR 行标，不再结合 HBM channel/lane 还原。预处理器把 `tag`
+  * 编码为每个 `(batch, PE)` 时间流内的 3-bit 累加上下文：同一驻留行复用上下文，
+  * tag 不是行号，而是每个物理 PE/lane 上 8 个累加上下文的编号。row 是真正身份，
+  * tag 类似硬件线程槽位，目前 3 bit 凑 0~7 来用
+   到达的 (row, tag)    L1 当前状态    动作
+  ━━━━━━━━━━━━━━━━━━━  ━━━━━━━━━━━━━  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   context 无效         空             写入 row，以 product 初始化
+  ───────────────────  ─────────────  ────────────────────────────────
+   context.row 相同     命中           sum += product
+  ───────────────────  ─────────────  ────────────────────────────────
+   context.row 不同     上下文切换     先送出旧 (row,sum)，再装入新行
+  *
+  * 8 项占满后按 LRU 换出。当前乘法 RTL 不解释该语义，只随 FMUL 响应透明传递。
+  * 编码器的物理空槽仍是全零 slot，和所有普通 slot 一样读取 X、进入 FMUL。
+  */
+constexpr std::uint32_t kColumnBits = 13;
+constexpr std::uint32_t kTagBits = 3;
+constexpr std::size_t kAccumulationContextCount = std::size_t{1} << kTagBits;
+constexpr std::uint32_t kRowBits = 16;
+constexpr std::uint64_t kZeroFillSlot = 0;
 
 struct CuperConfig {
+  /** A 矩阵使用的独立 HBM channel 数；每路固定有 8 个 slot lane。 */
   std::size_t hbmChannelCount = 16;
+  /** 一个列 slice 覆盖的连续 X 元素数。 */
   std::size_t sliceSize = 64;
+  /** 每个 Cuper batch 包含的列 slice 数；默认 128 * 64 = 8192 列。 */
   std::size_t columnSlicesPerBatch = 128;
-  // U55C c_latency=4，加上 wrapper 输入级和 SRAM 读写边界，安全 issue 间隔为 7。
+  /** 同一 Cuper ping/pong 累加目标的最小发射间隔。 */
   std::size_t reorderWindow = 7;
 };
 
@@ -36,17 +57,22 @@ struct CuperEncodingStats {
   std::size_t minimumMatrixBeatsPerChannel = 0;
   std::size_t maximumMatrixBeatsPerChannel = 0;
   std::uint64_t totalMatrixBeats = 0;
-  std::uint64_t validSlots = 0;
-  std::uint64_t paddingSlots = 0;
+  /** 来自 CSR 的实际矩阵元素数量。 */
+  std::uint64_t matrixSlots = 0;
+  /** 编码布局为固定 beat 补入的全零 slot 数量；它不改变硬件控制语义。 */
+  std::uint64_t zeroFillSlots = 0;
   std::uint64_t packedBytes = 0;
 
-  double slotUtilization() const;
+  double matrixSlotUtilization() const;
 };
 
 struct CuperPackage {
+  /** 编码时采用的静态 HBM、列窗口和同一行调度参数。 */
   CuperConfig config;
+  /** 原始 CSR 矩阵维度；row 最大只能为 65535。 */
   std::size_t rows = 0;
   std::size_t columns = 0;
+  /** 原始 CSR 的非零元数量，等于所有实际矩阵 slot 的总数。 */
   std::uint64_t nonzeros = 0;
 
   // 每个 HBM channel 独立的累计 batch 边界，单位是该 channel 的 512-bit beat。
@@ -54,6 +80,10 @@ struct CuperPackage {
   // lane 0 对应 512-bit beat 的 [63:0]，lane 7 对应 [511:448]。
   // 各 channel 只补齐自身 8 lanes，因此长度可以不同。
   std::vector<std::vector<CuperBeat>> matrixChannels;
+  /** 与 matrixChannels 同形的 host/report 元数据；bit p 表示该 lane 是实际 CSR 元素。
+    * 它不写入 HBM，RTL 也完全不读取它。
+    */
+  std::vector<std::vector<std::uint8_t>> matrixEntryMasks;
   CuperEncodingStats stats;
 };
 
@@ -75,8 +105,11 @@ struct CuperVectorStats {
   * 的 local_X 存储中。
   */
 struct CuperVectorPackage {
+  /** 与 A package 相同的列窗口配置。 */
   CuperConfig config;
+  /** X 的全局列数。 */
   std::size_t columns = 0;
+  /** 保留原始 FP64 输入，供 host golden 与报告使用。 */
   std::vector<double> sourceValues;
   // 累计 batch 边界，单位是 512-bit float_v16 beat；不包含 HBM 分配尾部 padding。
   std::vector<std::uint32_t> batchPointers;
@@ -86,17 +119,17 @@ struct CuperVectorPackage {
 };
 
 struct DecodedCuperSlot {
-  bool padding = false;
   std::uint32_t localColumn = 0;
-  std::uint32_t encodedRow = 0;
+  /** 预处理器分配的累加上下文；当前乘法 RTL 只透明传递，不参与筛选。 */
+  std::uint32_t tag = 0;
+  /** 直接的 16-bit CSR 行标；不再依赖 slot 所在 PE 逆映射。 */
+  std::uint32_t row = 0;
   float value = 0.0F;
 };
 
 std::size_t columnsPerBatch(const CuperConfig& config);
 std::size_t totalPeCount(const CuperConfig& config);
 std::size_t peForRow(std::size_t row, const CuperConfig& config);
-std::size_t decodeOriginalRow(std::uint32_t encodedRow, std::size_t pe,
-                              const CuperConfig& config);
 DecodedCuperSlot decodeSlot(std::uint64_t slot);
 CuperPackage encode(const CsrMatrix& matrix, const CuperConfig& config = {});
 CuperVectorPackage encodeVector(const std::vector<double>& input,

@@ -71,13 +71,11 @@ final class SpmvInputTopIO(config: SpmvInputConfig) extends Bundle {
   val timingChannel = Output(UInt(log2Ceil(config.aReaderCount).W))
   val timingSlot = Output(UInt(log2Ceil(SpmvCuperDecode.lanesPerBeat).W))
   val timingDecode = Output(Bool())
-  val timingPadding = Output(Bool())
   val timingXRead = Output(Bool())
   val timingMulRequest = Output(Bool())
   val timingMulResponse = Output(Bool())
   /** 每个 bit 对应当前 A beat 的一个 Cuper slot。 */
   val timingValidSlotMask = Output(UInt(SpmvCuperDecode.lanesPerBeat.W))
-  val timingPaddingMask = Output(UInt(SpmvCuperDecode.lanesPerBeat.W))
   val timingXReadMask = Output(UInt(SpmvCuperDecode.lanesPerBeat.W))
   val timingMulRequestMask = Output(UInt(SpmvCuperDecode.lanesPerBeat.W))
   val timingMulResponseMask = Output(UInt(SpmvCuperDecode.lanesPerBeat.W))
@@ -85,8 +83,6 @@ final class SpmvInputTopIO(config: SpmvInputConfig) extends Bundle {
   /** 按 Cuper A channel 导出的计算时序；每个向量元素对应一个独立 PE。 */
   val timingBeatAcceptedByChannel = Output(Vec(config.aReaderCount, Bool()))
   val timingValidSlotMaskByChannel = Output(
-    Vec(config.aReaderCount, UInt(SpmvCuperDecode.lanesPerBeat.W)))
-  val timingPaddingMaskByChannel = Output(
     Vec(config.aReaderCount, UInt(SpmvCuperDecode.lanesPerBeat.W)))
   val timingXReadMaskByChannel = Output(
     Vec(config.aReaderCount, UInt(SpmvCuperDecode.lanesPerBeat.W)))
@@ -155,8 +151,8 @@ final class SpmvInputTop(config: SpmvInputConfig) extends Module {
     Module(new SpmvLocalX(config))
   }
   private val ctrlMap = Module(new SpmvCuperMap(config))
-  private val mulEngines = Seq.tabulate(config.aReaderCount) { _ =>
-    Module(new SpmvMulEngine(config))
+  private val mulEngines = Seq.tabulate(config.aReaderCount) { channel =>
+    Module(new SpmvMulEngine(config, channel))
   }
   private val aCompletion = Module(new SpmvRequestCompletionTracker(config.aReaderCount))
   private val consumers = Seq.tabulate(config.aReaderCount) { _ =>
@@ -272,16 +268,18 @@ final class SpmvInputTop(config: SpmvInputConfig) extends Module {
       localX.io.writeMask(lane + config.xElementsPerBeat) := x1Fire
     }
     mulEngine.io.enable := io.mulEnable
+    mulEngine.io.batch := io.mulBatch
     mulEngine.io.workExpected := ctrlMap.io.batchActive(index)
     mulEngine.io.xReadData := localX.io.readData
     // idle 无法区分“已完成”和“从未请求”；必须先看见全部 A 请求，再允许完成。
     mulEngine.io.streamsComplete := aCompletion.io.complete
     localX.io.readEnable := mulEngine.io.xReadEnable
     localX.io.readColumn := mulEngine.io.xReadColumn
+    // 当前乘法-only 顶层只 drain 产品流并验收 checksum；新的 L1 会直接替换这一接收端。
+    mulEngine.io.product.foreach(_.ready := true.B)
   }
   private val timingBeatAcceptedByChannel = VecInit(mulEngines.map(_.io.timingBeatAccepted))
   private val timingValidSlotMaskByChannel = VecInit(mulEngines.map(_.io.timingValidSlotMask))
-  private val timingPaddingMaskByChannel = VecInit(mulEngines.map(_.io.timingPaddingMask))
   private val timingXReadMaskByChannel = VecInit(mulEngines.map(_.io.timingXReadMask))
   private val timingMulRequestMaskByChannel = VecInit(mulEngines.map(_.io.timingMulRequestMask))
   private val timingMulResponseMaskByChannel = VecInit(mulEngines.map(_.io.timingMulResponseMask))
@@ -297,19 +295,16 @@ final class SpmvInputTop(config: SpmvInputConfig) extends Module {
   io.timingSlot := Mux(timingAnyBeatAccepted,
     PriorityMux(mulEngines.map(engine => engine.io.timingBeatAccepted -> engine.io.timingSlot)), 0.U)
   io.timingDecode := mulEngines.map(_.io.timingDecode).reduce(_ || _)
-  io.timingPadding := mulEngines.map(_.io.timingPadding).reduce(_ || _)
   io.timingXRead := mulEngines.map(_.io.timingXRead).reduce(_ || _)
   io.timingMulRequest := mulEngines.map(_.io.timingMulRequest).reduce(_ || _)
   io.timingMulResponse := mulEngines.map(_.io.timingMulResponse).reduce(_ || _)
   io.timingValidSlotMask := timingValidSlotMaskByChannel.reduce(_ | _)
-  io.timingPaddingMask := timingPaddingMaskByChannel.reduce(_ | _)
   io.timingXReadMask := timingXReadMaskByChannel.reduce(_ | _)
   io.timingMulRequestMask := timingMulRequestMaskByChannel.reduce(_ | _)
   io.timingMulResponseMask := timingMulResponseMaskByChannel.reduce(_ | _)
   io.timingStreamsComplete := aCompletion.io.complete
   io.timingBeatAcceptedByChannel := timingBeatAcceptedByChannel
   io.timingValidSlotMaskByChannel := timingValidSlotMaskByChannel
-  io.timingPaddingMaskByChannel := timingPaddingMaskByChannel
   io.timingXReadMaskByChannel := timingXReadMaskByChannel
   io.timingMulRequestMaskByChannel := timingMulRequestMaskByChannel
   io.timingMulResponseMaskByChannel := timingMulResponseMaskByChannel

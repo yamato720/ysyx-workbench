@@ -242,8 +242,13 @@ CPU golden，不要求 RTL/xclbin。共享数据由 `make -C accelerator-sim/dat
 `accelerators.common`，控制面之后若要给 JPCG 写回可换到读写封装。地址窗口为
 `0x80000000`/128 MiB，4 KiB channel 对齐，
 AXI 参数为 64/512/4，reader 支持 2 笔 outstanding burst。profile 固定
-`ACCELERATOR_HOST_ABI=spmv-input-report-v10`、`PROTOCOL_ABI=spmv-input-windowed-v9`，输出输入布局、
-16 个消费端、两路 X 条带原子广播和一路控制面广播。独立的 `SpmvInputReportConfig` 输出 `SPMV_PERFORMANCE_HTML` 与
+`ACCELERATOR_HOST_ABI=spmv-input-report-v12`、`PROTOCOL_ABI=spmv-input-windowed-v11`，并以
+`SPMV_CUPER_SLOT_*` 冻结 `localColumn[63:51] | tag[50:48] | row[47:32] | fp32[31:0]` 的 slot v3
+布局。`row` 为直接 16-bit CSR 行标，行到 PE 的原 Cuper 映射不变；预处理器在 RAW 排程后的每条
+`(batch, PE)` 时间流内以 8 项 LRU 把 `tag` 编码为累加上下文。当前乘法 RTL 只透明传递 `tag`，全部
+8 个 lane 都会读 X、进入 FMUL，物理空槽不参与上下文分配且仍编码为全零。profile 继续输出输入布局、
+16 个消费端、两路 X 条带原子广播和一路控制面广播。
+独立的 `SpmvInputReportConfig` 输出 `SPMV_PERFORMANCE_HTML` 与
 `SPMV_PIPELINE_HTML`；后者要求前者开启，公开 Config 使用 `PerformancePipeline` preset。不输出
 `SPMV_X_MODE`、CSR5、NEMU、CPU 或 FPGA
 字段。正式构造严格执行 `elaborate -> verilator -> accelerator-host`，并只发布到
@@ -258,7 +263,7 @@ X 载入完成后 host 拉高 `mulEnable`，`mulReady` 立即拉高后驱动 16 
 并按 `runtime/<dataset>/<run>/` 写入 `performance.html` 主页和可选的 `input-pipeline.html`、
 `timing-pipeline.html` 子页。主页沿用
 construction 报告的指标、统计 band 和表格布局；`timing-pipeline.html` 区分 A beat 前端连续性与实际
-FMUL 活跃拍，并把全 padding beat 标为数据空窗而不是控制气泡；流水页沿用全屏搜索、缩放与横向时间线布局。
+FMUL 活跃拍；每个物理 A slot 都读取 X 并发射 FMUL，页面只统计控制气泡。流水页沿用全屏搜索、缩放与横向时间线布局。
 矩阵能放入 8192 列窗口时会对照编码 slot 的 FP64 乘积 checksum；更大的矩阵仍按相同 `Ctrl -> X -> A`
 单遍输入顺序校验，但跳过乘法。
 缓存 profile 还会写入 `CACHE_ACCESS_MODE` 与四项 `CACHE_*_QUEUE_DEPTH`。缓存 FPGA 终端会把相同的

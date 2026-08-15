@@ -30,6 +30,9 @@ class SpmvInputConfigTest extends AnyFlatSpec {
     assert(config.fp64MultiplyLaneCount == 8)
     assert(config.fp64MultiplyCoreCount == 16)
     assert(config.fp64MultiplyTotalLaneCount == 128)
+    assert(config.cuperSlotColumnBits == 13)
+    assert(config.cuperSlotTagBits == 3)
+    assert(config.cuperSlotRowBits == 16)
   }
 
   it should "reject an A-reader count that does not cover every HBM channel" in {
@@ -40,6 +43,7 @@ class SpmvInputConfigTest extends AnyFlatSpec {
     assertThrows[IllegalArgumentException](SpmvInputConfig.Cuper16Hbm.copy(xWindowSize = 3000))
     assertThrows[IllegalArgumentException](SpmvInputConfig.Cuper16Hbm.copy(xElementWidth = 32))
     assertThrows[IllegalArgumentException](SpmvInputConfig.Cuper16Hbm.copy(xReplicaCount = 0))
+    assertThrows[IllegalArgumentException](SpmvInputConfig.Cuper16Hbm.copy(cuperSlotRowBits = 17))
   }
 
   "SpmvInputReportConfig" should "要求流水页依赖性能主页" in {
@@ -59,8 +63,8 @@ class SpmvInputConfigTest extends AnyFlatSpec {
     val report = parameters(SpmvInputReportConfigKey)
     val values = SpmvInputSimulationProfile.values(entry, construction, input, report).toMap
 
-    assert(values("ACCELERATOR_HOST_ABI") == "spmv-input-report-v10")
-    assert(values("PROTOCOL_ABI") == "spmv-input-windowed-v9")
+    assert(values("ACCELERATOR_HOST_ABI") == "spmv-input-report-v12")
+    assert(values("PROTOCOL_ABI") == "spmv-input-windowed-v11")
     assert(values("SPMV_INPUT_A_READER_COUNT") == "16")
     assert(values("SPMV_INPUT_X_READER_COUNT") == "2")
     assert(values("SPMV_INPUT_CTRL_READER_COUNT") == "1")
@@ -79,6 +83,10 @@ class SpmvInputConfigTest extends AnyFlatSpec {
     assert(values("SPMV_INPUT_X_REPLICA_COUNT") == "4")
     assert(values("SPMV_INPUT_X_BANK_COUNT") == "16")
     assert(values("SPMV_INPUT_X_ELEMENT_WIDTH") == "64")
+    assert(values("SPMV_CUPER_SLOT_ABI") == "cuper-a-slot-v3")
+    assert(values("SPMV_CUPER_SLOT_COLUMN_BITS") == "13")
+    assert(values("SPMV_CUPER_SLOT_TAG_BITS") == "3")
+    assert(values("SPMV_CUPER_SLOT_ROW_BITS") == "16")
     assert(values("SPMV_FP64_MUL_INTERFACE") == "arithmetic-req-resp-v1")
     assert(values("SPMV_FP64_MUL_LATENCY") == "4")
     assert(values("SPMV_FP64_MUL_II") == "1")

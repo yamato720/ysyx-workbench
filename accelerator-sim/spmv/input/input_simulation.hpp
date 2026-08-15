@@ -2,7 +2,7 @@
 
 #ifdef SPMV_INPUT_TRANSACTION_VERILATOR
 
-#include "encoding/cuper/cuper.hpp"
+#include "../encoding/cuper/cuper.hpp"
 
 #include <array>
 #include <cstdint>

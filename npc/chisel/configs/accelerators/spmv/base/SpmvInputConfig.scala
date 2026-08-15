@@ -32,7 +32,13 @@ final case class SpmvInputConfig(
   /** FP64 乘法公共 IP 接口的响应 FIFO 深度。 */
   fp64MultiplyResponseFifoDepth: Int = 4,
   /** 每个 512-bit Cuper A beat 同时送入乘法 IP 的 slot 数。 */
-  fp64MultiplyLaneCount: Int = 8
+  fp64MultiplyLaneCount: Int = 8,
+  /** Cuper A slot v3 的 [63:51] 本地列号宽度。 */
+  cuperSlotColumnBits: Int = 13,
+  /** Cuper A slot v3 的 [50:48] 完整保留 tag 宽度，不参与当前乘法控制。 */
+  cuperSlotTagBits: Int = 3,
+  /** Cuper A slot v3 的 [47:32] 直接 CSR 行标宽度。 */
+  cuperSlotRowBits: Int = 16
 ) {
   require(aReaderCount > 0, s"A reader 数量必须为正数，实际为 $aReaderCount")
   require(xReaderCount > 0, s"X reader 数量必须为正数，实际为 $xReaderCount")
@@ -68,6 +74,13 @@ final case class SpmvInputConfig(
     s"FP64 乘法 IP 响应 FIFO 深度必须为正数，实际为 $fp64MultiplyResponseFifoDepth")
   require(fp64MultiplyLaneCount == 8,
     s"当前 Cuper 512-bit A beat 固定包含 8 个乘法 slot，实际为 $fp64MultiplyLaneCount")
+  require(cuperSlotColumnBits == 13 && cuperSlotTagBits == 3 && cuperSlotRowBits == 16,
+    s"当前 Cuper slot v3 必须是 col/tag/row=13/3/16，实际为 " +
+      s"$cuperSlotColumnBits/$cuperSlotTagBits/$cuperSlotRowBits")
+  require(cuperSlotColumnBits + cuperSlotTagBits + cuperSlotRowBits + 32 == 64,
+    "Cuper slot v3 的列/tag/行/FP32 位域必须恰好填满 64 bit")
+  require(xWindowSize <= (1 << cuperSlotColumnBits),
+    s"X 窗口不能超过 Cuper slot v3 的列号容量，实际为 $xWindowSize")
 
   /** 一个 X HBM beat 携带的 FP64 元素数。 */
   val xElementsPerBeat: Int = axiDataWidth / xElementWidth

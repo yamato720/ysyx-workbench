@@ -69,8 +69,8 @@ private final class SpmvFp64MulSimulation extends BlackBox with HasBlackBoxInlin
 }
 
 /** 带 req/resp、固定 latency/II、响应背压和 tag 的 FP64 乘法 IP 端点。 */
-private[input] final class SpmvFp64Mul(timing: ArithmeticIpTiming)
-    extends ArithmeticIpModel(64, 1, timing) {
+private[input] final class SpmvFp64Mul(timing: ArithmeticIpTiming, tagWidth: Int)
+    extends ArithmeticIpModel(64, tagWidth, timing) {
   private val simulation = Module(new SpmvFp64MulSimulation)
   simulation.io.a := io.req.bits.operandA
   simulation.io.b := io.req.bits.operandB

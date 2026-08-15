@@ -510,8 +510,8 @@ done
   -s $spmv_input/logs/build/verilator.log &&
   -s $spmv_input/logs/build/accelerator-host.log ]] ||
   fail 'SPMV 正式输入 dry-run 的阶段或 host 边界不正确'
-[[ $(value "$spmv_input/profile.env" ACCELERATOR_HOST_ABI) == spmv-input-report-v10 &&
-  $(value "$spmv_input/profile.env" PROTOCOL_ABI) == spmv-input-windowed-v9 &&
+[[ $(value "$spmv_input/profile.env" ACCELERATOR_HOST_ABI) == spmv-input-report-v12 &&
+  $(value "$spmv_input/profile.env" PROTOCOL_ABI) == spmv-input-windowed-v11 &&
   $(value "$spmv_input/profile.env" SPMV_INPUT_A_READER_COUNT) == 16 &&
   $(value "$spmv_input/profile.env" SPMV_INPUT_X_READER_COUNT) == 2 &&
   $(value "$spmv_input/profile.env" SPMV_INPUT_CTRL_READER_COUNT) == 1 &&
@@ -525,6 +525,10 @@ done
   $(value "$spmv_input/profile.env" SPMV_INPUT_X_REPLICA_COUNT) == 4 &&
   $(value "$spmv_input/profile.env" SPMV_INPUT_X_BANK_COUNT) == 16 &&
   $(value "$spmv_input/profile.env" SPMV_INPUT_X_ELEMENT_WIDTH) == 64 &&
+  $(value "$spmv_input/profile.env" SPMV_CUPER_SLOT_ABI) == cuper-a-slot-v3 &&
+  $(value "$spmv_input/profile.env" SPMV_CUPER_SLOT_COLUMN_BITS) == 13 &&
+  $(value "$spmv_input/profile.env" SPMV_CUPER_SLOT_TAG_BITS) == 3 &&
+  $(value "$spmv_input/profile.env" SPMV_CUPER_SLOT_ROW_BITS) == 16 &&
   $(value "$spmv_input/profile.env" SPMV_FP64_MUL_INTERFACE) == arithmetic-req-resp-v1 &&
   $(value "$spmv_input/profile.env" SPMV_FP64_MUL_LATENCY) == 4 &&
   $(value "$spmv_input/profile.env" SPMV_FP64_MUL_II) == 1 &&

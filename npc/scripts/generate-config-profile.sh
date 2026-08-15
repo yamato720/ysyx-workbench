@@ -82,6 +82,10 @@ awk -F= '
   $1 == "ACCELERATOR_HOST_KIND" { accelerator_host_kind=$2 }
   $1 == "ACCELERATOR_HOST_ABI" { accelerator_host_abi=$2 }
   $1 == "SPMV_INPUT_X_READER_COUNT" { spmv_input_x_reader_count=$2 }
+  $1 == "SPMV_CUPER_SLOT_ABI" { spmv_cuper_slot_abi=$2 }
+  $1 == "SPMV_CUPER_SLOT_COLUMN_BITS" { spmv_cuper_slot_column_bits=$2 }
+  $1 == "SPMV_CUPER_SLOT_TAG_BITS" { spmv_cuper_slot_tag_bits=$2 }
+  $1 == "SPMV_CUPER_SLOT_ROW_BITS" { spmv_cuper_slot_row_bits=$2 }
   $1 == "SPMV_PERFORMANCE_HTML" { spmv_performance_html=$2 }
   $1 == "SPMV_PIPELINE_HTML" { spmv_pipeline_html=$2 }
   seen[$1]++ { exit 1 }
@@ -93,7 +97,7 @@ awk -F= '
     if (scope == "spmv") {
       if (capability != "run" || target != "SPMV" || host_abi != "none" ||
           !seen["ACCELERATOR_HOST_KIND"] || !seen["ACCELERATOR_HOST_ABI"] ||
-          accelerator_host_kind != "spmv" || accelerator_host_abi != "spmv-input-report-v10" ||
+          accelerator_host_kind != "spmv" || accelerator_host_abi != "spmv-input-report-v12" ||
           spmv_input_x_reader_count != "2" ||
           !seen["SPMV_INPUT_A_READER_COUNT"] || !seen["SPMV_INPUT_X_READER_COUNT"] ||
           !seen["SPMV_INPUT_CTRL_READER_COUNT"] ||
@@ -105,6 +109,11 @@ awk -F= '
           !seen["SPMV_INPUT_X_BROADCAST"] || !seen["SPMV_INPUT_CTRL_BROADCAST"] ||
           !seen["SPMV_INPUT_X_WINDOW_SIZE"] || !seen["SPMV_INPUT_X_REPLICA_COUNT"] ||
           !seen["SPMV_INPUT_X_BANK_COUNT"] || !seen["SPMV_INPUT_X_ELEMENT_WIDTH"] ||
+          !seen["SPMV_CUPER_SLOT_ABI"] || !seen["SPMV_CUPER_SLOT_COLUMN_BITS"] ||
+          !seen["SPMV_CUPER_SLOT_TAG_BITS"] || !seen["SPMV_CUPER_SLOT_ROW_BITS"] ||
+          spmv_cuper_slot_abi != "cuper-a-slot-v3" ||
+          spmv_cuper_slot_column_bits != "13" || spmv_cuper_slot_tag_bits != "3" ||
+          spmv_cuper_slot_row_bits != "16" ||
           !seen["SPMV_FP64_MUL_INTERFACE"] || !seen["SPMV_FP64_MUL_LATENCY"] ||
           !seen["SPMV_FP64_MUL_II"] || !seen["SPMV_FP64_MUL_RESPONSE_FIFO_DEPTH"] ||
           !seen["SPMV_FP64_MUL_LANES"] || !seen["SPMV_FP64_MUL_CORE_COUNT"] ||

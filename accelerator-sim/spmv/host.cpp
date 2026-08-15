@@ -1,6 +1,6 @@
 #include "golden.hpp"
 #include "encoding/encoder.hpp"
-#include "input_simulation.hpp"
+#include "input/input_simulation.hpp"
 
 #include <algorithm>
 #include <array>
@@ -238,6 +238,10 @@ std::uint64_t readUnsignedEnv(const char* name, std::uint64_t fallback) {
 CuperAConfig readCuperAConfig() {
   CuperAConfig config;
 #ifdef SPMV_INPUT_PROFILE_FROZEN
+  static_assert(SPMV_CUPER_SLOT_COLUMN_BITS_FROZEN == encoding::cuper::kColumnBits &&
+      SPMV_CUPER_SLOT_TAG_BITS_FROZEN == encoding::cuper::kTagBits &&
+      SPMV_CUPER_SLOT_ROW_BITS_FROZEN == encoding::cuper::kRowBits,
+      "冻结 profile 的 Cuper slot v3 位域与 host encoder 不一致");
   config.aReaderCount = SPMV_INPUT_A_READER_COUNT_FROZEN;
   config.xReaderCount = SPMV_INPUT_X_READER_COUNT_FROZEN;
   config.ctrlReaderCount = SPMV_INPUT_CTRL_READER_COUNT_FROZEN;
@@ -514,10 +518,10 @@ int runEncoding(const std::string& formatName, const std::string& requested) {
               << package.stats.minimumMatrixBeatsPerChannel
               << " channel_beats_max=" << package.stats.maximumMatrixBeatsPerChannel
               << " total_beats=" << package.stats.totalMatrixBeats
-              << " valid_slots=" << package.stats.validSlots
-              << " padding_slots=" << package.stats.paddingSlots
-              << " slot_utilization=" << std::fixed << std::setprecision(6)
-              << package.stats.slotUtilization()
+              << " matrix_slots=" << package.stats.matrixSlots
+              << " zero_fill_slots=" << package.stats.zeroFillSlots
+              << " matrix_slot_utilization=" << std::fixed << std::setprecision(6)
+              << package.stats.matrixSlotUtilization()
               << " packed_bytes=" << package.stats.packedBytes
               << " encode_ms=" << std::setprecision(3) << milliseconds << '\n';
     std::cout << "[spmv-encoding-x] source=fp64 encoded=fp32"
@@ -585,9 +589,6 @@ std::uint64_t computeMixedProductChecksum(const encoding::cuper::CuperPackage& p
       for (std::size_t lane = 0; lane < encoding::cuper::kLanesPerBeat; ++lane) {
         const encoding::cuper::DecodedCuperSlot slot =
             encoding::cuper::decodeSlot(beats[beat][lane]);
-        if (slot.padding) {
-          continue;
-        }
         const std::size_t column = batch * batchWidth + slot.localColumn;
         if (column >= x.size()) {
           throw std::runtime_error("Mixed-V3 乘法 golden 的列号超出 X 范围");
@@ -635,14 +636,8 @@ std::vector<std::vector<encoding::cuper::CuperBeat>> packXWindow(
   return channels;
 }
 
-std::size_t validSlotCount(const std::vector<encoding::cuper::CuperBeat>& beats) {
-  std::size_t count = 0;
-  for (const auto& beat : beats) {
-    for (std::uint64_t slot : beat) {
-      if (!encoding::cuper::decodeSlot(slot).padding) ++count;
-    }
-  }
-  return count;
+std::size_t multiplySlotCount(const std::vector<encoding::cuper::CuperBeat>& beats) {
+  return beats.size() * encoding::cuper::kLanesPerBeat;
 }
 
 void writeCtrlWord(encoding::cuper::CuperBeat& beat, std::size_t word, std::uint32_t value) {
@@ -741,7 +736,7 @@ int runInputTransactions(const std::string& requested) {
           package.matrixChannels[channel].begin() + static_cast<std::ptrdiff_t>(begin),
           package.matrixChannels[channel].begin() + static_cast<std::ptrdiff_t>(end));
       window.aAddresses[channel] = simulation.aAddresses[channel] + begin * kDefaultCuperBeatBytes;
-      window.expectedMultiplyCount += validSlotCount(window.aChannels[channel]);
+      window.expectedMultiplyCount += multiplySlotCount(window.aChannels[channel]);
     }
     const std::size_t firstColumn = batch * batchWidth;
     const std::size_t lastColumn = std::min(firstColumn + batchWidth, x.size());
@@ -757,9 +752,13 @@ int runInputTransactions(const std::string& requested) {
     simulation.expectedMultiplyCount += window.expectedMultiplyCount;
     simulation.batches.push_back(std::move(window));
   }
-  if (simulation.expectedMultiplyCount != package.nonzeros ||
+  // slot v3 不再在带内编码 padding；每个物理 lane 都会读 X 并进入 FMUL。
+  // CSR nnz 只用于编码密度统计，不能作为实际 FMUL 数的验收基准。
+  const std::uint64_t expectedPhysicalMultiplyCount =
+      package.stats.totalMatrixBeats * encoding::cuper::kLanesPerBeat;
+  if (simulation.expectedMultiplyCount != expectedPhysicalMultiplyCount ||
       simulation.expectedProductChecksum != computeMixedProductChecksum(package, x)) {
-    throw std::runtime_error("Cuper 分窗口 Mixed-V3 golden 与完整矩阵不一致");
+    throw std::runtime_error("Cuper 分窗口 Mixed-V3 golden 与完整物理 slot 流不一致");
   }
   simulation.multiplyExpected = true;
   std::size_t xStorageEnd = instances.hbm.size();

@@ -147,7 +147,7 @@ for (const marker of ["height:100vh", "overflow:auto", "@media(max-width:700px)"
 const timingTrace = parseInlineJson(timingPipelineHtml, "timingTrace", ";\nconst colors=", timingPipelinePath);
 for (const marker of [
   "SPMV FP64 乘法计算流水", "FMUL 流水判定", "PE 前端 II=1", "A 平均 II",
-  "FMUL 请求", "最大在飞", "掩码对齐", "全 padding A beat", "IP 在飞",
+  "FMUL 请求", "最大在飞", "掩码对齐", "全部 slot -> FMUL req", "IP 在飞",
   "const popcount=", "function coreStats", "stageMismatches=0", "batchSelect",
   "Cuper 窗口", "窗口间 X 装载不计为计算气泡",
 ]) {
@@ -180,7 +180,7 @@ const popcount = (mask) => {
   return count;
 };
 const slotMask = (1 << timingTrace.lanesPerCore) - 1;
-const timingFields = ["v", "p", "x", "q", "r"];
+const timingFields = ["s", "x", "q", "r"];
 for (const record of timingTrace.records) {
   if (!Number.isInteger(record.c) || !Number.isInteger(record.w) ||
       record.w < 0 || record.w >= timingTrace.batches.length ||
@@ -201,8 +201,8 @@ for (const record of timingTrace.records) {
 let totalExpectedMultiply = 0;
 for (const batch of timingTrace.batches) {
   if (!Number.isInteger(batch.index) || !Array.isArray(batch.expectedBeats) ||
-      !Array.isArray(batch.expectedValid) || batch.expectedBeats.length !== timingTrace.coreCount ||
-      batch.expectedValid.length !== timingTrace.coreCount ||
+      !Array.isArray(batch.expectedSlots) || batch.expectedBeats.length !== timingTrace.coreCount ||
+      batch.expectedSlots.length !== timingTrace.coreCount ||
       !Number.isInteger(batch.expectedMultiply) || batch.expectedMultiply < 0) {
     throw new Error("计算时序的 batch 元数据不完整");
   }
@@ -215,13 +215,12 @@ for (const batch of timingTrace.batches) {
   const countMasks = (field) => records.reduce((total, record) => total +
       record[field].reduce((sum, mask) => sum + popcount(mask), 0), 0);
   const expectedBeats = batch.expectedBeats.reduce((sum, count) => sum + count, 0);
-  const expectedValid = batch.expectedValid.reduce((sum, count) => sum + count, 0);
-  const expectedPadding = expectedBeats * timingTrace.lanesPerCore - expectedValid;
+  const expectedSlots = batch.expectedSlots.reduce((sum, count) => sum + count, 0);
   const acceptedBeats = records.reduce((sum, record) => sum + popcount(record.b), 0);
-  if (expectedValid !== batch.expectedMultiply || acceptedBeats !== expectedBeats ||
-      countMasks("v") !== expectedValid || countMasks("p") !== expectedPadding ||
-      countMasks("x") !== expectedValid || countMasks("q") !== expectedValid ||
-      countMasks("r") !== expectedValid) {
+  if (expectedSlots !== batch.expectedMultiply || acceptedBeats !== expectedBeats ||
+      expectedSlots !== expectedBeats * timingTrace.lanesPerCore ||
+      countMasks("s") !== expectedSlots || countMasks("x") !== expectedSlots ||
+      countMasks("q") !== expectedSlots || countMasks("r") !== expectedSlots) {
     throw new Error(`Cuper batch ${batch.index} 的 A beat 或 FMUL lane 计数不一致`);
   }
   for (let core = 0; core < timingTrace.coreCount; ++core) {
@@ -230,8 +229,7 @@ for (const batch of timingTrace.batches) {
     const acceptedCycles = [];
     let stagedMask = 0;
     let accepted = 0;
-    let valid = 0;
-    let padding = 0;
+    let slots = 0;
     let xReads = 0;
     let requests = 0;
     let responses = 0;
@@ -240,21 +238,19 @@ for (const batch of timingTrace.batches) {
     let peakInFlight = 0;
     for (const record of records) {
       const acceptedNow = (record.b & bit) !== 0;
-      const validMask = record.v[core];
-      const paddingMask = record.p[core];
+      const slotMaskForCycle = record.s[core];
       const xReadMask = record.x[core];
       const requestMask = record.q[core];
       const responseMask = record.r[core];
-      if (requestMask !== stagedMask || xReadMask !== (acceptedNow ? validMask : 0) ||
-          (acceptedNow && (validMask | paddingMask) !== slotMask) ||
-          (!acceptedNow && (validMask !== 0 || paddingMask !== 0))) {
+      if (requestMask !== stagedMask || xReadMask !== (acceptedNow ? slotMaskForCycle : 0) ||
+          (acceptedNow && slotMaskForCycle !== slotMask) ||
+          (!acceptedNow && slotMaskForCycle !== 0)) {
         throw new Error(`Cuper batch ${batch.index} PE${core} 的 A -> local_X -> FMUL 掩码流水错位`);
       }
       if (acceptedNow) {
         ++accepted;
         acceptedCycles.push(record.c);
-        valid += popcount(validMask);
-        padding += popcount(paddingMask);
+        slots += popcount(slotMaskForCycle);
       }
       xReads += popcount(xReadMask);
       requests += popcount(requestMask);
@@ -272,14 +268,13 @@ for (const batch of timingTrace.batches) {
         }
       }
       done += (record.d & bit) !== 0;
-      stagedMask = acceptedNow ? validMask : 0;
+      stagedMask = acceptedNow ? slotMaskForCycle : 0;
     }
     const expectedInFlightDepth = timingTrace.lanesPerCore * Math.ceil(
         timingTrace.mulLatency / timingTrace.mulII);
-    if (accepted !== batch.expectedBeats[core] || valid !== batch.expectedValid[core] ||
-        padding !== batch.expectedBeats[core] * timingTrace.lanesPerCore - batch.expectedValid[core] ||
-        xReads !== batch.expectedValid[core] || requests !== batch.expectedValid[core] ||
-        responses !== batch.expectedValid[core] || done !== 1 || inFlight !== 0 ||
+    if (accepted !== batch.expectedBeats[core] || slots !== batch.expectedSlots[core] ||
+        xReads !== batch.expectedSlots[core] || requests !== batch.expectedSlots[core] ||
+        responses !== batch.expectedSlots[core] || done !== 1 || inFlight !== 0 ||
         peakInFlight > expectedInFlightDepth ||
         pendingByLane.some((pending) => pending.length !== 0) ||
         acceptedCycles.some((cycle, index) => index > 0 && cycle !== acceptedCycles[index - 1] + 1)) {

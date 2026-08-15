@@ -1,6 +1,6 @@
 {
     "metals.customProjectRoot": "npc/chisel/ysyxSoC",
-    "metals.autoImportBuilds": "initial",
+    "metals.autoImportBuilds": "all",
     "files.watcherExclude": {
         "**/.bloop/**": true,
         "**/target/**": true,

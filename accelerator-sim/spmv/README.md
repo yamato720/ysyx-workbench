@@ -5,6 +5,9 @@ Verilator 输入流水。输入流水执行真实 AXI 读事务和消费端校�
 Cuper 窗口依次执行 `X0/X1 -> mulEnable -> A0..A15`，每个窗口的 A 子区间都会驱动 Mixed-V3 FP64
 乘法 IP 并对照乘积位型 checksum。暂不涉及浮点加法或 Y 写回。
 
+输入事务仿真的实现、接口与 HTML 回归检查统一位于 `input/`；顶层 `host.cpp` 仅负责数据集选择、
+编码、CPU golden 与各仿真入口的编排。
+
 共享 CSR 数据位于 `accelerator-sim/data`。首次使用可执行：
 
 ```bash
@@ -39,12 +42,22 @@ make -C npc run config=SpmvInputSimulationConfig mainargs=n65536
 make -C npc build-host config=SpmvInputSimulationConfig
 ```
 
-profile 固定 `ACCELERATOR_HOST_ABI=spmv-input-report-v10` 和
-`PROTOCOL_ABI=spmv-input-windowed-v9`，对应的 `abi/spmv/host.env` 使用 `HOST_FORMAT=10`。输入布局通过
+profile 固定 `ACCELERATOR_HOST_ABI=spmv-input-report-v12` 和
+`PROTOCOL_ABI=spmv-input-windowed-v11`，对应的 `abi/spmv/host.env` 使用 `HOST_FORMAT=12`。输入布局通过
 `SPMV_INPUT_*` 字段传给 host：16 个 A reader、2 个 X reader、1 个 Ctrl reader、16 个消费端、X 双 beat 原子广播、
 Ctrl 广播、16 个 A HBM channel、`0x80000000`/128 MiB 窗口、4 KiB channel 对齐、64/512/4 AXI 参数、
 2 笔 outstanding burst，以及冻结到 `host.env` 的片上 `local_X` 窗口/副本/bank/元素位宽。
 保存构造会把这些输入几何编译进 `spmv-host`；运行时同名 `SPMV_INPUT_*` 环境变量不会覆盖已冻结的 profile。
+
+Cuper A 使用不兼容的 `cuper-a-slot-v3`：`localColumn[63:51] | tag[50:48] |
+row[47:32] | fp32[31:0]`。`row` 是直接 CSR 行标，因而单次编码支持 `0..65535` 行；它不再从
+HBM channel、PE 或 lane 反推。矩阵项仍沿用原 Cuper 的行到 PE 映射和 RAW 排程；排程完成后，预处理器
+在每条 `(batch, PE)` 时间流上用 8 项 LRU 分配 `tag`：驻留的同一行复用原上下文，空闲时取最小编号，
+占满后换出最久未使用的行。同一 `tag` 随后出现不同 `row`，表示旧行片段退休和新行片段开始。
+当前乘法 RTL 不解释累加上下文，`tag` 不参与 X 读取或 FMUL 发射，只随乘法响应透明传递，因此该编码不改变
+现有 Chisel 的控制和时序。固定 beat 产生的空槽不参与上下文分配，仍编码为全零 slot；它会读取 `X[0]`
+并参与 FMUL，其位置仅以 host/report 带外元数据记录。
+`SPMV_CUPER_SLOT_*` 与乘法时序一起冻结，不能用新 host 解读旧构造。
 
 `SpmvInputReportConfig` 独立控制报告行为：`performanceHtml` 生成报告主页，`pipelineHtml` 生成输入与计算
 两个逐周期子页且要求主页已开启。公开 Config 使用 `PerformancePipeline` preset，两项 profile 字段分别为

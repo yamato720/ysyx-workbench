@@ -112,16 +112,22 @@ beat 数、错误和 64-bit lane XOR。单窗口作业按 `Ctrl -> X -> mulEnabl
 
 正式构造严格只有 `elaborate -> verilator -> accelerator-host` 三阶段，资产位于 `abi/rtl`、
 `abi/verilator` 和 `abi/spmv`，不会创建 `abi/nemu`、`abi/softfloat` 或 FPGA 目录。profile 固定
-`ACCELERATOR_HOST_ABI=spmv-input-report-v10`、`PROTOCOL_ABI=spmv-input-windowed-v9`，并通过
-`SPMV_INPUT_*` 冻结输入、消费端、广播和片上 X 几何。`SpmvInputReportConfig` 另以
+`ACCELERATOR_HOST_ABI=spmv-input-report-v12`、`PROTOCOL_ABI=spmv-input-windowed-v11`，并通过
+`SPMV_INPUT_*` 与 `SPMV_CUPER_SLOT_*` 冻结输入、消费端、广播、片上 X 和 A slot 几何。slot 使用
+`localColumn[63:51] | tag[50:48] | row[47:32] | fp32[31:0]`；`row` 是直接 16-bit CSR 行标，
+行到 PE 的原 Cuper 映射和 RAW 排程保持不变。预处理器在排程后的每条 `(batch, PE)` 时间流内，用 8 项
+LRU 把 `tag` 编码为累加上下文；当前乘法 RTL 对该语义透明，任何值都会读 X、进入 FMUL 并随响应返回。
+固定 beat 产生的空槽不参与上下文分配，编码为全零并按普通槽计算。FMUL 响应带回 product、row、tag、
+batch、PE 与 lane，当前输入顶层仅以该流的 checksum 做乘法验收，不包含 L1 或 Y 写回。
+`SpmvInputReportConfig` 另以
 `SPMV_PERFORMANCE_HTML`/`SPMV_PIPELINE_HTML` 控制报告；流水页必须依赖性能主页，公开 Config 默认两项都开。
 host 使用 Cuper A 和 `b.txt` X 驱动 AXI/HBM 事务；reader 提前发出下一笔 AR，Ctrl/X 阶段跨 4 KiB
 burst 时 R 仍逐拍连续。A 阶段每拍接受一个 512-bit Cuper beat，下一拍向 8 条 FP64 IP lane
-并行发射有效 slot；每路 beat 必须完整且只读取一遍。
+并行发射全部物理 slot；每路 beat 必须完整且只读取一遍。
 报告按其他 construction 的规范写入 `runtime/<dataset>/<run>/performance.html` 主页和可选的
 `input-pipeline.html` 和 `timing-pipeline.html` 子页；后者分别展示 A beat 前端 II 与实际 FMUL 活跃拍、
-每拍 lane mask、在飞深度、全 padding 数据空窗和逐 lane req/resp 时序，从而区分控制气泡与编码造成的
-乘法空窗。
+每拍全部 8-lane slot mask、在飞深度和逐 lane req/resp 时序；所有物理 slot 都进入乘法，因此页面只将
+控制间隔视为气泡。
 对 `n512` 这类单窗口矩阵，host 还会把编码 slot 的 FP64 乘积位型 XOR 与硬件 checksum 对照。
 
 独立的 `make -C accelerator-sim/spmv encoding-test`、`cuper-a-test` 和 CPU golden 仍可单独使用，

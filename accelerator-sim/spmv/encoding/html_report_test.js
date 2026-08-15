@@ -24,7 +24,7 @@ const report = JSON.parse(scriptMatch[1].slice(reportStart + "const report=".len
 if (report.vectorReport !== `${report.dataset}-x.html`) {
   throw new Error("Cuper A HTML 报告的 X 页面链接错误");
 }
-const expectedSlots = report.stats.validSlots + report.stats.paddingSlots;
+const expectedSlots = report.stats.matrixSlots + report.stats.zeroFillSlots;
 if (report.slots.length !== expectedSlots) {
   throw new Error(`slot 数量错误: ${report.slots.length} != ${expectedSlots}`);
 }
@@ -45,14 +45,17 @@ if (totalBeats !== report.stats.totalBeats ||
     Math.max(...channelLengths) !== report.stats.maxBeatsPerChannel) {
   throw new Error("channelBatchPointers 与动态 HBM beat 统计不一致");
 }
-if (report.batchStats.length !== report.stats.batchCount ||
+if (report.config.accumulationContexts !== 8 ||
+    report.batchStats.length !== report.stats.batchCount ||
     report.channelStats.length !== report.config.hbmChannels ||
-    report.slots.some((slot) => slot.length !== 17 || !/^0x[0-9a-f]{16}$/.test(slot[7]))) {
+    report.slots.some((slot) => slot.length !== 17 || !/^0x[0-9a-f]{16}$/.test(slot[7]) ||
+      (slot[8] && (slot[11] >= report.config.accumulationContexts ||
+        typeof slot[16] !== "string")))) {
   throw new Error("batch、channel 或 slot 详细数据结构不完整");
 }
 for (const id of [
   "vectorReport", "packageView", "batchGrid", "batchView", "channelGrid", "channelView",
-  "slotMatrix", "matrixMode", "beatPageSize", "paddingPrev", "paddingNext",
+  "slotMatrix", "matrixMode", "beatPageSize", "zeroFillPrev", "zeroFillNext",
   "slotView", "bitfield", "peerLanes",
 ]) {
   if (!html.includes(`id="${id}"`)) {

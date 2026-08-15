@@ -2,6 +2,10 @@
 
 更新日期：2026-08-09
 
+> 归档说明：本文记录的是 `cuper-a-slot-v1` 的论文复现实验及其 ping/pong 行号编码，
+> 不描述当前 `master` 的 `cuper-a-slot-v2`。当前 ABI 使用直接 16-bit CSR 行标和 3-bit tag，
+> 不再采用本文后面提到的 `rowGroup`、parity 或原始行号逆映射。
+
 ## 结论摘要
 
 当前 `Project-XPlus/DLC/Cuper-jacobi-iteration` 已经完成了有价值的功能复现和协议探索，
