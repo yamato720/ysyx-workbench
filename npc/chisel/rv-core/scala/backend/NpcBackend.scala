@@ -894,8 +894,13 @@ class NpcBackend(
     !executeInput.storeEnable && executeState === executeIdle && !serialControlStagePending &&
     !serialResultStagePending && !executeMemoryReg.io.out.valid && !commitRedirectValid
   val directIntegerWriteback = WireDefault(false.B)
+  // 预测正确的控制流不需要在 EX/MEM 中等待。该信号在 MEM/WB 仲裁后才变为真，
+  // 但它只截断当前分支的 EX/MEM 写入，不会让年轻指令跨越分支退休。
+  val directBranchWriteback = WireDefault(false.B)
+  val executeBranchRecovery = WireDefault(false.B)
   executeMemoryReg.io.flush := false.B
-  executeMemoryReg.io.in.valid := !directIntegerWriteback && !executeMemoryRedirectPending &&
+  executeMemoryReg.io.in.valid := !directIntegerWriteback && !directBranchWriteback &&
+    !executeMemoryRedirectPending &&
     (directIntegerExecuteFire || arithmeticResponseAvailable ||
       (if (pipelinedSerialExecute) serialExecuteResultAvailable else executeState === executeDone))
   executeMemoryReg.io.in.bits := executeMemoryInput
@@ -912,7 +917,7 @@ class NpcBackend(
       Mux(executeMemoryReg.io.in.bits.branchTaken === 2.U,
         executeMemoryReg.io.in.bits.jalrTarget, executeMemoryReg.io.in.bits.branchTarget),
       executeMemoryReg.io.in.bits.pc + 4.U)
-    val executeBranchRecovery = executeMemoryReg.io.in.bits.branch &&
+    executeBranchRecovery := executeMemoryReg.io.in.bits.branch &&
       executeActualNextPc =/= executeMemoryReg.io.in.bits.predictedNextPc
     executeRedirectValid := executeMemoryReg.io.in.fire && executeBranchRecovery
     executeRedirectTarget := executeActualNextPc
@@ -1003,6 +1008,15 @@ class NpcBackend(
     // 普通整数项也能同拍接收新项，PipelineRegister 会在该时钟边界保持提交顺序。
     directIntegerWriteback := directIntegerWritebackCandidate && stage.io.drained &&
       !stage.io.response.valid && memoryWritebackReg.io.in.ready
+    // 静态预测与 ALU 实际结果一致时，分支已经没有需要 EX/MEM 保存的恢复信息。
+    // 仍须等 MEM 排空，并在同一 WB 边界提交，故不会让其后的指令越过该分支。
+    val directBranchWritebackCandidate = directIntegerWritebackBypass.B && !twoStageIntegerExecute.B &&
+      pipelineMode && decodeExecuteReg.io.out.valid && executeInput.branch &&
+      !executeInputIsSerial && !executeInputIsArithmetic && executeState === executeIdle &&
+      !serialControlStagePending && !serialResultStagePending && !executeMemoryReg.io.out.valid &&
+      !commitRedirectValid && !executeBranchRecovery && directIntegerExecuteFire
+    directBranchWriteback := directBranchWritebackCandidate && stage.io.drained &&
+      !stage.io.response.valid && memoryWritebackReg.io.in.ready
     // EX/MEM 的反压只取决于该级已保存载荷的去向。派发直通只会在 EX/MEM
     // 为空时发生，不能参与 ready 选择，否则分支恢复会绕回 ID 的派发许可。
     executeMemoryReg.io.out.ready := Mux(nonMemoryWritebackBypass,
@@ -1014,6 +1028,12 @@ class NpcBackend(
     when(directDispatchWriteback) {
       memoryWritebackReg.io.in.valid := true.B
       driveMemoryWritebackPayload(memoryWritebackReg.io.in.bits, directDispatchExecuteMemory, 0.U(cfg.xlen.W))
+      memoryWritebackReg.io.in.bits.perfMemoryCycles := 0.U
+      memoryWritebackReg.io.in.bits.perfMemoryQueueCycles := 0.U
+      memoryWritebackReg.io.in.bits.perfMemoryServiceCycles := 0.U
+    }.elsewhen(directBranchWriteback) {
+      memoryWritebackReg.io.in.valid := true.B
+      driveMemoryWritebackPayload(memoryWritebackReg.io.in.bits, executeMemoryInput, 0.U(cfg.xlen.W))
       memoryWritebackReg.io.in.bits.perfMemoryCycles := 0.U
       memoryWritebackReg.io.in.bits.perfMemoryQueueCycles := 0.U
       memoryWritebackReg.io.in.bits.perfMemoryServiceCycles := 0.U
