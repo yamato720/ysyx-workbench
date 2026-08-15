@@ -783,7 +783,7 @@ class NpcBackend(
       (if (twoStageIntegerExecute) directExecuteInput.perfDecodeCycles
         else performanceCycle - executeOutputRequest.perfDecodeStartCycle), executeOutputRequest.perfDecodeCycles),
     Mux(directIntegerExecuteFire,
-      (if (twoStageIntegerExecute) performanceCycle - directExecuteInput.perfExecuteStartCycle + 1.U
+      (if (twoStageIntegerExecute) performanceCycle - directExecuteInput.perfExecuteStartCycle
         else 1.U(64.W)), performanceCycle - executeOutputRequest.perfExecuteStartCycle),
     arithmeticResponseAvailable,
     arithmeticResponseIllegal,

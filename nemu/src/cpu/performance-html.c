@@ -8,11 +8,11 @@
 #include <unistd.h>
 
 static const char *stage_names[PERFORMANCE_HTML_STAGE_COUNT] = {
-  "IF", "ID", "EX", "MEM", "WB",
+  "IF", "IF/ID", "EX", "MEM", "WB",
 };
 
 static const char *stall_names[PERFORMANCE_HTML_STALL_COUNT] = {
-  "IF AXI", "ID RAW / backpressure", "EX backpressure", "MEM backpressure", "redirect / flush",
+  "IF starvation", "IF/ID backpressure", "EX backpressure", "MEM backpressure", "redirect / flush",
 };
 
 static void write_html_string(FILE *output, const char *value) {
@@ -210,7 +210,7 @@ static int write_document(FILE *output, const PerformanceHtmlReport *report) {
   }
   fputs("</section></div></div><main><section><div class=\"table-tools\"><h2>指令类别时序</h2><div class=\"segments\" role=\"group\" aria-label=\"类别筛选\"><button class=\"active\" data-filter=\"all\">全部</button><button data-filter=\"summary\">汇总</button><button data-filter=\"load\">加载</button><button data-filter=\"store\">存储</button><button data-filter=\"multiply\">M 扩展</button></div></div>", output);
   const bool split_memory = memory_statistics_split(report);
-  fputs("<div class=\"table-wrap\"><table><thead><tr><th>类别</th><th>次数</th><th>IF avg</th><th>ID avg</th><th>EX avg</th>", output);
+  fputs("<div class=\"table-wrap\"><table><thead><tr><th>类别</th><th>次数</th><th>IF avg</th><th>IF/ID avg</th><th>EX avg</th>", output);
   if (split_memory) fputs("<th>QUEUE avg</th>", output);
   fputs("<th>MEM avg</th><th>WB avg</th><th>平均延迟</th><th>最大延迟</th></tr></thead><tbody id=\"timingRows\">", output);
   for (size_t row_index = 0; row_index < report->timing_row_count; row_index++) {
@@ -234,7 +234,7 @@ static int write_document(FILE *output, const PerformanceHtmlReport *report) {
   }
   fputs("</tbody></table></div></section><section><h2>", output);
   fputs(report->latest_samples_are_trace_prefix ? "分类 trace 前缀中的最近样本" : "最近一次分类样本", output);
-  fputs("</h2><div class=\"table-wrap\"><table><thead><tr><th>类别</th><th>次数</th><th>PC</th><th>机器码</th><th>IF</th><th>ID</th><th>EX</th>", output);
+  fputs("</h2><div class=\"table-wrap\"><table><thead><tr><th>类别</th><th>次数</th><th>PC</th><th>机器码</th><th>IF</th><th>IF/ID</th><th>EX</th>", output);
   if (split_memory) fputs("<th>QUEUE</th>", output);
   fputs("<th>MEM</th><th>WB</th><th>延迟</th></tr></thead><tbody>", output);
   for (size_t row_index = 0; row_index < report->timing_row_count; row_index++) {

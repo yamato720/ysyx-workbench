@@ -102,7 +102,7 @@ enum NPCPipelineTimingStage {
 };
 
 enum NPCPipelineStallCounter {
-    NPC_PIPELINE_STALL_FETCH_AXI = 0,
+    NPC_PIPELINE_STALL_FETCH_STARVATION = 0,
     NPC_PIPELINE_STALL_ID,
     NPC_PIPELINE_STALL_EXECUTE,
     NPC_PIPELINE_STALL_MEMORY,
@@ -842,7 +842,7 @@ uint32_t get_npc_pipeline_features() {
 uint64_t get_npc_pipeline_stall_count(uint32_t counter) {
     if (!npc_cpu) return 0;
     switch (counter) {
-        case NPC_PIPELINE_STALL_FETCH_AXI: return NPC_DEBUG_FRONTEND(fetchAxiWaitCycles);
+        case NPC_PIPELINE_STALL_FETCH_STARVATION: return NPC_DEBUG_FRONTEND(fetchStarvationCycles);
         case NPC_PIPELINE_STALL_ID: return NPC_DEBUG_BACKEND(idStallCycles);
         case NPC_PIPELINE_STALL_EXECUTE: return NPC_DEBUG_BACKEND(executeStallCycles);
         case NPC_PIPELINE_STALL_MEMORY: return NPC_DEBUG_BACKEND(memoryStallCycles);

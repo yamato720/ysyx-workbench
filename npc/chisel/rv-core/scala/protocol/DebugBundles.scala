@@ -15,7 +15,7 @@ class NpcFrontendDebugBundle(cfg: ISAConfig) extends Bundle {
   val decodeOpcode = UInt(7.W)
   val decodeFunct3 = UInt(3.W)
   val decodeFunct7 = UInt(7.W)
-  val fetchAxiWaitCycles = UInt(64.W)
+  val fetchStarvationCycles = UInt(64.W)
   val redirectFlushCount = UInt(64.W)
   val fetchBusy = Bool()
   val dispatchBackpressured = Bool()

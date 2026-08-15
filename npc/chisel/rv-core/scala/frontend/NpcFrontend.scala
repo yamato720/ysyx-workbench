@@ -120,8 +120,9 @@ class NpcFrontend(config: NpcConfig) extends Module {
   io.dispatch.bits.instruction := instruction
   io.dispatch.bits.perfFetchStartCycle := fetchBufferOut.bits.perfFetchStartCycle
   io.dispatch.bits.perfFetchCycles := fetchBufferOut.bits.perfFetchCycles
-  // 以 dispatch 握手作为 ID 的真实起点，避免 instruction buffer 的等待被错误画成 ID。
-  io.dispatch.bits.perfDecodeStartCycle := performanceCycle
+  // 保留取指响应进入 IF/ID 的时刻。若缓冲中已有更老指令，这段驻留必须归入
+  // IF/ID，而不能在时间线中成为没有归属的空白周期。
+  io.dispatch.bits.perfDecodeStartCycle := fetchBufferOut.bits.perfDecodeStartCycle
   io.dispatch.bits.immediate := RiscvImmediateGenerator(instruction, cfg.xlen)
   io.dispatch.bits.rd := instruction(11, 7)
   io.dispatch.bits.rs1 := instruction(19, 15)
@@ -155,9 +156,12 @@ class NpcFrontend(config: NpcConfig) extends Module {
   io.dispatch.bits.usesFrs2 := decodeSignals.usesFrs2
   io.dispatch.bits.usesFrs3 := decodeSignals.usesFrs3
 
-  val fetchAxiWaitCycles = RegInit(0.U(64.W))
+  // 有在途取指并不表示前端停顿：两拍取指会持续保持请求队列。只有 IF/ID 两端
+  // 都不能提供指令时，才是会阻止派发的取指缺口。
+  val fetchStarvationCycles = RegInit(0.U(64.W))
+  val fetchStarved = fetchBusy && !fetchBufferIn.valid && !fetchBufferOut.valid
   val redirectFlushCount = RegInit(0.U(64.W))
-  when(fetchBusy) { fetchAxiWaitCycles := fetchAxiWaitCycles + 1.U }
+  when(fetchStarved) { fetchStarvationCycles := fetchStarvationCycles + 1.U }
   when(io.redirectValid) { redirectFlushCount := redirectFlushCount + 1.U }
 
   io.debug.pcWriteEnable := pcWriteEnable
@@ -170,7 +174,7 @@ class NpcFrontend(config: NpcConfig) extends Module {
   io.debug.decodeOpcode := instruction(6, 0)
   io.debug.decodeFunct3 := instruction(14, 12)
   io.debug.decodeFunct7 := instruction(31, 25)
-  io.debug.fetchAxiWaitCycles := fetchAxiWaitCycles
+  io.debug.fetchStarvationCycles := fetchStarvationCycles
   io.debug.redirectFlushCount := redirectFlushCount
   io.debug.fetchBusy := fetchBusy
   io.debug.dispatchBackpressured := fetchBufferOut.valid && !fetchBufferOut.ready

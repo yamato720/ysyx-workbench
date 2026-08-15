@@ -133,7 +133,7 @@ class NpcFpgaSystem(implicit parameters: Parameters) extends Module {
   telemetry.stages(4) := debug.backend.sampleWritebackCycles
   telemetry.completionValid := debug.backend.completionCommitValid
   telemetry.completionCycle := debug.backend.cycleCount
-  telemetry.completionStalls(0) := debug.frontend.fetchAxiWaitCycles
+  telemetry.completionStalls(0) := debug.frontend.fetchStarvationCycles
   telemetry.completionStalls(1) := debug.backend.idStallCycles
   telemetry.completionStalls(2) := debug.backend.executeStallCycles
   telemetry.completionStalls(3) := debug.backend.memoryStallCycles

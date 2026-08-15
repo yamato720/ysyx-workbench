@@ -141,7 +141,7 @@ enum {
 };
 
 enum {
-  NPC_PIPELINE_STALL_FETCH_AXI = 0,
+  NPC_PIPELINE_STALL_FETCH_STARVATION = 0,
   NPC_PIPELINE_STALL_ID,
   NPC_PIPELINE_STALL_EXECUTE,
   NPC_PIPELINE_STALL_MEMORY,
@@ -236,9 +236,12 @@ static void npc_record_pipeline_html(
   memory.service_start_cycle = npc_get_last_timing_memory_service_start();
   memory.queue_cycles = npc_get_last_timing_memory_queue_cycles();
   memory.service_cycles = npc_get_last_timing_memory_service_cycles();
+  // `commitValid` 是提交握手经寄存器导出的观测信号；调用方读到它时，硬件周期
+  // 已经推进了一拍。时间线必须回到实际提交边沿，否则 WB 后会凭空多出一拍。
+  const uint64_t commit_edge = commit_cycle == 0 ? 0 : commit_cycle - 1;
   npc_pipeline_html_record_absolute_with_memory(
       sequence, instruction->pc, instruction->isa.inst, disassembly,
-      commit_cycle, stage, stage_start, &memory);
+      commit_edge, stage, stage_start, &memory);
 #endif
   if (sequence > npc_recorded_trace_sequence)
     npc_recorded_trace_sequence = sequence;
@@ -357,7 +360,7 @@ static void npc_report_progress_watchdog(vaddr_t guest_pc, uint64_t cycles_befor
     uint32_t bit;
     const char *description;
   } reason_names[] = {
-    { NPC_BACKPRESSURE_IF_AXI, "IF AXI request/response pending" },
+    { NPC_BACKPRESSURE_IF_AXI, "IF has no dispatchable instruction" },
     { NPC_BACKPRESSURE_IF_ID, "IF/ID held by ID" },
     { NPC_BACKPRESSURE_ID_EX, "ID/EX held by EX" },
     { NPC_BACKPRESSURE_EX_MEM, "EX/MEM held by MEM" },
@@ -390,9 +393,9 @@ static void npc_report_progress_watchdog(vaddr_t guest_pc, uint64_t cycles_befor
   if (reasons & ~known_mask) {
     printf("    - reserved/future reason bits: 0x%08x\n", reasons & ~known_mask);
   }
-  printf("  cumulative stalls: IF AXI=%" PRIu64 ", ID=%" PRIu64 ", EX=%" PRIu64
+  printf("  cumulative stalls: IF starvation=%" PRIu64 ", ID=%" PRIu64 ", EX=%" PRIu64
          ", MEM=%" PRIu64 ", redirects=%" PRIu64 "\n",
-         npc_get_pipeline_stall_count(NPC_PIPELINE_STALL_FETCH_AXI),
+         npc_get_pipeline_stall_count(NPC_PIPELINE_STALL_FETCH_STARVATION),
          npc_get_pipeline_stall_count(NPC_PIPELINE_STALL_ID),
          npc_get_pipeline_stall_count(NPC_PIPELINE_STALL_EXECUTE),
          npc_get_pipeline_stall_count(NPC_PIPELINE_STALL_MEMORY),
@@ -416,10 +419,10 @@ static void npc_print_pipeline_configuration(const char *mode) {
          mode,
          (features & 0x2u) ? "enabled" : "disabled",
          (features & 0x4u) ? "enabled" : "disabled");
-  printf("[%s] pipeline stalls (cycles/events): IF AXI=%" PRIu64 ", ID RAW/backpressure=%" PRIu64
+  printf("[%s] pipeline stalls (cycles/events): IF starvation=%" PRIu64 ", ID RAW/backpressure=%" PRIu64
          ", EX backpressure=%" PRIu64 ", MEM backpressure=%" PRIu64 ", redirects/flushes=%" PRIu64 "\n",
          mode,
-         npc_get_pipeline_stall_count(NPC_PIPELINE_STALL_FETCH_AXI),
+         npc_get_pipeline_stall_count(NPC_PIPELINE_STALL_FETCH_STARVATION),
          npc_get_pipeline_stall_count(NPC_PIPELINE_STALL_ID),
          npc_get_pipeline_stall_count(NPC_PIPELINE_STALL_EXECUTE),
          npc_get_pipeline_stall_count(NPC_PIPELINE_STALL_MEMORY),
@@ -456,7 +459,7 @@ static void npc_print_pipeline_timing(const char *mode) {
            ? "instruction latency / stage residency (global CPI/IPC is not derived from this table)"
            : "pipeline timing profile (average cycles per committed instruction)");
   printf("+------------+-------+---------+---------+---------+---------+---------+-----------+-----------+\n");
-  printf("| class      | count | IF avg  | ID avg  | EX avg  | MEM avg | WB avg  | %s | %s |\n",
+  printf("| class      | count | IF avg  | IF/ID   | EX avg  | MEM avg | WB avg  | %s | %s |\n",
          npc_pipeline_enabled() ? "latency  " : "total avg",
          npc_pipeline_enabled() ? "max latency" : "max total  ");
   printf("+------------+-------+---------+---------+---------+---------+---------+-----------+-----------+\n");
