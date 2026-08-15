@@ -320,9 +320,12 @@ class PipelinedBackendBehaviorTest extends AnyFlatSpec {
     }
   }
 
-  it should "recover a conditional branch only when its predicted next PC is wrong" in {
-    def observeRedirect(predictedNextPc: BigInt): Option[BigInt] = {
+  it should "write a correctly predicted branch directly to WB and recover only wrong predictions" in {
+    def observeBranch(predictedNextPc: BigInt): (Option[BigInt], Boolean, Option[BigInt], Option[BigInt]) = {
       var observed: Option[BigInt] = None
+      var sawExecuteMemoryFire = false
+      var decodeCycles: Option[BigInt] = None
+      var committedNextPc: Option[BigInt] = None
       simulate(new NpcBackend(oneStageConfig)) { dut =>
         initialize(dut)
         dut.reset.poke(true)
@@ -339,14 +342,29 @@ class PipelinedBackendBehaviorTest extends AnyFlatSpec {
           if (dut.io.redirectValid.peek().litToBoolean) {
             observed = Some(dut.io.redirectTarget.peek().litValue)
           }
+          sawExecuteMemoryFire ||= dut.io.debug.executeMemoryFire.peek().litToBoolean
+          if (dut.io.debug.sampleCommitValid.peek().litToBoolean &&
+              dut.io.debug.sampleCommitPc.peek().litValue == BigInt(0x500)) {
+            decodeCycles = Some(dut.io.debug.sampleDecodeCycles.peek().litValue)
+            committedNextPc = Some(dut.io.debug.sampleCommitNextPc.peek().litValue)
+          }
           dut.clock.step()
         }
       }
-      observed
+      (observed, sawExecuteMemoryFire, decodeCycles, committedNextPc)
     }
 
-    assert(observeRedirect(0x508).isEmpty)
-    assert(observeRedirect(0x504).contains(BigInt(0x508)))
+    val (correctRedirect, correctExecuteMemoryFire, correctDecodeCycles, correctNextPc) = observeBranch(0x508)
+    assert(correctRedirect.isEmpty)
+    assert(!correctExecuteMemoryFire)
+    assert(correctDecodeCycles.contains(BigInt(0)))
+    assert(correctNextPc.contains(BigInt(0x508)))
+
+    val (wrongRedirect, wrongExecuteMemoryFire, wrongDecodeCycles, wrongNextPc) = observeBranch(0x504)
+    assert(wrongRedirect.contains(BigInt(0x508)))
+    assert(wrongExecuteMemoryFire)
+    assert(wrongDecodeCycles.contains(BigInt(1)))
+    assert(wrongNextPc.contains(BigInt(0x508)))
   }
 
   it should "keep a non-memory bypass candidate behind an older outstanding load" in {

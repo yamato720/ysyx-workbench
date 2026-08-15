@@ -491,7 +491,7 @@ class NpcBackend(
   decodeExecuteReg.io.flush := frontendRedirectValid
   // 不能直通的纯整数项照常进入 ID/EX。禁止在此等待旁路条件恢复，否则分支或
   // 访存后的连续热指令会堆积在 IF/ID，反而拉长平均延迟。
-  val directDispatchCanWriteback = directDispatchWritebackCandidate && memoryWritebackReg.io.in.ready
+  val directDispatchCanWriteback = WireDefault(false.B)
   val directDispatchWriteback = io.dispatch.valid && decodeCanIssue && directDispatchCanWriteback
   decodeExecuteReg.io.in.valid := io.dispatch.valid && decodeCanIssue && !directDispatchCanWriteback
   io.dispatch.ready := decodeCanIssue && Mux(directDispatchCanWriteback,
@@ -535,6 +535,25 @@ class NpcBackend(
     alu.io.control := dispatch.aluCtrl
   }
   val directDispatchAluResult = directDispatchIntegerAlu.map(_.io.result).getOrElse(0.U(cfg.xlen.W))
+  val directDispatchBranchTaken = directDispatchIntegerAlu.map(_.io.branchTaken)
+    .getOrElse(NpcBranchResult.notTaken)
+  val directDispatchActualNextPc = Mux(directDispatchBranchTaken =/= NpcBranchResult.notTaken,
+    Mux(directDispatchBranchTaken === NpcBranchResult.rs1Immediate,
+      Cat((directDispatchRs1Data + dispatch.immediate)(cfg.xlen - 1, 1), 0.U(1.W)),
+      dispatch.pc + dispatch.immediate), dispatch.pc + 4.U)
+  // 仅静态预测为跳转的条件分支在派发时直达 WB。调用、返回和预测顺序执行的
+  // 分支仍保留原路径；错误预测则写入 ID/EX，由 EX/MEM 按序冲刷年轻取指。
+  val directDispatchBranchWritebackInstruction = directIntegerWritebackBypass.B &&
+    !twoStageIntegerExecute.B && pipelineMode && dispatch.executionUnit === NpcExecutionUnit.integer &&
+    dispatch.branch && !dispatch.registerWriteEnable && dispatch.predictedNextPc =/= dispatch.pc + 4.U &&
+    !dispatch.loadEnable && !dispatch.storeEnable && !dispatch.csrEnable &&
+    !dispatch.trapEnable && !dispatch.mretEnable && !dispatch.floatingInstruction &&
+    !dispatch.privilegedInstruction
+  val directDispatchBranchWritebackCandidate = directDispatchBranchWritebackInstruction &&
+    directDispatchOlderInstructionsDrained && directDispatchActualNextPc === dispatch.predictedNextPc &&
+    !redirectBarrier
+  directDispatchCanWriteback := (directDispatchWritebackCandidate ||
+    directDispatchBranchWritebackCandidate) && memoryWritebackReg.io.in.ready
   decodeExecuteReg.io.in.bits.immediate := dispatch.immediate
   decodeExecuteReg.io.in.bits.rd := dispatch.rd
   decodeExecuteReg.io.in.bits.rs1 := dispatch.rs1
@@ -985,6 +1004,8 @@ class NpcBackend(
   directDispatchExecuteMemory.perfMemoryStartCycle := performanceCycle
   directDispatchExecuteMemory.perfMemoryQueueStartCycle := performanceCycle
   directDispatchExecuteMemory.aluResult := directDispatchAluResult
+  directDispatchExecuteMemory.branch := dispatch.branch
+  directDispatchExecuteMemory.branchTaken := directDispatchBranchTaken
   directDispatchExecuteMemory.branchTarget := dispatch.pc + dispatch.immediate
   directDispatchExecuteMemory.jalrTarget := Cat(
     (directDispatchRs1Data + dispatch.immediate)(cfg.xlen - 1, 1), 0.U(1.W))
