@@ -371,6 +371,53 @@ class CacheControlBehaviorTest extends AnyFlatSpec {
     }
   }
 
+  it should "drain stale responses before issuing a redirect target on the non-overlap path" in {
+    simulate(new PipelinedIFetchAXIAdapter(
+      addrWidth = 32, dataWidth = 32, outstandingDepth = 4, allowRedirectRequestOverlap = false)) { dut =>
+      dut.io.pc.poke(0x80000000L)
+      dut.io.restartPc.poke(0x80000000L)
+      dut.io.responseReady.poke(true)
+      dut.io.performanceCycle.poke(0)
+      dut.io.predictionValid.poke(false)
+      dut.io.predictionTarget.poke(0)
+      dut.io.flush.poke(false)
+      dut.io.axi.aw.ready.poke(false)
+      dut.io.axi.w.ready.poke(false)
+      dut.io.axi.b.valid.poke(false)
+      dut.io.axi.b.bits.resp.poke(0)
+      dut.io.axi.ar.ready.poke(true)
+      dut.io.axi.r.valid.poke(false)
+      dut.io.axi.r.bits.data.poke(0)
+      dut.io.axi.r.bits.resp.poke(0)
+      dut.reset.poke(true)
+      dut.clock.step(2)
+      dut.reset.poke(false)
+
+      dut.io.axi.ar.valid.expect(true.B)
+      dut.io.axi.ar.bits.addr.expect(0x80000000L.U)
+      dut.clock.step()
+
+      dut.io.restartPc.poke(0x80000100L)
+      dut.io.flush.poke(true)
+      dut.clock.step()
+      dut.io.flush.poke(false)
+
+      // 非重叠路径在旧 epoch 的 R 被消费前不得向目标发 AR，避免取指越过缓冲中的旧项。
+      dut.io.axi.ar.valid.expect(false.B)
+      dut.io.axi.r.bits.data.poke("h11111113".U)
+      dut.io.axi.r.valid.poke(true)
+      dut.io.responseValid.expect(false.B)
+      dut.io.axi.r.ready.expect(true.B)
+      dut.clock.step()
+
+      dut.io.axi.r.valid.poke(false)
+      dut.clock.step()
+      dut.io.axi.ar.valid.expect(true.B)
+      dut.io.axi.ar.bits.addr.expect(0x80000100L.U)
+      dut.clock.step()
+    }
+  }
+
   it should "redirect the next AR to a static prediction while preserving the branch response" in {
     simulate(new PipelinedIFetchAXIAdapter(addrWidth = 32, dataWidth = 32, outstandingDepth = 4)) { dut =>
       dut.io.pc.poke(0x80000200L)
@@ -412,53 +459,4 @@ class CacheControlBehaviorTest extends AnyFlatSpec {
     }
   }
 
-  it should "reuse a learned branch target before that branch response returns" in {
-    simulate(new PipelinedIFetchAXIAdapter(addrWidth = 32, dataWidth = 32, outstandingDepth = 4)) { dut =>
-      dut.io.pc.poke(0x80000200L)
-      dut.io.restartPc.poke(0)
-      dut.io.responseReady.poke(true)
-      dut.io.performanceCycle.poke(0)
-      dut.io.predictionValid.poke(false)
-      dut.io.predictionTarget.poke(0)
-      dut.io.flush.poke(false)
-      dut.io.axi.aw.ready.poke(false)
-      dut.io.axi.w.ready.poke(false)
-      dut.io.axi.b.valid.poke(false)
-      dut.io.axi.b.bits.resp.poke(0)
-      dut.io.axi.ar.ready.poke(true)
-      dut.io.axi.r.valid.poke(false)
-      dut.io.axi.r.bits.data.poke(0)
-      dut.io.axi.r.bits.resp.poke(0)
-      dut.reset.poke(true)
-      dut.clock.step(2)
-      dut.reset.poke(false)
-
-      // 第一次从响应中的静态预测学习分支目标。
-      dut.io.axi.ar.valid.expect(true.B)
-      dut.io.axi.ar.bits.addr.expect(0x80000200L.U)
-      dut.clock.step()
-      dut.io.axi.r.valid.poke(true)
-      dut.io.predictionValid.poke(true)
-      dut.io.predictionTarget.poke(0x80000100L)
-      dut.clock.step()
-      dut.io.axi.r.valid.poke(false)
-      dut.io.predictionValid.poke(false)
-      dut.io.axi.ar.valid.expect(true.B)
-      dut.io.axi.ar.bits.addr.expect(0x80000100L.U)
-      dut.clock.step()
-
-      // 模拟下一次循环抵达同一分支 PC。新 AR 接受后不等待该分支的 R，
-      // 下一笔请求已经通过 BTB 直接指向已学习的目标。
-      dut.io.restartPc.poke(0x80000200L)
-      dut.io.flush.poke(true)
-      dut.clock.step()
-      dut.io.flush.poke(false)
-      dut.io.axi.ar.valid.expect(true.B)
-      dut.io.axi.ar.bits.addr.expect(0x80000200L.U)
-      dut.clock.step()
-      dut.io.axi.ar.valid.expect(true.B)
-      dut.io.axi.ar.bits.addr.expect(0x80000100L.U)
-      dut.clock.step()
-    }
-  }
 }

@@ -31,6 +31,10 @@ class NpcFrontend(config: NpcConfig) extends Module {
   })
 
   val pipelinedFetch = config.cache.accessMode == CacheAccessMode.PipelinedTwoCycle
+  // 标量核没有预测恢复窗口。仅一拍整数流水线可在控制流派发当拍切换取指 epoch，
+  // 因而允许预测目标请求与错误路径响应重叠。
+  val aggressiveControlFlow = config.pipeline.enablePipeline &&
+    config.pipeline.integerExecuteStages == 1
   val fetchBufferIn = Wire(Decoupled(new FetchDecodePayload(cfg)))
   val fetchBufferOut = Wire(Decoupled(new FetchDecodePayload(cfg)))
   if (config.cache.instructionBuffer.enabled) {
@@ -65,15 +69,16 @@ class NpcFrontend(config: NpcConfig) extends Module {
   val fetchPcForPrediction = if (cfg.xlen > axiConfig.addrWidth) {
     Cat(0.U((cfg.xlen - axiConfig.addrWidth).W), fetchResponsePc)
   } else fetchResponsePc
-  val fetchIssuedPredictedNextPc = WireDefault(fetchPcForPrediction + 4.U)
   val fetchImmediate = RiscvImmediateGenerator(fetchInstruction, cfg.xlen)
   val fetchOpcode = fetchInstruction(6, 0)
   val fetchIsJal = fetchOpcode === "b1101111".U
   val fetchIsBackwardBranch = fetchOpcode === "b1100011".U && fetchImmediate(cfg.xlen - 1)
-  // 只预测目标由当前指令字直接给出的控制流；JAL 必跳，条件分支只预测后向边。
-  val fetchStaticPrediction = pipelinedFetch.B && (fetchIsJal || fetchIsBackwardBranch)
+  // 一拍整数流水线在取指响应进入 IF/ID 的当拍即可派发控制流，缓冲中不会留下它的
+  // 年轻顺序项；标量和两拍整数路径仍由后端 redirect 按序恢复。
+  val fetchStaticPrediction = pipelinedFetch.B && aggressiveControlFlow.B &&
+    (fetchIsJal || fetchIsBackwardBranch)
   val fetchPredictedNextPc = Mux(fetchStaticPrediction,
-    fetchPcForPrediction + fetchImmediate, fetchIssuedPredictedNextPc)
+    fetchPcForPrediction + fetchImmediate, fetchPcForPrediction + 4.U)
   val fetchFlush = io.redirectValid || io.fenceHold
   val fetchRestartPc = Mux(io.redirectValid, io.redirectTarget(31, 0), fetchBufferOut.bits.pc + 4.U)
   val pcWriteEnable = WireDefault(false.B)
@@ -91,21 +96,19 @@ class NpcFrontend(config: NpcConfig) extends Module {
   fetchBufferIn.bits.perfDecodeStartCycle := performanceCycle
   if (pipelinedFetch) {
     val instructionFetchUnit = Module(new PipelinedIFetchAXIAdapter(
-      axiConfig.addrWidth, axiConfig.dataWidth, config.cache.pipelinedQueues.fetchDepth))
+      axiConfig.addrWidth, axiConfig.dataWidth, config.cache.pipelinedQueues.fetchDepth,
+      allowRedirectRequestOverlap = aggressiveControlFlow))
     instructionFetchUnit.io.pc := programCounter.io.pc(31, 0)
     instructionFetchUnit.io.restartPc := fetchRestartPc
     instructionFetchUnit.io.performanceCycle := performanceCycle
     instructionFetchUnit.io.predictionValid := fetchBufferIn.fire &&
-      fetchStaticPrediction && fetchPredictedNextPc =/= fetchIssuedPredictedNextPc
+      fetchStaticPrediction && fetchPredictedNextPc =/= fetchPcForPrediction + 4.U
     instructionFetchUnit.io.predictionTarget := fetchPredictedNextPc(axiConfig.addrWidth - 1, 0)
     instructionFetchUnit.io.flush := fetchFlush
     instructionFetchUnit.io.responseReady := fetchBufferIn.ready && !fetchFlush
     instructionFetchUnit.io.axi <> io.axi
     fetchInstruction := instructionFetchUnit.io.inst
     fetchResponsePc := instructionFetchUnit.io.responsePc
-    fetchIssuedPredictedNextPc := (if (cfg.xlen > axiConfig.addrWidth) {
-      Cat(0.U((cfg.xlen - axiConfig.addrWidth).W), instructionFetchUnit.io.responsePredictedNextPc)
-    } else instructionFetchUnit.io.responsePredictedNextPc)
     fetchResponseIssueCycle := instructionFetchUnit.io.responseIssueCycle
     fetchResponseValid := instructionFetchUnit.io.responseValid
     fetchBusy := instructionFetchUnit.io.busy

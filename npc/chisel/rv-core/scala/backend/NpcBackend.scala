@@ -868,18 +868,13 @@ class NpcBackend(
       (if (pipelinedSerialExecute) serialExecuteResultAvailable else executeState === executeDone))
   executeMemoryReg.io.in.bits := executeMemoryInput
   if (twoStageIntegerExecute) {
-    // EX1 的 ALU 比较和分支目标已在 EX/MEM 锁存。实际 next-PC 与预测不同才发起
-    // redirect；这也能从 FENCE.I 后同一地址换成普通指令的旧 BTB 预测中恢复。
-    val executeActualNextPc = Mux(executeMemoryReg.io.out.bits.branchTaken =/= 0.U,
-      Mux(executeMemoryReg.io.out.bits.branchTaken === 2.U,
-        executeMemoryReg.io.out.bits.jalrTarget, executeMemoryReg.io.out.bits.branchTarget),
-      executeMemoryReg.io.out.bits.pc + 4.U)
+    // 两级整数路径不做前端预测。EX/MEM 中的已决控制流只有实际跳转时才恢复，
+    // 保持该路径原有的 IntegerAlu -> EX/MEM -> ProgramCounter 时序边界。
     executeMemoryRedirectPending := executeMemoryReg.io.out.valid &&
-      (executeMemoryReg.io.out.bits.branch ||
-        executeMemoryReg.io.out.bits.predictedNextPc =/= executeMemoryReg.io.out.bits.pc + 4.U) &&
-      executeActualNextPc =/= executeMemoryReg.io.out.bits.predictedNextPc
+      executeMemoryReg.io.out.bits.branch && executeMemoryReg.io.out.bits.branchTaken =/= 0.U
     executeRedirectValid := executeMemoryReg.io.out.fire && executeMemoryRedirectPending
-    executeRedirectTarget := executeActualNextPc
+    executeRedirectTarget := Mux(executeMemoryReg.io.out.bits.branchTaken === 2.U,
+      executeMemoryReg.io.out.bits.jalrTarget, executeMemoryReg.io.out.bits.branchTarget)
   } else {
     val executeActualNextPc = Mux(executeMemoryReg.io.in.bits.branchTaken =/= 0.U,
       Mux(executeMemoryReg.io.in.bits.branchTaken === 2.U,
@@ -887,10 +882,7 @@ class NpcBackend(
       executeMemoryReg.io.in.bits.pc + 4.U)
     val executeBranchRecovery = executeMemoryReg.io.in.bits.branch &&
       executeActualNextPc =/= executeMemoryReg.io.in.bits.predictedNextPc
-    val executeStaleBtbRecovery = !executeMemoryReg.io.in.bits.branch &&
-      executeMemoryReg.io.in.bits.predictedNextPc =/= executeMemoryReg.io.in.bits.pc + 4.U
-    executeRedirectValid := executeMemoryReg.io.in.fire &&
-      (executeBranchRecovery || executeStaleBtbRecovery)
+    executeRedirectValid := executeMemoryReg.io.in.fire && executeBranchRecovery
     executeRedirectTarget := executeActualNextPc
   }
 

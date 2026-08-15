@@ -157,7 +157,6 @@ class IFetchAXIAdapter(
 /** 流水取指在 AR 发射时保存的 PC/epoch。 */
 class PipelinedFetchRequest(addrWidth: Int) extends Bundle {
   val pc = UInt(addrWidth.W)
-  val predictedNextPc = UInt(addrWidth.W)
   val epoch = Bool()
   val issueCycle = UInt(64.W)
 }
@@ -172,7 +171,8 @@ class PipelinedFetchRequest(addrWidth: Int) extends Bundle {
 class PipelinedIFetchAXIAdapter(
   addrWidth: Int = 32,
   dataWidth: Int = 64,
-  outstandingDepth: Int = 4
+  outstandingDepth: Int = 4,
+  allowRedirectRequestOverlap: Boolean = true
 ) extends Module {
   require(dataWidth == 32 || dataWidth == 64,
     s"PipelinedIFetch only supports RV32/RV64 bus widths, got $dataWidth")
@@ -184,7 +184,6 @@ class PipelinedIFetchAXIAdapter(
     val restartPc = Input(UInt(addrWidth.W))
     val inst = Output(UInt(32.W))
     val responsePc = Output(UInt(addrWidth.W))
-    val responsePredictedNextPc = Output(UInt(addrWidth.W))
     val responseIssueCycle = Output(UInt(64.W))
     val responseValid = Output(Bool())
     val responseReady = Input(Bool())
@@ -202,11 +201,7 @@ class PipelinedIFetchAXIAdapter(
   val currentEpoch = RegInit(false.B)
   val nextPc = RegInit(0.U(addrWidth.W))
   val initialized = RegInit(false.B)
-  private val btbEntries = 16
-  private val btbIndexBits = log2Ceil(btbEntries)
-  val btbValid = RegInit(VecInit(Seq.fill(btbEntries)(false.B)))
-  val btbPc = Reg(Vec(btbEntries, UInt(addrWidth.W)))
-  val btbTarget = Reg(Vec(btbEntries, UInt(addrWidth.W)))
+  val drainingOld = RegInit(false.B)
   val faultValid = RegInit(false.B)
   val faultAddr = RegInit(0.U(addrWidth.W))
   val faultReason = RegInit(0.U(3.W))
@@ -215,11 +210,10 @@ class PipelinedIFetchAXIAdapter(
   def beatAddr(address: UInt): UInt = Cat(address(addrWidth - 1, beatOffsetBits), 0.U(beatOffsetBits.W))
 
   val issuePc = Mux(initialized, nextPc, io.pc)
-  val issueBtbIndex = issuePc(btbIndexBits + 1, 2)
-  val issueBtbHit = btbValid(issueBtbIndex) && btbPc(issueBtbIndex) === issuePc
-  val issuePredictedNextPc = Mux(issueBtbHit, btbTarget(issueBtbIndex), issuePc + 4.U)
+  val issueNextPc = issuePc + 4.U
   val issueMisaligned = issuePc(1, 0).orR
-  val issueAllowed = !io.flush && !io.predictionValid && !faultValid && !issueMisaligned
+  val issueAllowed = (allowRedirectRequestOverlap.B || !drainingOld) && !io.flush &&
+    !io.predictionValid && !faultValid && !issueMisaligned
   io.axi.aw.valid := false.B
   io.axi.aw.bits.addr := 0.U
   io.axi.aw.bits.size := 0.U
@@ -234,26 +228,25 @@ class PipelinedIFetchAXIAdapter(
   io.axi.ar.bits.prot := "b100".U
   requests.io.enq.valid := io.axi.ar.fire
   requests.io.enq.bits.pc := issuePc
-  requests.io.enq.bits.predictedNextPc := issuePredictedNextPc
   requests.io.enq.bits.epoch := currentEpoch
   requests.io.enq.bits.issueCycle := io.performanceCycle
 
   val responseRequest = requests.io.deq.bits
-  val responseEpochMatches = responseRequest.epoch === currentEpoch
+  val responseEpochMatches = responseRequest.epoch === currentEpoch &&
+    (allowRedirectRequestOverlap.B || !drainingOld)
   val responseOk = io.axi.r.bits.resp === AxiLiteResp.OKAY
   val responseWord = (io.axi.r.bits.data >>
     (responseRequest.pc(beatOffsetBits - 1, 0) << 3))(31, 0)
   io.responsePc := responseRequest.pc
-  io.responsePredictedNextPc := responseRequest.predictedNextPc
   io.responseIssueCycle := responseRequest.issueCycle
   io.inst := responseWord
   io.responseValid := io.axi.r.valid && requests.io.deq.valid && responseEpochMatches && responseOk
   io.axi.r.ready := requests.io.deq.valid &&
-    (!responseEpochMatches || !responseOk || io.responseReady)
+    (drainingOld || !responseEpochMatches || !responseOk || io.responseReady)
   requests.io.deq.ready := io.axi.r.fire
 
   when(io.axi.ar.fire) {
-    nextPc := issuePredictedNextPc
+    nextPc := issueNextPc
     initialized := true.B
   }
   when(!initialized && issueMisaligned && !io.flush) {
@@ -261,18 +254,15 @@ class PipelinedIFetchAXIAdapter(
     faultAddr := issuePc
     faultReason := MemoryFaultReason.misaligned
   }
-  when(io.axi.r.fire && responseEpochMatches && !responseOk) {
+  when(io.axi.r.fire && (!drainingOld || allowRedirectRequestOverlap.B) &&
+    responseEpochMatches && !responseOk) {
     faultValid := true.B
     faultAddr := responseRequest.pc
     faultReason := MemoryFaultReason.readResponse
   }
-  // 预测命中的控制流不会等待 EX 的重复 redirect。目标请求仍排在已发旧请求之后，
-  // 旧 epoch 的响应在上面的 responseEpochMatches 处被消耗但不会进入 IF/ID。
+  // 预测命中的控制流不会等待 EX 的重复 redirect。非重叠路径则先清空旧 epoch，
+  // 使标量核不会在后端恢复前保留跨越 redirect 的错误路径请求。
   when(io.predictionValid) {
-    val responseBtbIndex = responseRequest.pc(btbIndexBits + 1, 2)
-    btbValid(responseBtbIndex) := true.B
-    btbPc(responseBtbIndex) := responseRequest.pc
-    btbTarget(responseBtbIndex) := io.predictionTarget
     currentEpoch := !currentEpoch
     nextPc := io.predictionTarget
     initialized := true.B
@@ -281,10 +271,13 @@ class PipelinedIFetchAXIAdapter(
     currentEpoch := !currentEpoch
     nextPc := io.restartPc
     initialized := true.B
+    drainingOld := !allowRedirectRequestOverlap.B && (requests.io.deq.valid || io.axi.r.valid)
     faultValid := false.B
+  }.elsewhen(drainingOld && !requests.io.deq.valid) {
+    drainingOld := false.B
   }
 
-  io.busy := requests.io.deq.valid || io.axi.ar.valid || faultValid
+  io.busy := drainingOld || requests.io.deq.valid || io.axi.ar.valid || faultValid
   io.fault.valid := faultValid
   io.fault.addr := faultAddr
   io.fault.write := false.B
