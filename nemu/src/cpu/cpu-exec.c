@@ -24,6 +24,7 @@
 #include <unistd.h>
 #ifdef CONFIG_NPC_PERFORMANCE_HTML
 #include <pipeline-html.h>
+#include <branch-html.h>
 #endif
 
 #ifdef NPC
@@ -46,6 +47,10 @@ extern uint32_t npc_get_frontend_instruction();
 extern int npc_is_finished();
 extern uint64_t npc_get_reg(int idx);
 extern uint64_t npc_get_last_store_sequence(void);
+// 旧构造的 NPC glue 可能尚未导出分支遥测；弱符号让 host-build 仍能生成
+// 明确标记为“不可观测”的空报告，等硬件构造重建后再启用完整事件数据。
+extern uint64_t npc_get_last_commit_predicted_next_pc(void) __attribute__((weak));
+extern int npc_branch_prediction_enabled(void) __attribute__((weak));
 extern uint64_t npc_get_last_store_address(void);
 extern uint64_t npc_get_last_store_data(void);
 extern uint32_t npc_get_last_store_strobe(void);
@@ -226,6 +231,14 @@ static void npc_record_pipeline_html(
   void disassemble(char *str, int size, uint64_t pc, uint8_t *code, int nbyte);
   disassemble(disassembly, sizeof(disassembly), instruction->pc,
               (uint8_t *)&instruction->isa.inst, instruction_length);
+#ifndef NPC_FPGA_REMOTE
+  if (npc_get_last_commit_predicted_next_pc != NULL &&
+      npc_branch_prediction_enabled != NULL) {
+  npc_branch_html_record(sequence, instruction->pc, instruction->isa.inst,
+                         disassembly, npc_get_last_commit_predicted_next_pc(),
+                         instruction->dnpc, npc_branch_prediction_enabled() != 0);
+  }
+#endif
 #ifdef NPC_FPGA_REMOTE
   npc_pipeline_html_record(sequence, instruction->pc, instruction->isa.inst,
                            disassembly, commit_cycle, stage);
@@ -636,6 +649,19 @@ static void npc_finish_performance_html(void) {
   if (npc_performance_html_finished) return;
   npc_performance_html_finished = true;
 
+  npc_branch_html_set_mode(
+#ifdef NPC_FPGA_REMOTE
+      false,
+      false
+#else
+      npc_get_last_commit_predicted_next_pc != NULL &&
+          npc_branch_prediction_enabled != NULL,
+      npc_get_last_commit_predicted_next_pc != NULL &&
+          npc_branch_prediction_enabled != NULL && npc_branch_prediction_enabled() != 0
+#endif
+  );
+  npc_branch_html_finalize();
+
 #ifdef NPC_FPGA_REMOTE
   npc_import_fpga_trace();
 #endif
@@ -753,6 +779,7 @@ static void npc_finish_performance_html(void) {
   char *path = malloc(path_size);
   char *instructions_path = malloc(strlen(base) + sizeof("/instructions.html"));
   char *pipeline_path = malloc(strlen(base) + sizeof("/pipeline.html"));
+  char *branch_path = malloc(strlen(base) + sizeof("/branch.html"));
   char *cache_path = NULL;
 #ifdef CONFIG_NPC_CACHE_HTML
   bool cache_enabled = false;
@@ -761,7 +788,7 @@ static void npc_finish_performance_html(void) {
   }
   if (cache_enabled) cache_path = malloc(strlen(base) + sizeof("/cache.html"));
 #endif
-  if (path == NULL || instructions_path == NULL || pipeline_path == NULL ||
+  if (path == NULL || instructions_path == NULL || pipeline_path == NULL || branch_path == NULL ||
 #ifdef CONFIG_NPC_CACHE_HTML
       (cache_enabled && cache_path == NULL)
 #else
@@ -772,16 +799,20 @@ static void npc_finish_performance_html(void) {
     free(path);
     free(instructions_path);
     free(pipeline_path);
+    free(branch_path);
     free(cache_path);
     return;
   }
   snprintf(path, path_size, "%s/performance.html", base);
   snprintf(instructions_path, strlen(base) + sizeof("/instructions.html"), "%s/instructions.html", base);
   snprintf(pipeline_path, strlen(base) + sizeof("/pipeline.html"), "%s/pipeline.html", base);
+  snprintf(branch_path, strlen(base) + sizeof("/branch.html"), "%s/branch.html", base);
   report.instruction_html_available = access(instructions_path, R_OK) == 0;
   report.pipeline_html_available = access(pipeline_path, R_OK) == 0;
+  report.branch_html_available = access(branch_path, R_OK) == 0;
   free(instructions_path);
   free(pipeline_path);
+  free(branch_path);
 
 #ifdef CONFIG_NPC_CACHE_HTML
   if (cache_path != NULL) {

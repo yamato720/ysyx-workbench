@@ -365,11 +365,12 @@ class PipelinedBackendBehaviorTest extends AnyFlatSpec {
   }
 
   it should "commit a correctly predicted branch through EX/MEM and recover only wrong predictions" in {
-    def observeBranch(predictedNextPc: BigInt): (Option[BigInt], Boolean, Option[BigInt], Option[BigInt]) = {
+    def observeBranch(predictedNextPc: BigInt): (Option[BigInt], Boolean, Option[BigInt], Option[BigInt], Option[BigInt]) = {
       var observed: Option[BigInt] = None
       var sawExecuteMemoryFire = false
       var decodeCycles: Option[BigInt] = None
       var committedNextPc: Option[BigInt] = None
+      var committedPredictedNextPc: Option[BigInt] = None
       simulate(new NpcBackend(oneStageConfig)) { dut =>
         initialize(dut)
         dut.reset.poke(true)
@@ -387,28 +388,33 @@ class PipelinedBackendBehaviorTest extends AnyFlatSpec {
             observed = Some(dut.io.redirectTarget.peek().litValue)
           }
           sawExecuteMemoryFire ||= dut.io.debug.executeMemoryFire.peek().litToBoolean
-          if (dut.io.debug.sampleCommitValid.peek().litToBoolean &&
-              dut.io.debug.sampleCommitPc.peek().litValue == BigInt(0x500)) {
-            decodeCycles = Some(dut.io.debug.sampleDecodeCycles.peek().litValue)
-            committedNextPc = Some(dut.io.debug.sampleCommitNextPc.peek().litValue)
+          if (dut.io.debug.commitValid.peek().litToBoolean &&
+              dut.io.debug.commitPc.peek().litValue == BigInt(0x500)) {
+            decodeCycles = Some(dut.io.debug.commitDecodeCycles.peek().litValue)
+            committedNextPc = Some(dut.io.debug.commitNextPc.peek().litValue)
+            committedPredictedNextPc = Some(dut.io.debug.commitPredictedNextPc.peek().litValue)
           }
           dut.clock.step()
         }
       }
-      (observed, sawExecuteMemoryFire, decodeCycles, committedNextPc)
+      (observed, sawExecuteMemoryFire, decodeCycles, committedNextPc, committedPredictedNextPc)
     }
 
-    val (correctRedirect, correctExecuteMemoryFire, correctDecodeCycles, correctNextPc) = observeBranch(0x508)
+    val (correctRedirect, correctExecuteMemoryFire, correctDecodeCycles, correctNextPc,
+      correctPredictedNextPc) = observeBranch(0x508)
     assert(correctRedirect.isEmpty)
     assert(correctExecuteMemoryFire)
     assert(correctDecodeCycles.contains(BigInt(1)))
     assert(correctNextPc.contains(BigInt(0x508)))
+    assert(correctPredictedNextPc.contains(BigInt(0x508)))
 
-    val (wrongRedirect, wrongExecuteMemoryFire, wrongDecodeCycles, wrongNextPc) = observeBranch(0x504)
+    val (wrongRedirect, wrongExecuteMemoryFire, wrongDecodeCycles, wrongNextPc,
+      wrongPredictedNextPc) = observeBranch(0x504)
     assert(wrongRedirect.contains(BigInt(0x508)))
     assert(wrongExecuteMemoryFire)
     assert(wrongDecodeCycles.contains(BigInt(1)))
     assert(wrongNextPc.contains(BigInt(0x508)))
+    assert(wrongPredictedNextPc.contains(BigInt(0x504)))
   }
 
   it should "keep a non-memory bypass candidate behind an older outstanding load" in {

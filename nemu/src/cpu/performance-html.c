@@ -144,7 +144,10 @@ static int write_document(FILE *output, const PerformanceHtmlReport *report) {
   }
   fputs("</div></section>", output);
   if (report->cache_html_available) {
-    fputs("<section class=\"actions\"><a href=\"cache.html\" target=\"_blank\" rel=\"noopener\">查看缓存报告</a></section>", output);
+    fputs("<section class=\"actions\"><a href=\"cache.html\">查看缓存报告</a></section>", output);
+  }
+  if (report->branch_html_available) {
+    fputs("<section class=\"actions\"><a href=\"branch.html\">查看分支预测报告</a></section>", output);
   }
   if (!report->monitoring_available) {
     fputs("<section><h2>硬件监测</h2><p class=\"muted\">当前 FPGA xclbin 未启用 U55C v13 performance-monitor；流水停顿、分类时序和逐指令报告不可用。请使用 U55cRv64Npc300MHzPerformanceMonitorFpgaConfig 重建硬件。</p></section></main><footer>当前页面仅显示 mailbox 可读取的执行计数；未生成零值流水统计。</footer></body></html>", output);
@@ -267,10 +270,10 @@ static int write_document(FILE *output, const PerformanceHtmlReport *report) {
   if (report->instruction_html_available || report->pipeline_html_available) {
     fputs("<div class=\"actions\">", output);
     if (report->instruction_html_available) {
-      fputs("<a href=\"instructions.html\" target=\"_blank\" rel=\"noopener\">查看逐指令明细</a>", output);
+      fputs("<a href=\"instructions.html\">查看逐指令明细</a>", output);
     }
     if (report->pipeline_html_available) {
-      fputs("<a href=\"pipeline.html\" target=\"_blank\" rel=\"noopener\">查看流水线时间线</a>", output);
+      fputs("<a href=\"pipeline.html\">查看流水线时间线</a>", output);
     }
     fputs("</div>", output);
   }

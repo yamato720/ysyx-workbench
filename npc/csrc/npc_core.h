@@ -49,6 +49,8 @@ uint64_t npc_get_cycle_count();
 uint64_t npc_get_commit_count();
 uint64_t npc_get_cache_counter(uint32_t cache, uint32_t counter);
 uint64_t npc_get_last_store_sequence();
+uint64_t npc_get_last_commit_predicted_next_pc();
+int npc_branch_prediction_enabled();
 uint64_t npc_get_last_store_address();
 uint64_t npc_get_last_store_data();
 uint32_t npc_get_last_store_strobe();

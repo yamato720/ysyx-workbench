@@ -206,6 +206,7 @@ class ExecuteMemoryPayload(cfg: ISAConfig) extends Bundle {
 class MemoryWritebackPayload(cfg: ISAConfig) extends Bundle {
   val pc = UInt(cfg.xlen.W)
   val instruction = UInt(32.W)
+  val predictedNextPc = UInt(cfg.xlen.W)
   val perfFetchStartCycle = UInt(64.W)
   val perfFetchCycles = UInt(64.W)
   val perfDecodeStartCycle = UInt(64.W)

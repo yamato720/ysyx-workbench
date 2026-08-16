@@ -232,6 +232,7 @@ class NpcFrontend(config: NpcConfig) extends Module {
   io.debug.decodeFunct7 := instruction(31, 25)
   io.debug.fetchStarvationCycles := fetchStarvationCycles
   io.debug.redirectFlushCount := redirectFlushCount
+  io.debug.branchPredictionEnabled := dynamicBranchPrediction.B
   io.debug.fetchBusy := fetchBusy
   io.debug.dispatchBackpressured := fetchBufferOut.valid && !fetchBufferOut.ready
 }

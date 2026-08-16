@@ -770,6 +770,7 @@ class NpcBackend(
     val branchNextPc = Mux(src.branchTaken === 2.U, src.jalrTarget, src.branchTarget)
     dst.pc := src.pc
     dst.instruction := src.instruction
+    dst.predictedNextPc := src.predictedNextPc
     dst.perfFetchStartCycle := src.perfFetchStartCycle
     dst.perfFetchCycles := src.perfFetchCycles
     dst.perfDecodeStartCycle := src.perfDecodeStartCycle
@@ -1097,6 +1098,8 @@ class NpcBackend(
   io.debug.commitTrapEpc := commitTrapEpcDebug
   io.debug.commitPc := commitPcDebug
   io.debug.commitInstruction := commitInstDebug
+  io.debug.commitPredictedNextPc := RegEnable(
+    memoryWritebackReg.io.out.bits.predictedNextPc, 0.U(cfg.xlen.W), commitFire)
   io.debug.commitNextPc := commitNextPcDebug
   io.debug.commitStoreValid := commitStoreValidDebug
   io.debug.commitStoreAddress := commitStoreAddressDebug

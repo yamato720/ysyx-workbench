@@ -46,6 +46,7 @@ static uint32_t last_store_strobe = 0;
 static uint64_t last_pc = 0;
 static uint64_t last_commit_pc = 0;
 static uint64_t last_commit_next_pc = 0;
+static uint64_t last_commit_predicted_next_pc = 0;
 static uint32_t last_commit_inst = 0;
 #if defined(NPC_VCD_TRACE)
 static unsigned int trace_file_sequence = 0;
@@ -472,6 +473,7 @@ void init_npc() {
     last_pc = 0;
     last_commit_pc = 0;
     last_commit_next_pc = 0;
+    last_commit_predicted_next_pc = 0;
     last_commit_inst = 0;
     last_commit_timing = {};
     last_commit_timing_class = NPC_TIMING_NORMAL;
@@ -574,6 +576,7 @@ static bool run_one_cycle() {
     if (committed) {
         last_commit_pc = NPC_DEBUG_BACKEND(commitPc);
         last_commit_next_pc = NPC_DEBUG_BACKEND(commitNextPc);
+        last_commit_predicted_next_pc = NPC_DEBUG_BACKEND(commitPredictedNextPc);
         last_commit_inst = NPC_DEBUG_BACKEND(commitInstruction);
         record_committed_pipeline_timing(last_commit_pc, last_commit_inst);
         inst_count++;
@@ -1047,6 +1050,10 @@ extern "C" {
     }
 
     uint64_t npc_get_last_store_sequence() { return last_store_sequence; }
+    uint64_t npc_get_last_commit_predicted_next_pc() { return last_commit_predicted_next_pc; }
+    int npc_branch_prediction_enabled() {
+        return npc_cpu != nullptr && NPC_DEBUG_FRONTEND(branchPredictionEnabled) ? 1 : 0;
+    }
     uint64_t npc_get_last_store_address() { return last_store_address; }
     uint64_t npc_get_last_store_data() { return last_store_data; }
     uint32_t npc_get_last_store_strobe() { return last_store_strobe; }

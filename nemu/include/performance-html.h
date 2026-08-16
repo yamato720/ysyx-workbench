@@ -85,6 +85,7 @@ typedef struct {
   bool instruction_html_available;
   bool cache_html_available;
   bool pipeline_html_available;
+  bool branch_html_available;
 } PerformanceHtmlReport;
 
 int performance_html_write(const char *output_path, const PerformanceHtmlReport *report);

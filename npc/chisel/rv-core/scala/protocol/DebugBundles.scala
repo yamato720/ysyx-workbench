@@ -17,6 +17,8 @@ class NpcFrontendDebugBundle(cfg: ISAConfig) extends Bundle {
   val decodeFunct7 = UInt(7.W)
   val fetchStarvationCycles = UInt(64.W)
   val redirectFlushCount = UInt(64.W)
+  // 仅表示当前构造是否启用了可观测的动态预测路径；静态 JAL/后向分支预测不计入此标志。
+  val branchPredictionEnabled = Bool()
   val fetchBusy = Bool()
   val dispatchBackpressured = Bool()
 }
@@ -42,6 +44,7 @@ class NpcBackendDebugBundle(cfg: ISAConfig) extends Bundle {
 
   val commitPc = UInt(cfg.xlen.W)
   val commitInstruction = UInt(32.W)
+  val commitPredictedNextPc = UInt(cfg.xlen.W)
   val commitNextPc = UInt(cfg.xlen.W)
   val commitStoreValid = Bool()
   val commitStoreAddress = UInt(cfg.xlen.W)

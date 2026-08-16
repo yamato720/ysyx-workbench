@@ -474,6 +474,7 @@ private class LegacyPipelinedMemoryStage(
     val branchNextPc = Mux(order.branchTaken === 2.U, order.jalrTarget, order.branchTarget)
     dst.pc := order.pc
     dst.instruction := order.instruction
+    dst.predictedNextPc := order.predictedNextPc
     dst.perfFetchStartCycle := order.perfFetchStartCycle
     dst.perfFetchCycles := order.perfFetchCycles
     dst.perfDecodeStartCycle := order.perfDecodeStartCycle
@@ -767,6 +768,7 @@ private class OutstandingPipelinedMemoryStage(
   io.response.bits := 0.U.asTypeOf(new MemoryWritebackPayload(cfg))
   io.response.bits.pc := responsePayload.pc
   io.response.bits.instruction := responsePayload.instruction
+  io.response.bits.predictedNextPc := responsePayload.predictedNextPc
   io.response.bits.perfFetchStartCycle := responsePayload.perfFetchStartCycle
   io.response.bits.perfFetchCycles := responsePayload.perfFetchCycles
   io.response.bits.perfDecodeStartCycle := responsePayload.perfDecodeStartCycle
