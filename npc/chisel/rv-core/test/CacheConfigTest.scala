@@ -129,7 +129,7 @@ class CacheConfigTest extends AnyFlatSpec {
       assert(profile.pipeline.separateSerialIntegerAlu)
       assert(!profile.pipeline.serialExecuteResultForwarding)
       assert(profile.pipeline.directIntegerWritebackBypass)
-      assert(profile.pipeline.branchPredictor)
+      assert(profile.branchPredictor.enabled)
       assert(profile.pipeline.forwarding.enableOutstandingCompletionForwarding)
     }
     assert(NpcConfig().validated.cache.accessMode == CacheAccessMode.Blocking)

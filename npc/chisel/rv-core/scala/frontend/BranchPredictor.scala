@@ -6,11 +6,12 @@ import chisel3.util._
 /**
   * 小型条件分支方向预测器。
   *
-  * 首次遇到某条件分支 PC 时沿用静态后向预测；解析后的结果写入两位饱和计数器。JALR
+  * 首次遇到某条件分支 PC 时沿用 BTFNT（Backward Taken, Forward Not Taken：后向目标
+  * 预测跳转，前向目标预测不跳转）；解析后的结果写入两位饱和计数器。JALR
   * 则只在同 PC 已解析过目标时预测，避免未经训练的间接跳转越过顺序流。预测查询与解析
   * 更新可在同一周期发生，查询使用时钟边界前的状态，新的方向和目标从下一次取指起生效。
   */
-class BranchPredictor(addrWidth: Int, entries: Int = 32, returnEntries: Int = 8) extends Module {
+class BranchPredictor(addrWidth: Int, entries: Int, returnEntries: Int) extends Module {
   require(entries > 0 && (entries & (entries - 1)) == 0,
     s"branch predictor entries must be a positive power of two, got $entries")
 

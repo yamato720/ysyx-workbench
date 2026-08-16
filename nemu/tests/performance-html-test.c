@@ -66,7 +66,7 @@ int main(void) {
     .pipeline_features = 7,
     .stalls = {3, 5, 7, 11, 13},
     .cache_statistics_available = true,
-    .cache = {{80, 20, 20, 0, 3}, {45, 5, 5, 2, 1}, {30, 10, 10, 1, 2}},
+    .cache = {{80, 20, 20, 0, 3}, {45, 25, 5, 2, 1}, {30, 10, 7, 1, 2}},
     .cache_configuration_available = true,
     .cache_configuration = {
       {
@@ -121,12 +121,11 @@ int main(void) {
   assert(strstr(content, "端到端延迟") != NULL);
   assert(strstr(content, "缓存统计") == NULL);
   assert(strstr(content, "缓存配置") == NULL);
-  assert(strstr(content, "href=\"cache.html\" target=\"_blank\"") != NULL);
+  assert(strstr(content, "href=\"cache.html\"") != NULL);
   assert(strstr(content, "data-filter=\"load\"") != NULL);
   assert(strstr(content, "0x0000000080000010") != NULL);
-  assert(strstr(content, "href=\"instructions.html\" target=\"_blank\"") != NULL);
+  assert(strstr(content, "href=\"instructions.html\"") != NULL);
   assert(strstr(content, "href=\"pipeline.html\"") != NULL);
-  assert(strstr(content, "rel=\"noopener\"") != NULL);
   free(content);
 
   report.memory_statistics_mode = "ServiceOnly";
@@ -141,15 +140,21 @@ int main(void) {
   assert(performance_html_write_cache(cache_path, &report) == 0);
   content = read_file(cache_path);
   assert(strstr(content, "NEMU 缓存报告") != NULL);
-  assert(strstr(content, "缓存配置") != NULL);
-  assert(strstr(content, "缓存统计") != NULL);
+  assert(strstr(content, "缓存配置") == NULL);
+  assert(strstr(content, "缓存统计") == NULL);
+  assert(strstr(content, "L1 I$") != NULL);
+  assert(strstr(content, "L1 D$") != NULL);
   assert(strstr(content, "128 x 2") != NULL);
   assert(strstr(content, "Tree-PLRU") != NULL);
   assert(strstr(content, "write-back") != NULL);
   assert(strstr(content, "顺序取指缓冲：启用，4 entries") != NULL);
-  assert(strstr(content, "I$ 命中率") != NULL);
+  assert(strstr(content, "缓存命中率") != NULL);
   assert(strstr(content, ">80.00%<") != NULL);
-  assert(strstr(content, "L2$ 命中率") != NULL);
+  assert(strstr(content, ">90.00%<") != NULL);
+  assert(strstr(content, "旁路/不分配") != NULL);
+  assert(strstr(content, "本层命中率") != NULL);
+  assert(strstr(content, ">75.00%<") != NULL);
+  assert(strstr(content, "L2$") != NULL);
   assert(strstr(content, "512 x 8") != NULL);
   assert(strstr(content, "href=\"performance.html\"") != NULL);
   free(content);

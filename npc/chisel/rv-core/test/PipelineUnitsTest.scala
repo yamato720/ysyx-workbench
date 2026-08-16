@@ -34,7 +34,7 @@ class PipelineUnitsTest extends AnyFlatSpec {
     assert(!pipeline.registerInitialFetchRequest)
     assert(pipeline.serialExecuteResultForwarding)
     assert(!pipeline.directIntegerWritebackBypass)
-    assert(!pipeline.branchPredictor)
+    assert(!NpcConfig().branchPredictor.enabled)
   }
 
   it should "only accept one or two integer stages and one through three serial stages" in {
@@ -46,12 +46,20 @@ class PipelineUnitsTest extends AnyFlatSpec {
     assert(PipelineConfig(registerInitialFetchRequest = true).registerInitialFetchRequest)
     assert(!PipelineConfig(serialExecuteResultForwarding = false).serialExecuteResultForwarding)
     assert(new WithDirectIntegerWritebackBypassConfig().applyTo(NpcConfig()).pipeline.directIntegerWritebackBypass)
-    assert(new WithNpcBranchPredictorConfig().applyTo(NpcConfig()).pipeline.branchPredictor)
-    assert(!new WithoutNpcBranchPredictorConfig().applyTo(NpcConfig()).pipeline.branchPredictor)
-    assert(new BranchPredictorConfig().build.pipeline.branchPredictor)
+    assert(new WithNpcBranchPredictorConfig().applyTo(NpcConfig()).branchPredictor.enabled)
+    assert(new WithNpcBranchPredictorConfig(
+      BranchPredictorTableConfig(entries = 64, returnEntries = 16)
+    ).applyTo(NpcConfig()).branchPredictor.table == BranchPredictorTableConfig(entries = 64, returnEntries = 16))
+    assert(!new WithoutNpcBranchPredictorConfig().applyTo(NpcConfig()).branchPredictor.enabled)
+    val branchPredictor = new BranchPredictorConfig().build.branchPredictor
+    assert(branchPredictor.enabled)
+    assert(branchPredictor.table == BranchPredictorTableConfig(entries = 32, returnEntries = 8))
+    assert(!new StaticBranchPredictorConfig().build.branchPredictor.enabled)
     assertThrows[IllegalArgumentException](PipelineConfig(integerExecuteStages = 3))
     assertThrows[IllegalArgumentException](PipelineConfig(serialExecuteStages = 4))
     assertThrows[IllegalArgumentException](new WithSerialExecuteAdditionalStagesConfig(0))
     assertThrows[IllegalArgumentException](new WithSerialExecuteAdditionalStagesConfig(3))
+    assertThrows[IllegalArgumentException](BranchPredictorTableConfig(entries = 3))
+    assertThrows[IllegalArgumentException](BranchPredictorTableConfig(returnEntries = 3))
   }
 }

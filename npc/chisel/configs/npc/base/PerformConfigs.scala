@@ -15,8 +15,7 @@ class BasePerformConfig extends ConfigFragment {
       registerInitialFetchRequest = false,
       separateSerialIntegerAlu = false,
       serialExecuteResultForwarding = true,
-      directIntegerWritebackBypass = false,
-      branchPredictor = false
+      directIntegerWritebackBypass = false
     )
   )
 }
@@ -31,20 +30,6 @@ class WithPipelineConfig extends ConfigFragment {
 class WithoutPipelineConfig extends ConfigFragment {
   override private[npc] def applyTo(base: NpcConfig): NpcConfig =
     base.copy(pipeline = base.pipeline.copy(enablePipeline = false))
-}
-
-/** 启用 BHT、JALR 目标表和返回地址栈；仅支持它的流水前端会实际实例化这些状态。 */
-class WithNpcBranchPredictorConfig extends ConfigFragment {
-  override private[npc] def applyTo(base: NpcConfig): NpcConfig = base.copy(
-    pipeline = base.pipeline.copy(branchPredictor = true)
-  )
-}
-
-/** 关闭动态分支预测，保留 JAL 与后向条件分支的既有静态预测，供周期对照使用。 */
-class WithoutNpcBranchPredictorConfig extends ConfigFragment {
-  override private[npc] def applyTo(base: NpcConfig): NpcConfig = base.copy(
-    pipeline = base.pipeline.copy(branchPredictor = false)
-  )
 }
 
 /** 启用流水线互锁。 */

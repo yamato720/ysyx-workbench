@@ -282,7 +282,23 @@ case class ForwardingConfig(
   enableOutstandingCompletionForwarding: Boolean = false
 )
 
-/** 流水线、互锁、旁路与分支预测的生成时参数。 */
+/** 动态分支预测器的表容量；方向表和 JALR 目标表共享 entries。 */
+case class BranchPredictorTableConfig(
+  entries: Int = 32,
+  returnEntries: Int = 8
+) {
+  private val values = Seq(entries, returnEntries)
+  require(values.forall(value => value > 0 && (value & (value - 1)) == 0),
+    s"branch predictor table depths must be positive powers of two, got ${values.mkString(",")}")
+}
+
+/** 独立于流水线性能配方的分支预测模式和容量。 */
+case class BranchPredictorParameters(
+  enabled: Boolean = false,
+  table: BranchPredictorTableConfig = BranchPredictorTableConfig()
+)
+
+/** 流水线、互锁与旁路的生成时参数。 */
 case class PipelineConfig(
   enablePipeline: Boolean = false,
   enableInterlock: Boolean = true,
@@ -292,8 +308,7 @@ case class PipelineConfig(
   registerInitialFetchRequest: Boolean = false,
   separateSerialIntegerAlu: Boolean = false,
   serialExecuteResultForwarding: Boolean = true,
-  directIntegerWritebackBypass: Boolean = false,
-  branchPredictor: Boolean = false
+  directIntegerWritebackBypass: Boolean = false
 ) {
   require(integerExecuteStages == 1 || integerExecuteStages == 2,
     s"integerExecuteStages must be 1 or 2, got $integerExecuteStages")
@@ -395,6 +410,7 @@ case class AxiConfig(
 case class NpcConfig(
   isa: ISAConfig = ISAConfig(),
   pipeline: PipelineConfig = PipelineConfig(),
+  branchPredictor: BranchPredictorParameters = BranchPredictorParameters(),
   operators: OperatorConfig = OperatorConfig(),
   memory: MemoryConfig = MemoryConfig(),
   axi: AxiConfig = AxiConfig(),

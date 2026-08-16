@@ -2,7 +2,7 @@ package npc
 
 /** 已完成的 NPC 微架构性能成品。
   *
-  * 这里是流水线、互锁、前递、未来分支预测和乱序策略的组合层。与 ISA、总线、
+  * 这里是流水线、互锁、前递和执行级策略的组合层。与 ISA、总线、
   * 存储窗口和算术后端无关，因而可由所有上层核心形态复用。
   */
 abstract class PerformBundle(layers: ConfigFragment) extends ConfigBundle(layers)

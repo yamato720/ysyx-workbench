@@ -42,8 +42,8 @@ class NpcFrontend(config: NpcConfig) extends Module {
   // 仅一拍整数流水线会在控制流抵达 EX 的当拍恢复前端，因而可以让取指与恢复重叠。
   val aggressiveControlFlow = config.pipeline.enablePipeline &&
     config.pipeline.integerExecuteStages == 1
-  // 动态预测是独立生成时开关；关闭时仍保留原有 JAL 与后向条件分支静态预测。
-  val dynamicBranchPrediction = config.pipeline.branchPredictor && pipelinedFetch && aggressiveControlFlow
+  // 动态预测由独立 Config 选择；流水线条件只决定当前前端是否具备提前重定向能力。
+  val dynamicBranchPrediction = config.branchPredictor.enabled && pipelinedFetch && aggressiveControlFlow
   val fetchBufferIn = Wire(Decoupled(new FetchDecodePayload(cfg)))
   val fetchBufferOut = Wire(Decoupled(new FetchDecodePayload(cfg)))
   if (config.cache.instructionBuffer.enabled) {
@@ -89,7 +89,11 @@ class NpcFrontend(config: NpcConfig) extends Module {
   val fetchIsBackwardBranch = fetchIsConditionalBranch && fetchImmediate(cfg.xlen - 1)
   val (conditionalPrediction, jalrPredictionValid, jalrPredictionTarget,
     returnPredictionValid, returnPredictionTarget) = if (dynamicBranchPrediction) {
-    val predictor = Module(new BranchPredictor(cfg.xlen))
+    val predictor = Module(new BranchPredictor(
+      cfg.xlen,
+      config.branchPredictor.table.entries,
+      config.branchPredictor.table.returnEntries
+    ))
     predictor.io.queryValid := fetchResponseValid && (fetchIsConditionalBranch || fetchIsJalr)
     predictor.io.queryPc := fetchPcForPrediction
     predictor.io.queryConditional := fetchIsConditionalBranch
@@ -108,7 +112,8 @@ class NpcFrontend(config: NpcConfig) extends Module {
       predictor.io.predictReturnValid, predictor.io.predictReturnTarget)
   } else (fetchIsBackwardBranch, false.B, 0.U(cfg.xlen.W), false.B, 0.U(cfg.xlen.W))
   // 一拍整数流水线在取指响应进入 IF/ID 的当拍即可派发控制流，缓冲中不会留下它的
-  // 年轻顺序项；条件分支先按静态后向规则启动，随后由解析结果覆盖为动态方向。
+  // 年轻顺序项；条件分支先按 BTFNT（后向目标 taken、前向目标 not-taken）启动，随后由
+  // 解析结果覆盖为动态方向。
   // 标量和两拍整数路径仍由后端 redirect 按序恢复。
   val fetchStaticPrediction = pipelinedFetch.B && aggressiveControlFlow.B &&
     (fetchIsJal || (fetchIsConditionalBranch && conditionalPrediction) ||

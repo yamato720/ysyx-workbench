@@ -83,7 +83,7 @@ class CacheRtlStructureTest extends AnyFlatSpec {
       new NpcCore(hbmL1))
     val l1WithoutBranchPredictor = _root_.circt.stage.ChiselStage.emitCHIRRTL(
       new NpcCore(hbmL1.copy(
-        pipeline = hbmL1.pipeline.copy(branchPredictor = false)
+        branchPredictor = BranchPredictorParameters()
       ).validated))
 
     assert(pipelined.contains("module PipelinedCacheController"))

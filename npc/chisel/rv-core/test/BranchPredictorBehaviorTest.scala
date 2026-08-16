@@ -6,7 +6,7 @@ import org.scalatest.flatspec.AnyFlatSpec
 
 class BranchPredictorBehaviorTest extends AnyFlatSpec {
   "BranchPredictor" should "keep static direction before training and learn resolved outcomes" in {
-    simulate(new BranchPredictor(addrWidth = 32, entries = 8)) { dut =>
+    simulate(new BranchPredictor(addrWidth = 32, entries = 8, returnEntries = 8)) { dut =>
       dut.io.queryValid.poke(false)
       dut.io.queryPc.poke(0)
       dut.io.queryConditional.poke(false)

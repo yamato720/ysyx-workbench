@@ -56,6 +56,26 @@ static void write_metric(FILE *output, const char *label, const char *value, con
   fputs("</small></div>", output);
 }
 
+static void write_cache_config_item(FILE *output, const char *label, const char *value) {
+  fputs("<span class=\"cache-config-item\"><b>", output);
+  write_html_string(output, label);
+  fputs("</b> ", output);
+  write_html_string(output, value);
+  fputs("</span>", output);
+}
+
+/* 回填数对应真正需要安装到缓存的未命中；其余未命中是旁路或不分配访问。 */
+static uint64_t cache_allocating_misses(
+    const uint64_t counters[PERFORMANCE_HTML_CACHE_COUNTER_COUNT]) {
+  return counters[1] < counters[2] ? counters[1] : counters[2];
+}
+
+static uint64_t cache_bypasses(
+    const uint64_t counters[PERFORMANCE_HTML_CACHE_COUNTER_COUNT]) {
+  const uint64_t allocating_misses = cache_allocating_misses(counters);
+  return counters[1] - allocating_misses;
+}
+
 static void format_u64(char *buffer, size_t size, uint64_t value) {
   snprintf(buffer, size, "%'" PRIu64, value);
 }
@@ -304,12 +324,11 @@ static int write_cache_document(FILE *output, const PerformanceHtmlReport *repor
       "main{max-width:1240px;margin:0 auto;padding:18px 20px 34px}section{margin:0 0 24px}h2{font-size:17px;margin:0 0 10px}"
       ".metrics{display:grid;grid-template-columns:repeat(4,minmax(145px,1fr));gap:8px}.metric{min-width:0;padding:12px 13px;background:var(--panel);border:1px solid var(--line);border-radius:6px}"
       ".metric span,.metric small{display:block;color:var(--muted)}.metric strong{display:block;margin:5px 0 1px;font-size:22px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.metric small{font-size:12px}"
-      ".table-wrap{overflow:auto;border:1px solid var(--line);background:#fff}table{width:100%;border-collapse:collapse;white-space:nowrap}th,td{padding:8px 10px;border-bottom:1px solid #e7ebef;text-align:right}th{background:#edf1f4;color:#46525e;font-size:12px}th:first-child,td:first-child{text-align:left}tbody tr:hover{background:#f7fafc}.muted{color:var(--muted)}"
+      ".cache-panel{padding:18px 0 2px;border-top:1px solid var(--line)}.cache-panel:first-of-type{padding-top:0;border-top:0}.cache-config{display:flex;gap:7px;flex-wrap:wrap;margin:0 0 12px}.cache-config-item{padding:4px 8px;border:1px solid #c5cdd5;border-radius:4px;background:#fff;color:var(--muted)}.cache-config-item b{color:var(--ink)}"
       ".actions a{display:inline-flex;padding:7px 10px;border:1px solid #82919f;border-radius:4px;color:#155f78;background:#fff;text-decoration:none}footer{max-width:1240px;margin:auto;padding:0 20px 24px;color:var(--muted);font-size:12px}"
       "@media(max-width:900px){.metrics{grid-template-columns:repeat(2,1fr)}}@media(max-width:520px){header,main,footer{padding-left:12px;padding-right:12px}.metrics{grid-template-columns:1fr}.metric strong{font-size:18px}}"
       "</style></head><body><header><h1>NEMU 缓存报告</h1><div class=\"subtitle\"><span>";
-  static const char *cache_names[] = {"I$", "D$", "L2$"};
-  static const char *counter_names[] = {"命中", "未命中", "填充", "写回", "替换"};
+  static const char *cache_names[] = {"L1 I$", "L1 D$", "L2$"};
 
   fputs(prefix, output);
   write_html_string(output, report->label);
@@ -317,68 +336,80 @@ static int write_cache_document(FILE *output, const PerformanceHtmlReport *repor
   write_html_string(output, report->mode);
   fputs("</span></div></header><main>", output);
 
-  fputs("<section><h2>缓存配置</h2><div class=\"table-wrap\"><table><thead><tr>"
-        "<th>缓存</th><th>状态</th><th>容量</th><th>line</th><th>组 x 路</th>"
-        "<th>映射</th><th>替换</th><th>读未命中</th><th>写策略</th>"
-        "<th>写未命中</th><th>存储</th></tr></thead><tbody>", output);
+  char value[96];
   for (size_t cache = 0; cache < PERFORMANCE_HTML_CACHE_COUNT; cache++) {
     const PerformanceHtmlCacheConfiguration *configuration = &report->cache_configuration[cache];
-    char value[96];
-    fputs("<tr><td>", output); write_html_string(output, cache_names[cache]);
-    fputs("</td><td>", output); write_html_string(output,
-        configuration->enabled ? "启用" : "关闭");
+    const uint64_t *counters = report->cache[cache];
+    const bool is_l2 = cache == 2;
+    const uint64_t allocating_misses = is_l2 ? counters[1] : cache_allocating_misses(counters);
+    const uint64_t bypasses = is_l2 ? 0 : cache_bypasses(counters);
+    const uint64_t cacheable_accesses = counters[0] + allocating_misses;
+    const char *rate_label = is_l2 ? "本层命中率" : "缓存命中率";
+    const char *miss_label = is_l2 ? "本层未命中" : "分配未命中";
+    const char *access_detail = is_l2 ? "L2 命中 + L2 未命中" : "命中 + 分配未命中";
+    char detail[96];
+
+    fputs("<section class=\"cache-panel\"><h2>", output);
+    write_html_string(output, cache_names[cache]);
+    fputs("</h2><div class=\"cache-config\">", output);
+    write_cache_config_item(output, "状态", configuration->enabled ? "启用" : "关闭");
     if (configuration->enabled) {
       snprintf(value, sizeof(value), "%'" PRIu32 " B", configuration->capacity_bytes);
-      fputs("</td><td>", output); write_html_string(output, value);
+      write_cache_config_item(output, "容量", value);
       snprintf(value, sizeof(value), "%'" PRIu32 " B", configuration->line_bytes);
-      fputs("</td><td>", output); write_html_string(output, value);
+      write_cache_config_item(output, "line", value);
       snprintf(value, sizeof(value), "%'" PRIu32 " x %'" PRIu32,
                configuration->sets, configuration->ways);
-      fputs("</td><td>", output); write_html_string(output, value);
-      fputs("</td><td>", output); write_html_string(output, configuration->mapping);
-      fputs("</td><td>", output); write_html_string(output, configuration->replacement);
-      fputs("</td><td>", output); write_html_string(output, configuration->read_miss);
-      fputs("</td><td>", output); write_html_string(output, configuration->write_policy);
-      fputs("</td><td>", output); write_html_string(output, configuration->write_miss);
-      fputs("</td><td>", output); write_html_string(output, configuration->storage);
-    } else {
-      for (size_t column = 0; column < 9; column++) fputs("</td><td class=\"muted\">-", output);
+      write_cache_config_item(output, "组 x 路", value);
+      write_cache_config_item(output, "映射", configuration->mapping);
+      write_cache_config_item(output, "替换", configuration->replacement);
+      write_cache_config_item(output, "读未命中", configuration->read_miss);
+      write_cache_config_item(output, "写策略", configuration->write_policy);
+      write_cache_config_item(output, "写未命中", configuration->write_miss);
+      write_cache_config_item(output, "存储", configuration->storage);
     }
-    fputs("</td></tr>", output);
+    fputs("</div><div class=\"metrics\">", output);
+    if (cacheable_accesses != 0) {
+      snprintf(value, sizeof(value), "%.2f%%", 100.0 * ratio(counters[0], cacheable_accesses));
+      snprintf(detail, sizeof(detail), "命中 %'" PRIu64 " / 缓存访问 %'" PRIu64,
+               counters[0], cacheable_accesses);
+      write_metric(output, rate_label, value, detail);
+    } else {
+      write_metric(output, rate_label, "N/A", "尚无本层访问");
+    }
+    snprintf(value, sizeof(value), "%'" PRIu64, cacheable_accesses);
+    write_metric(output, "本层访问", value, access_detail);
+    snprintf(value, sizeof(value), "%'" PRIu64, counters[0]);
+    write_metric(output, "命中", value, "events");
+    snprintf(value, sizeof(value), "%'" PRIu64, counters[1]);
+    write_metric(output, "硬件未命中", value, "原始 miss 计数");
+    snprintf(value, sizeof(value), "%'" PRIu64, allocating_misses);
+    write_metric(output, miss_label, value, is_l2 ? "L2 请求未命中" : "对应填充");
+    snprintf(value, sizeof(value), "%'" PRIu64, bypasses);
+    if (is_l2) {
+      snprintf(detail, sizeof(detail), "L2 入口不包含 MMIO 旁路");
+    } else {
+      snprintf(detail, sizeof(detail), "硬件未命中 %'" PRIu64 " - 分配未命中 %'" PRIu64,
+               counters[1], allocating_misses);
+    }
+    write_metric(output, "旁路/不分配", value, detail);
+    snprintf(value, sizeof(value), "%'" PRIu64, counters[2]);
+    write_metric(output, "填充", value, "events");
+    snprintf(value, sizeof(value), "%'" PRIu64, counters[3]);
+    write_metric(output, "写回", value, "events");
+    snprintf(value, sizeof(value), "%'" PRIu64, counters[4]);
+    write_metric(output, "替换", value, "events");
+    fputs("</div></section>", output);
   }
-  fputs("</tbody></table></div><p class=\"muted\">顺序取指缓冲：", output);
+  fputs("<p class=\"muted\">顺序取指缓冲：", output);
   if (report->instruction_buffer_enabled) {
-    char value[96];
     snprintf(value, sizeof(value), "%'" PRIu32 " entries", report->instruction_buffer_entries);
     fputs("启用，", output); write_html_string(output, value);
   } else {
     fputs("关闭", output);
   }
-  fputs("。</p></section>", output);
-
-  fputs("<section><h2>缓存统计</h2><div class=\"metrics\">", output);
-  for (size_t cache = 0; cache < PERFORMANCE_HTML_CACHE_COUNT; cache++) {
-    const uint64_t accesses = report->cache[cache][0] + report->cache[cache][1];
-    char label[32];
-    char value[96];
-    char detail[96];
-    snprintf(label, sizeof(label), "%s 命中率", cache_names[cache]);
-    if (accesses != 0) {
-      snprintf(value, sizeof(value), "%.2f%%", 100.0 * ratio(report->cache[cache][0], accesses));
-      snprintf(detail, sizeof(detail), "%'" PRIu64 " / %'" PRIu64,
-               report->cache[cache][0], accesses);
-      write_metric(output, label, value, detail);
-    } else {
-      write_metric(output, label, "N/A", "尚无访问");
-    }
-    for (size_t counter = 0; counter < PERFORMANCE_HTML_CACHE_COUNTER_COUNT; counter++) {
-      snprintf(value, sizeof(value), "%'" PRIu64, report->cache[cache][counter]);
-      snprintf(detail, sizeof(detail), "%s %s", cache_names[cache], counter_names[counter]);
-      write_metric(output, detail, value, "events");
-    }
-  }
-  fputs("</div></section><section class=\"actions\"><a href=\"performance.html\">返回性能主页</a></section></main>"
-        "<footer>命中率按命中 / (命中 + 未命中) 计算；填充、写回和替换为本次运行完成态的硬件计数。</footer></body></html>", output);
+  fputs("。</p><section class=\"actions\"><a href=\"performance.html\">返回性能主页</a></section></main>"
+        "<footer>L1 命中率按命中 / (命中 + 分配未命中) 计算；分配未命中由填充计数得到，原始未命中减去分配未命中记为旁路/不分配。L2 按进入 L2 的本层命中 / (命中 + 本层未命中) 计算，不与 L1 计数相加。</footer></body></html>", output);
   return ferror(output) ? -1 : 0;
 }
 

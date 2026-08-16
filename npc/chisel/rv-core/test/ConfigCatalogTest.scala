@@ -226,6 +226,8 @@ class ConfigCatalogTest extends AnyFlatSpec {
     assert(values("SEPARATE_SERIAL_INTEGER_ALU") == "0")
     assert(values("SERIAL_EXECUTE_RESULT_FORWARDING") == "1")
     assert(values("BRANCH_PREDICTOR") == "1")
+    assert(values("BRANCH_PREDICTOR_ENTRIES") == "32")
+    assert(values("BRANCH_PREDICTOR_RETURN_ENTRIES") == "8")
 
     val serviceOnlyHost = new HostConstruction {
       override protected val configuredNemu: NemuHostConfig =
@@ -257,6 +259,8 @@ class ConfigCatalogTest extends AnyFlatSpec {
     assert(values("SEPARATE_SERIAL_INTEGER_ALU") == "0")
     assert(values("SERIAL_EXECUTE_RESULT_FORWARDING") == "1")
     assert(values("BRANCH_PREDICTOR") == "1")
+    assert(values("BRANCH_PREDICTOR_ENTRIES") == "32")
+    assert(values("BRANCH_PREDICTOR_RETURN_ENTRIES") == "8")
   }
 
   it should "enable committed-instruction HTML for every local NPC terminal" in {
