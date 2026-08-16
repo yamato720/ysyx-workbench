@@ -99,23 +99,41 @@ class WithArithmeticTimingConfig(timing: OperatorIpTimingConfig) extends ConfigF
 
     val mulDiv = base.operators.mulDiv
     val floating = base.operators.floating
+    val configuredMulDiv = mulDiv.copy(
+      implementation = withFifoDepth(mulDiv.implementation),
+      completionCycles = timing.divide.latency,
+      multiplyTiming = timing.timing(timing.multiply),
+      dividerInitiationInterval = timing.divide.initiationInterval
+    )
+    val configuredFloating = floating.copy(
+      implementation = withFifoDepth(floating.implementation),
+      addSubTiming = timing.timing(timing.floatingAddSub),
+      multiplyTiming = timing.timing(timing.floatingMultiply),
+      divideTiming = timing.timing(timing.floatingDivide),
+      fmaTiming = timing.timing(timing.floatingFma),
+      sqrtTiming = timing.timing(timing.floatingSqrt),
+      convertTiming = timing.timing(timing.floatingConvert),
+      compareTiming = timing.timing(timing.floatingCompare)
+    )
+    val modelRoutes = OperatorRouteConfig.modelM(base.isa.xlen, configuredMulDiv) ++
+      OperatorRouteConfig.modelF(base.isa.xlen, configuredFloating)
+    // M/F 扩展通常先建立 model 路由，再由终端覆写算术时序。只刷新既有的
+    // model 路由，保留板级 Vendor IP/DirectLogic 的独立实现合同。
+    val refreshedRoutes = OperatorRouteConfig(base.operators.routes.routes.map {
+      case (operation, route @ OperatorRoute(OperatorRouteTarget.Model, _, _, _, _)) =>
+        modelRoutes.get(operation) match {
+          case Some(model) => operation -> route.copy(
+            latency = model.latency,
+            initiationInterval = model.initiationInterval
+          )
+          case None => operation -> route
+        }
+      case entry => entry
+    })
     base.copy(operators = base.operators.copy(
-      mulDiv = mulDiv.copy(
-        implementation = withFifoDepth(mulDiv.implementation),
-        completionCycles = timing.divide.latency,
-        multiplyTiming = timing.timing(timing.multiply),
-        dividerInitiationInterval = timing.divide.initiationInterval
-      ),
-      floating = floating.copy(
-        implementation = withFifoDepth(floating.implementation),
-        addSubTiming = timing.timing(timing.floatingAddSub),
-        multiplyTiming = timing.timing(timing.floatingMultiply),
-        divideTiming = timing.timing(timing.floatingDivide),
-        fmaTiming = timing.timing(timing.floatingFma),
-        sqrtTiming = timing.timing(timing.floatingSqrt),
-        convertTiming = timing.timing(timing.floatingConvert),
-        compareTiming = timing.timing(timing.floatingCompare)
-      )
+      mulDiv = configuredMulDiv,
+      floating = configuredFloating,
+      routes = refreshedRoutes
     ))
   }
 }

@@ -282,7 +282,7 @@ case class ForwardingConfig(
   enableOutstandingCompletionForwarding: Boolean = false
 )
 
-/** 流水线、互锁和旁路的生成时参数。 */
+/** 流水线、互锁、旁路与分支预测的生成时参数。 */
 case class PipelineConfig(
   enablePipeline: Boolean = false,
   enableInterlock: Boolean = true,
@@ -292,7 +292,8 @@ case class PipelineConfig(
   registerInitialFetchRequest: Boolean = false,
   separateSerialIntegerAlu: Boolean = false,
   serialExecuteResultForwarding: Boolean = true,
-  directIntegerWritebackBypass: Boolean = false
+  directIntegerWritebackBypass: Boolean = false,
+  branchPredictor: Boolean = true
 ) {
   require(integerExecuteStages == 1 || integerExecuteStages == 2,
     s"integerExecuteStages must be 1 or 2, got $integerExecuteStages")

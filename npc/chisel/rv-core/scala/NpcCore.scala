@@ -57,7 +57,14 @@ class NpcCore(
 
   frontend.io.redirectValid := backend.io.redirectValid
   frontend.io.redirectTarget := backend.io.redirectTarget
-  frontend.io.holdIncomingFetch := backend.io.holdIncomingFetch
+  frontend.io.branchResolutionValid := backend.io.branchResolutionValid
+  frontend.io.branchResolutionPc := backend.io.branchResolutionPc
+  frontend.io.branchResolutionConditional := backend.io.branchResolutionConditional
+  frontend.io.branchResolutionJalr := backend.io.branchResolutionJalr
+  frontend.io.branchResolutionCall := backend.io.branchResolutionCall
+  frontend.io.branchResolutionReturn := backend.io.branchResolutionReturn
+  frontend.io.branchResolutionTaken := backend.io.branchResolutionTaken
+  frontend.io.branchResolutionTarget := backend.io.branchResolutionTarget
   val fenceHold = WireDefault(false.B)
   frontend.io.fenceHold := fenceHold
   val externalDispatchPermit = WireDefault(true.B)

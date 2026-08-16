@@ -284,6 +284,7 @@ class CacheController(
   array.io.metaWriteSet := reqSet
   array.io.metaWriteWay := victimWay
   array.io.metaWrite := 0.U.asTypeOf(new CacheTagMeta(tagWidth))
+  array.io.validEpoch := 0.U
   replacement.io.querySet := reqSet
   replacement.io.accessValid := false.B
   replacement.io.replaceValid := false.B

@@ -127,11 +127,15 @@ class NpcConfigCompositionTest extends AnyFlatSpec {
     assert(fpgaConfig.operators.mulDiv.implementation.backend == ComputeBackend.FPGA)
     assert(fpgaConfig.operators.mulDiv.multiplyTiming.latency == 5)
     assert(fpgaConfig.operators.mulDiv.multiplyTiming.responseFifoDepth == 8)
+    assert(fpgaConfig.operators.routes.route(ArithmeticRouteOperation.Mul).latency == 5)
+    assert(fpgaConfig.operators.routes.route(ArithmeticRouteOperation.Div).latency == defaults.divide.latency)
     assert(nemuConfig.operators.mulDiv.implementation.backend == ComputeBackend.Builtin)
     assert(nemuConfig.operators.floating.implementation.backend == ComputeBackend.Builtin)
     assert(nemuConfig.operators.mulDiv.multiplyTiming.latency == 5)
     assert(nemuConfig.operators.floating.divideTiming.latency == 31)
     assert(nemuConfig.operators.floating.divideTiming.responseFifoDepth == 8)
+    assert(nemuConfig.operators.routes.route(ArithmeticRouteOperation.Mul).latency == 5)
+    assert(nemuConfig.operators.routes.route(ArithmeticRouteOperation.Fdiv).latency == 31)
   }
 
   "Zicsr fragments" should "make the extension explicit and preserve left precedence" in {

@@ -308,4 +308,34 @@ class PipelinedMemoryStageBehaviorTest extends AnyFlatSpec {
       assert(returnedPcs.toSeq == Seq(base, base + 4))
     }
   }
+
+  it should "forward a returning load in its completion handshake cycle" in {
+    simulate(new PipelinedMemoryStage(cfg = cfg, enableOutstandingCompletionForwarding = true)) { dut =>
+      initialize(dut)
+      dut.reset.poke(true)
+      dut.clock.step(2)
+      dut.reset.poke(false)
+
+      setLoad(dut, base, rd = 9)
+      dut.io.request.valid.poke(true)
+      dut.io.request.ready.expect(true.B)
+      // 空 pending FIFO 必须在请求握手的同拍开始 D$ 事务；缓存命中仍由下一拍
+      // 同步读响应，不改变其可见性或按序退休。
+      dut.io.axi.ar.valid.expect(true.B)
+      dut.clock.step()
+      dut.io.request.valid.poke(false)
+
+      // 下一拍 R 握手时必须已可用于 ID 前递。
+      dut.clock.step()
+      dut.io.axi.r.valid.poke(true)
+      dut.io.axi.r.bits.data.poke(0x12345678L)
+      dut.io.axi.r.bits.resp.poke(0)
+      dut.io.axi.r.ready.expect(true.B)
+      dut.io.completionCandidates(0).valid.expect(true.B)
+      dut.io.completionCandidates(0).rd.expect(9.U)
+      dut.io.completionCandidates(0).data.expect(0x12345678L.U)
+      dut.io.completionCandidates(0).dataValid.expect(true.B)
+      dut.clock.step()
+    }
+  }
 }

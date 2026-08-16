@@ -99,7 +99,7 @@ object ConstructionProfile {
     require(entry.scope == "fpga" || !config.cache.usesUram,
       s"CacheStorage.Uram is only valid for an FPGA construction: ${entry.className}")
     val base = Seq(
-      "PROFILE_FORMAT" -> "22",
+      "PROFILE_FORMAT" -> "24",
       "CONFIG_SHORT_NAME" -> entry.shortName,
       "CONFIG_FQCN" -> entry.className,
       "SCOPE" -> entry.scope,
@@ -149,6 +149,7 @@ object ConstructionProfile {
       "REGISTER_INITIAL_FETCH_REQUEST" -> bit(config.pipeline.registerInitialFetchRequest),
       "SEPARATE_SERIAL_INTEGER_ALU" -> bit(config.pipeline.separateSerialIntegerAlu),
       "SERIAL_EXECUTE_RESULT_FORWARDING" -> bit(config.pipeline.serialExecuteResultForwarding),
+      "BRANCH_PREDICTOR" -> bit(config.pipeline.branchPredictor),
       "ARITH_BACKEND" -> mulDiv.implementation.backend.name,
       "ARITH_OUTPUT_FIFO" -> mulDiv.implementation.ip.outputFifoDepth.toString,
       "MUL_CYCLES" -> mulDiv.multiplyTiming.latency.toString,

@@ -19,9 +19,15 @@ class NpcFrontend(config: NpcConfig) extends Module {
   val io = IO(new Bundle {
     val redirectValid = Input(Bool())
     val redirectTarget = Input(UInt(cfg.xlen.W))
+    val branchResolutionValid = Input(Bool())
+    val branchResolutionPc = Input(UInt(cfg.xlen.W))
+    val branchResolutionConditional = Input(Bool())
+    val branchResolutionJalr = Input(Bool())
+    val branchResolutionCall = Input(Bool())
+    val branchResolutionReturn = Input(Bool())
+    val branchResolutionTaken = Input(Bool())
+    val branchResolutionTarget = Input(UInt(cfg.xlen.W))
     val fenceHold = Input(Bool())
-    // 后端排空 ID/EX 到 WB 的唯一过渡拍。此时保持 I$ R 通道，不能把响应写入 IF/ID。
-    val holdIncomingFetch = Input(Bool())
     val dispatch = Decoupled(new DecodedDispatchPayload(cfg))
     // 两条已提交指令之间若要接收异步中断，后端以此作为 mepc。取指级至多
     // 缓冲一条尚未派发的指令，因此该值不会跳过任何未提交的架构指令。
@@ -33,10 +39,11 @@ class NpcFrontend(config: NpcConfig) extends Module {
   })
 
   val pipelinedFetch = config.cache.accessMode == CacheAccessMode.PipelinedTwoCycle
-  // 标量核没有预测恢复窗口。仅一拍整数流水线可在控制流派发当拍切换取指 epoch，
-  // 因而允许预测目标请求与错误路径响应重叠。
+  // 仅一拍整数流水线会在控制流抵达 EX 的当拍恢复前端，因而可以让取指与恢复重叠。
   val aggressiveControlFlow = config.pipeline.enablePipeline &&
     config.pipeline.integerExecuteStages == 1
+  // 动态预测是独立生成时开关；关闭时仍保留原有 JAL 与后向条件分支静态预测。
+  val dynamicBranchPrediction = config.pipeline.branchPredictor && pipelinedFetch && aggressiveControlFlow
   val fetchBufferIn = Wire(Decoupled(new FetchDecodePayload(cfg)))
   val fetchBufferOut = Wire(Decoupled(new FetchDecodePayload(cfg)))
   if (config.cache.instructionBuffer.enabled) {
@@ -74,13 +81,41 @@ class NpcFrontend(config: NpcConfig) extends Module {
   val fetchImmediate = RiscvImmediateGenerator(fetchInstruction, cfg.xlen)
   val fetchOpcode = fetchInstruction(6, 0)
   val fetchIsJal = fetchOpcode === "b1101111".U
-  val fetchIsBackwardBranch = fetchOpcode === "b1100011".U && fetchImmediate(cfg.xlen - 1)
+  val fetchIsJalr = fetchOpcode === "b1100111".U
+  val fetchIsReturn = fetchIsJalr && fetchInstruction(11, 7) === 0.U &&
+    (fetchInstruction(19, 15) === 1.U || fetchInstruction(19, 15) === 5.U) &&
+    fetchInstruction(31, 20) === 0.U
+  val fetchIsConditionalBranch = fetchOpcode === "b1100011".U
+  val fetchIsBackwardBranch = fetchIsConditionalBranch && fetchImmediate(cfg.xlen - 1)
+  val (conditionalPrediction, jalrPredictionValid, jalrPredictionTarget,
+    returnPredictionValid, returnPredictionTarget) = if (dynamicBranchPrediction) {
+    val predictor = Module(new BranchPredictor(cfg.xlen))
+    predictor.io.queryValid := fetchResponseValid && (fetchIsConditionalBranch || fetchIsJalr)
+    predictor.io.queryPc := fetchPcForPrediction
+    predictor.io.queryConditional := fetchIsConditionalBranch
+    predictor.io.queryJalr := fetchIsJalr
+    predictor.io.queryReturn := fetchIsReturn
+    predictor.io.queryStaticTaken := fetchIsBackwardBranch
+    predictor.io.resolveValid := io.branchResolutionValid
+    predictor.io.resolvePc := io.branchResolutionPc
+    predictor.io.resolveConditional := io.branchResolutionConditional
+    predictor.io.resolveJalr := io.branchResolutionJalr
+    predictor.io.resolveCall := io.branchResolutionCall
+    predictor.io.resolveReturn := io.branchResolutionReturn
+    predictor.io.resolveTaken := io.branchResolutionTaken
+    predictor.io.resolveTarget := io.branchResolutionTarget
+    (predictor.io.predictTaken, predictor.io.predictJalrValid, predictor.io.predictJalrTarget,
+      predictor.io.predictReturnValid, predictor.io.predictReturnTarget)
+  } else (fetchIsBackwardBranch, false.B, 0.U(cfg.xlen.W), false.B, 0.U(cfg.xlen.W))
   // 一拍整数流水线在取指响应进入 IF/ID 的当拍即可派发控制流，缓冲中不会留下它的
-  // 年轻顺序项；标量和两拍整数路径仍由后端 redirect 按序恢复。
+  // 年轻顺序项；条件分支先按静态后向规则启动，随后由解析结果覆盖为动态方向。
+  // 标量和两拍整数路径仍由后端 redirect 按序恢复。
   val fetchStaticPrediction = pipelinedFetch.B && aggressiveControlFlow.B &&
-    (fetchIsJal || fetchIsBackwardBranch)
-  val fetchPredictedNextPc = Mux(fetchStaticPrediction,
-    fetchPcForPrediction + fetchImmediate, fetchPcForPrediction + 4.U)
+    (fetchIsJal || (fetchIsConditionalBranch && conditionalPrediction) ||
+      (fetchIsJalr && (jalrPredictionValid || returnPredictionValid)))
+  val fetchPredictedNextPc = Mux(fetchIsJalr && returnPredictionValid, returnPredictionTarget,
+    Mux(fetchIsJalr && jalrPredictionValid, jalrPredictionTarget,
+      Mux(fetchStaticPrediction, fetchPcForPrediction + fetchImmediate, fetchPcForPrediction + 4.U)))
   val fetchFlush = io.redirectValid || io.fenceHold
   val fetchRestartPc = Mux(io.redirectValid, io.redirectTarget(31, 0), fetchBufferOut.bits.pc + 4.U)
   val pcWriteEnable = WireDefault(false.B)
@@ -89,9 +124,7 @@ class NpcFrontend(config: NpcConfig) extends Module {
       Mux(pipelinedFetch.B, fetchBufferIn.bits.predictedNextPc, programCounter.io.pcPlus4)))
   programCounter.io.writeEnable := pcWriteEnable
 
-  // 该保持只影响后端明确请求的一个过渡拍。AXI R 保持 valid，取指适配器不会出队，
-  // 因而下一拍仍能把同一条 I$ 响应直接交给 dispatch。
-  val fetchResponseAccept = !fetchFlush && !io.holdIncomingFetch
+  val fetchResponseAccept = !fetchFlush
   fetchBufferIn.valid := fetchResponseValid && fetchResponseAccept
   fetchBufferIn.bits.pc := Mux(pipelinedFetch.B, fetchResponsePc, programCounter.io.pc)
   fetchBufferIn.bits.instruction := fetchInstruction
@@ -106,7 +139,7 @@ class NpcFrontend(config: NpcConfig) extends Module {
     instructionFetchUnit.io.pc := programCounter.io.pc(31, 0)
     instructionFetchUnit.io.restartPc := fetchRestartPc
     instructionFetchUnit.io.performanceCycle := performanceCycle
-    instructionFetchUnit.io.issueHold := io.holdIncomingFetch
+    instructionFetchUnit.io.issueHold := false.B
     instructionFetchUnit.io.predictionValid := fetchBufferIn.fire &&
       fetchStaticPrediction && fetchPredictedNextPc =/= fetchPcForPrediction + 4.U
     instructionFetchUnit.io.predictionTarget := fetchPredictedNextPc(axiConfig.addrWidth - 1, 0)

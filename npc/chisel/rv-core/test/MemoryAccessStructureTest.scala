@@ -66,7 +66,13 @@ class MemoryAccessStructureTest extends AnyFlatSpec {
     val pipelinedArbiter = _root_.circt.stage.ChiselStage.emitCHIRRTL(
       new npc.protocol.PipelinedAxiLiteArbiter2(dataWidth = 512, depth = 4)
     )
+    val pipelinedInterleaver = _root_.circt.stage.ChiselStage.emitCHIRRTL(
+      new npc.protocol.PipelinedAxiLiteXorInterleaver2(dataWidth = 512,
+        highSelectBit = 14, lowSelectBit = 6, extraSelectBits = Seq(7, 8), depth = 4)
+    )
     assert(pipelinedRam.contains("module PipelinedAxiLiteDpiRamSlave"))
     assert(pipelinedArbiter.contains("readRoutes"))
+    assert(pipelinedInterleaver.contains("module PipelinedAxiLiteXorInterleaver2"))
+    assert(pipelinedInterleaver.contains("writeRoutes"))
   }
 }

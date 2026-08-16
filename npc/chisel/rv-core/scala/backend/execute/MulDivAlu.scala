@@ -145,12 +145,8 @@ class MulDivAlu(
     NpcAluOp.MulDiv.REMUW.asUInt -> IntegerDivideOperation.unsignedWordRemainder.asUInt
   ))
 
-  // 后端严格单在途，但这个外壳也保存已选端点，避免在请求离开后对多个完成源做仲裁。
-  // 同时用该占用位阻止保持 valid 的上游向可流水的端点重复发射同一条请求。
-  private val responseInFlight = RegInit(false.B)
-
   private def forwardRequest(endpoint: ArithmeticOperatorIO, selected: Bool, operation: UInt): Unit = {
-    endpoint.req.valid := io.req.valid && !responseInFlight && selected
+    endpoint.req.valid := io.req.valid && selected
     endpoint.req.bits.operandA := io.req.bits.operandA
     endpoint.req.bits.operandB := io.req.bits.operandB
     endpoint.req.bits.operandC := io.req.bits.operandC
@@ -173,33 +169,16 @@ class MulDivAlu(
     directDivider.map(directDivideSelected -> _)
   ).flatten
   private val responseSources = endpointSelections.map(_._2.io.resp)
-  private val responseSourceWidth = math.max(1, log2Ceil(responseSources.size))
-  private val responseSourceReg = RegInit(0.U(responseSourceWidth.W))
+  require(responseSources.nonEmpty, "MulDivAlu requires at least one response source")
 
-  // 此 ready 最终反压到后端的 ID/EX 弹性寄存器。外部 FPGA endpoint 必须只由已寄存的
-  // 单请求占用状态驱动它，不能由响应 valid/ready 组合回传；核心严格单在途，IP 的 II=1
-  // 仅表示厂商单元的能力，不会被用于并发发射。
-  io.req.ready := !responseInFlight && MuxCase(false.B,
+  // 请求仍由当拍选择的端点决定。完成表给每项请求分配了 tag，因此同一端点可按 II
+  // 连续接收独立请求；多个端点恰好同拍完成时，仲裁器只让其中一项握手，另一项保持
+  // valid 等待下一拍，端点自身的响应 FIFO 保证结果不会丢失。
+  io.req.ready := MuxCase(false.B,
     endpointSelections.map { case (selected, endpoint) => selected -> endpoint.io.req.ready })
-
-  when(io.req.fire) {
-    responseInFlight := true.B
-    responseSourceReg := MuxCase(0.U(responseSourceWidth.W), endpointSelections.zipWithIndex.map {
-      case ((selected, _), index) => selected -> index.U(responseSourceWidth.W)
-    })
-  }.elsewhen(io.resp.fire) {
-    responseInFlight := false.B
-  }
-
-  val emptyResponse = 0.U.asTypeOf(new ArithmeticResponse(width, config.tagWidth))
-  val selectedResponseValid = MuxLookup(responseSourceReg, false.B)(responseSources.zipWithIndex.map {
-    case (source, index) => index.U -> source.valid
-  })
-  io.resp.valid := responseInFlight && selectedResponseValid
-  io.resp.bits := MuxLookup(responseSourceReg, emptyResponse)(responseSources.zipWithIndex.map {
-    case (source, index) => index.U -> source.bits
-  })
+  val responseArbiter = Module(new Arbiter(new ArithmeticResponse(width, config.tagWidth), responseSources.size))
   responseSources.zipWithIndex.foreach { case (source, index) =>
-    source.ready := responseInFlight && responseSourceReg === index.U(responseSourceWidth.W) && io.resp.ready
+    responseArbiter.io.in(index) <> source
   }
+  io.resp <> responseArbiter.io.out
 }

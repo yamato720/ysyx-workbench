@@ -111,6 +111,7 @@ class CacheSimulationCoreConfig extends ConfigBundle(
   * 竞争。
   */
 class HbmJitterCacheSimulationCoreConfig extends ConfigBundle(
+  new WithNpcOutstandingCompletionForwardingConfig ++
   new WithDpiMemoryTimingConfig(DpiMemoryTimingConfig.HbmJitter73To81) ++
     new WithLocalDpiCacheMemoryWidthConfig(512) ++
     new WithPipelinedTwoCycleWideHbmCacheConfig ++
@@ -123,6 +124,7 @@ class HbmJitterCacheSimulationCoreConfig extends ConfigBundle(
 
 /** 启用共享 256 KiB HBM 风格 L2 的本地功能时序对照构造。 */
 class HbmJitterL2CacheSimulationCoreConfig extends ConfigBundle(
+  new WithNpcOutstandingCompletionForwardingConfig ++
   new WithDpiMemoryTimingConfig(DpiMemoryTimingConfig.HbmJitter73To81) ++
     new WithLocalDpiCacheMemoryWidthConfig(512) ++
     new WithPipelinedTwoCycleWideHbmL2CacheConfig ++

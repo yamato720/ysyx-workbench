@@ -151,7 +151,7 @@ awk -F= '
     }
     if (!asset_only && !accelerator_only && (!seen["XLEN"] || !seen["NEMU_PRESET"] || !seen["NEMU_CACHE_HTML"] ||
         !seen["INTEGER_EXECUTE_STAGES"] || !seen["SERIAL_EXECUTE_STAGES"] || !seen["REGISTER_INITIAL_FETCH_REQUEST"] ||
-        !seen["SEPARATE_SERIAL_INTEGER_ALU"] || !seen["SERIAL_EXECUTE_RESULT_FORWARDING"] ||
+        !seen["SEPARATE_SERIAL_INTEGER_ALU"] || !seen["SERIAL_EXECUTE_RESULT_FORWARDING"] || !seen["BRANCH_PREDICTOR"] ||
         !seen["DPI_MEMORY_TIMING_ENABLED"] || !seen["DPI_MEMORY_READ_RESPONSE_MIN_CYCLES"] ||
         !seen["DPI_MEMORY_READ_RESPONSE_MAX_CYCLES"] || !seen["DPI_MEMORY_WRITE_RESPONSE_MIN_CYCLES"] ||
         !seen["DPI_MEMORY_WRITE_RESPONSE_MAX_CYCLES"] || !seen["DPI_MEMORY_TIMING_SEED"] ||

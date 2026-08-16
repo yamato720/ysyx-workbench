@@ -43,9 +43,14 @@ class NpcBackend(
     val axi = new AxiLiteMasterIO(axiConfig.addrWidth, axiConfig.dataWidth)
     val redirectValid = Output(Bool())
     val redirectTarget = Output(UInt(cfg.xlen.W))
-    // ID/EX 正在把最后一条普通整数送入 WB 时，前端暂缓接收新的 I$ 响应，
-    // 使下一拍的整数能直接从 dispatch 写入 WB。
-    val holdIncomingFetch = Output(Bool())
+    val branchResolutionValid = Output(Bool())
+    val branchResolutionPc = Output(UInt(cfg.xlen.W))
+    val branchResolutionConditional = Output(Bool())
+    val branchResolutionJalr = Output(Bool())
+    val branchResolutionCall = Output(Bool())
+    val branchResolutionReturn = Output(Bool())
+    val branchResolutionTaken = Output(Bool())
+    val branchResolutionTarget = Output(UInt(cfg.xlen.W))
     val memoryFault = Output(new MemoryFault(axiConfig.addrWidth))
     val debug = Output(new NpcBackendDebugBundle(cfg))
   })
@@ -83,9 +88,6 @@ class NpcBackend(
   val registerFile = Module(new RegisterFile(width = cfg.xlen, debug = true))
   val floatingRegisterFile = if (localF) Some(Module(new FloatingRegisterFile(cfg.xlen))) else None
   val integerAlu = Module(new IntegerAlu(cfg.xlen))
-  // ID 直通只用于本地热路径。在 ID/EX 仍可正常接收的条件下保留独立 ALU，
-  // 避免把派发侧的宽译码与普通 EX 输入选择重新并到同一条关键路径。
-  val directDispatchIntegerAlu = if (directIntegerWritebackBypass) Some(Module(new IntegerAlu(cfg.xlen))) else None
   // 可选的串行 ALU 供 CSR、异常和 mret 路径使用。三拍模式下它只消费
   // serialExecuteControlReg，避免 executeState 经共享输入 mux 重新穿过结果级 ALU。
   val serialIntegerAlu = if (separateSerialIntegerAlu) Some(Module(new IntegerAlu(cfg.xlen))) else None
@@ -452,50 +454,17 @@ class NpcBackend(
     serialExecuteControlReg.io.out.valid || serialExecuteResultReg.io.out.valid ||
     (executeState =/= executeIdle) || executeMemoryReg.io.out.valid ||
     (memoryState =/= memoryIdle && !pipelinedMemory.B) || memoryWritebackReg.io.out.valid || memoryStageBusy
-  val memoryPipelineDrained = pipelinedMemoryStage.map(_.io.drained).getOrElse(true.B)
-  // 直通仅在 WB 之外的全部旧项都排空时发生。WB 中的旧项会于当前时钟边沿提交，
-  // 因此新项可同时写入 MEM/WB 而不改变退休顺序。
-  val directDispatchOlderInstructionsDrained = !decodeExecuteReg.io.out.valid &&
-    !integerExecuteReg.io.out.valid && !serialExecuteControlReg.io.out.valid &&
-    !serialExecuteResultReg.io.out.valid && !arithmeticResponseReg.io.out.valid &&
-    executeState === executeIdle && !executeMemoryReg.io.out.valid &&
-    memoryState === memoryIdle && !memoryStageBusy && memoryPipelineDrained && !commitRedirectValid
-  val directDispatchWritebackInstruction = directIntegerWritebackBypass.B && !twoStageIntegerExecute.B &&
-    pipelineMode && dispatch.executionUnit === NpcExecutionUnit.integer && dispatch.registerWriteEnable &&
-    !dispatch.branch && !dispatch.loadEnable && !dispatch.storeEnable && !dispatch.csrEnable &&
-    !dispatch.trapEnable && !dispatch.mretEnable && !dispatch.floatingInstruction &&
-    !dispatch.privilegedInstruction
-  val directDispatchWritebackCandidate = directDispatchWritebackInstruction &&
-    directDispatchOlderInstructionsDrained && !redirectBarrier
-  // 当前 ID/EX 的纯整数会在本拍直达 WB 时，新派发项不能同时占用该寄存器。
-  // 前端只在这个过渡拍保留 I$ 响应；旧项排空后，保留项从 dispatch 进入 WB，
-  // 连续热命中整数流便不会重新落入 ID/EX 的一拍自维持路径。
-  val directDispatchTransitionHold = directIntegerWritebackBypass.B && !twoStageIntegerExecute.B &&
-    pipelineMode && decodeExecuteReg.io.out.valid && !executeInputIsSerial &&
-    !executeInputIsArithmetic && executeInput.registerWriteEnable && !executeInput.branch &&
-    !executeInput.loadEnable && !executeInput.storeEnable && executeState === executeIdle &&
-    !serialControlStagePending && !serialResultStagePending && !executeMemoryReg.io.out.valid &&
-    !commitRedirectValid && memoryPipelineDrained && memoryWritebackReg.io.in.ready
-  io.holdIncomingFetch := directDispatchTransitionHold
-  // 本拍的算术发射不能同时给 ID/EX 填入更年轻的指令；这样 M/F 从请求到 EX/MEM
-  // 均是单项按序路径，后续派发只会在响应被 EX/MEM 接收后恢复。
-  val arithmeticWillIssue = decodeExecuteReg.io.out.valid && executeInputIsArithmetic && arithmeticCanAccept
   val decodeCanIssue = Mux(
     pipelineConfig.enablePipeline.B,
     !hazardUnit.io.stall && !floatingRawHazard && !pipelinedLoadHazard &&
       !pipelinedMemoryWriteHazard &&
       !redirectBarrier && !machineExternalInterruptPending && !frontendRedirectValid &&
-      executeState =/= executeArithmeticWait && !arithmeticWillIssue,
+      executeState =/= executeArithmeticWait,
     !busyAfterDecode && !machineExternalInterruptPending && !frontendRedirectValid
   )
   decodeExecuteReg.io.flush := frontendRedirectValid
-  // 不能直通的纯整数项照常进入 ID/EX。禁止在此等待旁路条件恢复，否则分支或
-  // 访存后的连续热指令会堆积在 IF/ID，反而拉长平均延迟。
-  val directDispatchCanWriteback = WireDefault(false.B)
-  val directDispatchWriteback = io.dispatch.valid && decodeCanIssue && directDispatchCanWriteback
-  decodeExecuteReg.io.in.valid := io.dispatch.valid && decodeCanIssue && !directDispatchCanWriteback
-  io.dispatch.ready := decodeCanIssue && Mux(directDispatchCanWriteback,
-    true.B, decodeExecuteReg.io.in.ready)
+  decodeExecuteReg.io.in.valid := io.dispatch.valid && decodeCanIssue
+  io.dispatch.ready := decodeCanIssue && decodeExecuteReg.io.in.ready
   decodeExecuteReg.io.in.bits.pc := dispatch.pc
   decodeExecuteReg.io.in.bits.instruction := dispatch.instruction
   decodeExecuteReg.io.in.bits.predictedNextPc := dispatch.predictedNextPc
@@ -526,34 +495,6 @@ class NpcBackend(
   decodeExecuteReg.io.in.bits.storeData := Mux(dispatch.usesFrs2,
     forwardingUnit.io.idFrs2Forwarded, forwardingUnit.io.idRs2Forwarded)
   decodeExecuteReg.io.in.bits.operandC := forwardingUnit.io.idFrs3Forwarded
-  val directDispatchRs1Data = forwardingUnit.io.idRs1Forwarded
-  val directDispatchRs2Data = forwardingUnit.io.idRs2Forwarded
-  directDispatchIntegerAlu.foreach { alu =>
-    alu.io.a := directDispatchRs1Data
-    alu.io.b := Mux(dispatch.useImmediate, dispatch.immediate, directDispatchRs2Data)
-    alu.io.pc := dispatch.pc
-    alu.io.control := dispatch.aluCtrl
-  }
-  val directDispatchAluResult = directDispatchIntegerAlu.map(_.io.result).getOrElse(0.U(cfg.xlen.W))
-  val directDispatchBranchTaken = directDispatchIntegerAlu.map(_.io.branchTaken)
-    .getOrElse(NpcBranchResult.notTaken)
-  val directDispatchActualNextPc = Mux(directDispatchBranchTaken =/= NpcBranchResult.notTaken,
-    Mux(directDispatchBranchTaken === NpcBranchResult.rs1Immediate,
-      Cat((directDispatchRs1Data + dispatch.immediate)(cfg.xlen - 1, 1), 0.U(1.W)),
-      dispatch.pc + dispatch.immediate), dispatch.pc + 4.U)
-  // 仅静态预测为跳转的条件分支在派发时直达 WB。调用、返回和预测顺序执行的
-  // 分支仍保留原路径；错误预测则写入 ID/EX，由 EX/MEM 按序冲刷年轻取指。
-  val directDispatchBranchWritebackInstruction = directIntegerWritebackBypass.B &&
-    !twoStageIntegerExecute.B && pipelineMode && dispatch.executionUnit === NpcExecutionUnit.integer &&
-    dispatch.branch && !dispatch.registerWriteEnable && dispatch.predictedNextPc =/= dispatch.pc + 4.U &&
-    !dispatch.loadEnable && !dispatch.storeEnable && !dispatch.csrEnable &&
-    !dispatch.trapEnable && !dispatch.mretEnable && !dispatch.floatingInstruction &&
-    !dispatch.privilegedInstruction
-  val directDispatchBranchWritebackCandidate = directDispatchBranchWritebackInstruction &&
-    directDispatchOlderInstructionsDrained && directDispatchActualNextPc === dispatch.predictedNextPc &&
-    !redirectBarrier
-  directDispatchCanWriteback := (directDispatchWritebackCandidate ||
-    directDispatchBranchWritebackCandidate) && memoryWritebackReg.io.in.ready
   decodeExecuteReg.io.in.bits.immediate := dispatch.immediate
   decodeExecuteReg.io.in.bits.rd := dispatch.rd
   decodeExecuteReg.io.in.bits.rs1 := dispatch.rs1
@@ -991,29 +932,6 @@ class NpcBackend(
     dst.mretEnable := src.mretEnable
   }
 
-  val directDispatchExecuteMemory = WireDefault(0.U.asTypeOf(new ExecuteMemoryPayload(cfg)))
-  directDispatchExecuteMemory.pc := dispatch.pc
-  directDispatchExecuteMemory.instruction := dispatch.instruction
-  directDispatchExecuteMemory.predictedNextPc := dispatch.predictedNextPc
-  directDispatchExecuteMemory.perfFetchStartCycle := dispatch.perfFetchStartCycle
-  directDispatchExecuteMemory.perfFetchCycles := dispatch.perfFetchCycles
-  directDispatchExecuteMemory.perfDecodeStartCycle := dispatch.perfDecodeStartCycle
-  directDispatchExecuteMemory.perfDecodeCycles := 0.U
-  directDispatchExecuteMemory.perfExecuteStartCycle := performanceCycle
-  directDispatchExecuteMemory.perfExecuteCycles := 1.U
-  directDispatchExecuteMemory.perfMemoryStartCycle := performanceCycle
-  directDispatchExecuteMemory.perfMemoryQueueStartCycle := performanceCycle
-  directDispatchExecuteMemory.aluResult := directDispatchAluResult
-  directDispatchExecuteMemory.branch := dispatch.branch
-  directDispatchExecuteMemory.branchTaken := directDispatchBranchTaken
-  directDispatchExecuteMemory.branchTarget := dispatch.pc + dispatch.immediate
-  directDispatchExecuteMemory.jalrTarget := Cat(
-    (directDispatchRs1Data + dispatch.immediate)(cfg.xlen - 1, 1), 0.U(1.W))
-  directDispatchExecuteMemory.storeData := directDispatchRs2Data
-  directDispatchExecuteMemory.rd := dispatch.rd
-  directDispatchExecuteMemory.funct3 := dispatch.funct3
-  directDispatchExecuteMemory.registerWriteEnable := dispatch.registerWriteEnable
-
   memoryWritebackReg.io.flush := false.B
   memoryWritebackReg.io.in.valid := false.B
   memoryWritebackReg.io.in.bits := 0.U.asTypeOf(new MemoryWritebackPayload(cfg))
@@ -1032,26 +950,18 @@ class NpcBackend(
     // 只有 MEM 的所有队列均已排空时，非访存项才能直通 MEM/WB。若存在较老 load/store，
     // 它仍必须进入 orderQueue，不能在提交顺序上越过较老访存或其可能产生的 fault。
     val nonMemoryWritebackBypass = !outstandingCompletionForwarding.B &&
-      executeMemoryReg.io.out.valid && !memoryAccess && stage.io.drained
+      executeMemoryReg.io.out.valid && !memoryAccess && stage.io.retirementDrained
     // EX->WB 只在没有旧的 EX/MEM 或 MEM 项时可用。MEM/WB 即使正在提交更老的
     // 普通整数项也能同拍接收新项，PipelineRegister 会在该时钟边界保持提交顺序。
-    directIntegerWriteback := directIntegerWritebackCandidate && stage.io.drained &&
+    directIntegerWriteback := directIntegerWritebackCandidate && stage.io.retirementDrained &&
       !stage.io.response.valid && memoryWritebackReg.io.in.ready
-    // EX/MEM 的反压只取决于该级已保存载荷的去向。派发直通只会在 EX/MEM
-    // 为空时发生，不能参与 ready 选择，否则分支恢复会绕回 ID 的派发许可。
     executeMemoryReg.io.out.ready := Mux(nonMemoryWritebackBypass,
       memoryWritebackReg.io.in.ready, stage.io.request.ready && memoryStageInputAllowed)
     stage.io.request.valid := executeMemoryReg.io.out.valid && !nonMemoryWritebackBypass &&
       memoryStageInputAllowed
     stage.io.request.bits := executeMemoryReg.io.out.bits
     stage.io.response.ready := memoryWritebackReg.io.in.ready
-    when(directDispatchWriteback) {
-      memoryWritebackReg.io.in.valid := true.B
-      driveMemoryWritebackPayload(memoryWritebackReg.io.in.bits, directDispatchExecuteMemory, 0.U(cfg.xlen.W))
-      memoryWritebackReg.io.in.bits.perfMemoryCycles := 0.U
-      memoryWritebackReg.io.in.bits.perfMemoryQueueCycles := 0.U
-      memoryWritebackReg.io.in.bits.perfMemoryServiceCycles := 0.U
-    }.elsewhen(directIntegerWriteback) {
+    when(directIntegerWriteback) {
       memoryWritebackReg.io.in.valid := true.B
       driveMemoryWritebackPayload(memoryWritebackReg.io.in.bits, executeMemoryInput, 0.U(cfg.xlen.W))
       memoryWritebackReg.io.in.bits.perfMemoryCycles := 0.U
@@ -1291,6 +1201,23 @@ class NpcBackend(
 
   io.redirectValid := frontendRedirectValid
   io.redirectTarget := frontendRedirectTarget
+  // 仅一拍 EX 的条件分支和 JALR 会在这一拍得到最终 next-PC；前端在下一拍更新方向或
+  // 目标表。两拍 EX 路径没有推测取指，保持零输出以避免把更晚的恢复事件误当作训练样本。
+  io.branchResolutionValid := !twoStageIntegerExecute.B && directIntegerExecuteFire &&
+    executeOutputRequest.branch
+  io.branchResolutionPc := executeOutputRequest.pc
+  io.branchResolutionConditional := executeOutputRequest.instruction(6, 0) === "b1100011".U
+  io.branchResolutionJalr := executeOutputRequest.instruction(6, 0) === "b1100111".U
+  val resolvedRd = executeOutputRequest.instruction(11, 7)
+  val resolvedRs1 = executeOutputRequest.instruction(19, 15)
+  val resolvedJal = executeOutputRequest.instruction(6, 0) === "b1101111".U
+  io.branchResolutionCall := (resolvedJal || io.branchResolutionJalr) &&
+    (resolvedRd === 1.U || resolvedRd === 5.U)
+  io.branchResolutionReturn := io.branchResolutionJalr && resolvedRd === 0.U &&
+    (resolvedRs1 === 1.U || resolvedRs1 === 5.U) && executeOutputRequest.instruction(31, 20) === 0.U
+  io.branchResolutionTaken := executeBranchTaken =/= NpcBranchResult.notTaken
+  io.branchResolutionTarget := Mux(executeBranchTaken === NpcBranchResult.rs1Immediate,
+    computedExecuteMemory.jalrTarget, computedExecuteMemory.branchTarget)
   io.debug.registers := registerFile.io.registersOut.get
   io.debug.floatingRegisters := floatingRegisterFile.map(_.io.registersOut)
     .getOrElse(VecInit(Seq.fill(32)(0.U(cfg.xlen.W))))

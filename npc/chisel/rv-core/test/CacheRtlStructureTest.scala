@@ -80,16 +80,24 @@ class CacheRtlStructureTest extends AnyFlatSpec {
       new NpcCore(new PipelinedTwoCycleWideL2SimulationCoreConfig().build))
     val l1Only = _root_.circt.stage.ChiselStage.emitCHIRRTL(
       new NpcCore(new HbmJitterCacheSimulationCoreConfig().build))
+    val l1WithoutBranchPredictor = _root_.circt.stage.ChiselStage.emitCHIRRTL(
+      new NpcCore((new WithoutNpcBranchPredictorConfig ++
+        new HbmJitterCacheSimulationCoreConfig).build))
 
     assert(pipelined.contains("module PipelinedCacheController"))
     assert(pipelined.contains("module PipelinedIFetchAXIAdapter"))
     assert(pipelined.contains("module PipelinedMemoryStage"))
     assert(pipelined.contains("module PipelinedAxiLiteArbiter2"))
     assert(pipelined.contains("module PipelinedAxiLiteCrossbar"))
+    assert(pipelined.contains("module PipelinedAxiLiteXorInterleaver2"))
     assert(pipelined.contains("module PipelinedAxiLiteDpiRamSlave"))
     assert(l1Only.contains("module PipelinedCacheController"))
     assert(l1Only.contains("module PipelinedIFetchAXIAdapter"))
     assert(l1Only.contains("module PipelinedAxiLiteCrossbar"))
+    assert(l1Only.contains("module PipelinedAxiLiteXorInterleaver2"))
+    assert(l1Only.contains("module PipelinedAxiLiteArbiter2"))
     assert(l1Only.contains("module PipelinedAxiLiteDpiRamSlave"))
+    assert(l1Only.contains("module BranchPredictor"))
+    assert(!l1WithoutBranchPredictor.contains("module BranchPredictor"))
   }
 }

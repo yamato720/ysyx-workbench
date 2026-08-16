@@ -31,7 +31,7 @@ phase_log_tool="$npc_root/scripts/phase-log.sh"
 artifact_tool="$npc_root/fpga/common/scripts/artifact-manifest.sh"
 mkdir -p "$root/.profiles" "$root/.failed" "$root/.hosts" "$root/.compatible" "$root/.locks"
 catalog_ready=${NPC_CONFIG_CATALOG_READY:-0}
-profile_format=23
+profile_format=24
 profile_inputs_fingerprint_cache=''
 [[ $catalog_ready == 0 || $catalog_ready == 1 ]] || { echo "NPC_CONFIG_CATALOG_READY 只能是 0 或 1" >&2; exit 2; }
 
@@ -155,7 +155,7 @@ migrate_config_names_locked() {
 
 migrate_profile_mode() {
   local file=$1 capability scope board replacement normalized_scope temporary inferred_preset host_backend host_devices
-  local saved_host_config saved_preset preset pipeline_html performance_html cache_html memory_statistics_mode integer_execute_stages serial_execute_stages register_initial_fetch_request separate_serial_integer_alu serial_execute_result_forwarding divider_non_blocking needs_divider_non_blocking runtime_sdb trace_enabled trace_bank trace_buffer trace_max trace_cache trace_format trace_record_bytes trace_data_width trace_burst_records dpi_timing_enabled dpi_read_min dpi_read_max dpi_write_min dpi_write_max dpi_timing_seed
+  local saved_host_config saved_preset preset pipeline_html performance_html cache_html memory_statistics_mode integer_execute_stages serial_execute_stages register_initial_fetch_request separate_serial_integer_alu serial_execute_result_forwarding branch_predictor divider_non_blocking needs_divider_non_blocking runtime_sdb trace_enabled trace_bank trace_buffer trace_max trace_cache trace_format trace_record_bytes trace_data_width trace_burst_records dpi_timing_enabled dpi_read_min dpi_read_max dpi_write_min dpi_write_max dpi_timing_seed
   [[ -f $file ]] || return 0
   capability=$(value "$file" CAPABILITY)
   scope=$(value "$file" SCOPE)
@@ -218,6 +218,13 @@ migrate_profile_mode() {
     echo "保存 profile 的 SERIAL_EXECUTE_RESULT_FORWARDING 非法：$file（$serial_execute_result_forwarding）" >&2
     exit 1
   }
+  # 历史两拍缓存前端在满足流水条件时隐式启用预测；迁移为显式字段时保持该行为。
+  branch_predictor=$(value "$file" BRANCH_PREDICTOR)
+  [[ -n $branch_predictor ]] || branch_predictor=1
+  [[ $branch_predictor == 0 || $branch_predictor == 1 ]] || {
+    echo "保存 profile 的 BRANCH_PREDICTOR 非法：$file（$branch_predictor）" >&2
+    exit 1
+  }
   needs_divider_non_blocking=0
   [[ $normalized_scope == fpga ]] && needs_divider_non_blocking=1
   divider_non_blocking=$(value "$file" FPGA_DIVIDER_NON_BLOCKING)
@@ -270,6 +277,7 @@ migrate_profile_mode() {
     -z $(value "$file" REGISTER_INITIAL_FETCH_REQUEST) ||
     -z $(value "$file" SEPARATE_SERIAL_INTEGER_ALU) ||
     -z $(value "$file" SERIAL_EXECUTE_RESULT_FORWARDING) ||
+    -z $(value "$file" BRANCH_PREDICTOR) ||
     -z $(value "$file" DPI_MEMORY_TIMING_ENABLED) ||
     -z $(value "$file" DPI_MEMORY_READ_RESPONSE_MIN_CYCLES) ||
     -z $(value "$file" DPI_MEMORY_READ_RESPONSE_MAX_CYCLES) ||
@@ -295,6 +303,7 @@ migrate_profile_mode() {
       -v register_initial_fetch_request="$register_initial_fetch_request" \
       -v separate_serial_integer_alu="$separate_serial_integer_alu" \
       -v serial_execute_result_forwarding="$serial_execute_result_forwarding" \
+      -v branch_predictor="$branch_predictor" \
       -v divider_non_blocking="$divider_non_blocking" -v needs_divider_non_blocking="$needs_divider_non_blocking" -v runtime_sdb="$runtime_sdb" \
       -v trace_enabled="$trace_enabled" -v trace_bank="$trace_bank" -v trace_buffer="$trace_buffer" \
       -v trace_max="$trace_max" -v trace_cache="$trace_cache" -v trace_format="$trace_format" \
@@ -315,6 +324,7 @@ migrate_profile_mode() {
       /^REGISTER_INITIAL_FETCH_REQUEST=/ { if (!register_initial_fetch_request_seen++) print "REGISTER_INITIAL_FETCH_REQUEST=" register_initial_fetch_request; next }
       /^SEPARATE_SERIAL_INTEGER_ALU=/ { if (!separate_serial_integer_alu_seen++) print "SEPARATE_SERIAL_INTEGER_ALU=" separate_serial_integer_alu; next }
       /^SERIAL_EXECUTE_RESULT_FORWARDING=/ { if (!serial_execute_result_forwarding_seen++) print "SERIAL_EXECUTE_RESULT_FORWARDING=" serial_execute_result_forwarding; next }
+      /^BRANCH_PREDICTOR=/ { if (!branch_predictor_seen++) print "BRANCH_PREDICTOR=" branch_predictor; next }
       /^DPI_MEMORY_TIMING_ENABLED=/ { if (!dpi_timing_enabled_seen++) print "DPI_MEMORY_TIMING_ENABLED=" dpi_timing_enabled; next }
       /^DPI_MEMORY_READ_RESPONSE_MIN_CYCLES=/ { if (!dpi_read_min_seen++) print "DPI_MEMORY_READ_RESPONSE_MIN_CYCLES=" dpi_read_min; next }
       /^DPI_MEMORY_READ_RESPONSE_MAX_CYCLES=/ { if (!dpi_read_max_seen++) print "DPI_MEMORY_READ_RESPONSE_MAX_CYCLES=" dpi_read_max; next }
@@ -341,6 +351,7 @@ migrate_profile_mode() {
         if (!register_initial_fetch_request_seen) print "REGISTER_INITIAL_FETCH_REQUEST=" register_initial_fetch_request
         if (!separate_serial_integer_alu_seen) print "SEPARATE_SERIAL_INTEGER_ALU=" separate_serial_integer_alu
         if (!serial_execute_result_forwarding_seen) print "SERIAL_EXECUTE_RESULT_FORWARDING=" serial_execute_result_forwarding
+        if (!branch_predictor_seen) print "BRANCH_PREDICTOR=" branch_predictor
         if (!dpi_timing_enabled_seen) print "DPI_MEMORY_TIMING_ENABLED=" dpi_timing_enabled
         if (!dpi_read_min_seen) print "DPI_MEMORY_READ_RESPONSE_MIN_CYCLES=" dpi_read_min
         if (!dpi_read_max_seen) print "DPI_MEMORY_READ_RESPONSE_MAX_CYCLES=" dpi_read_max
@@ -376,6 +387,7 @@ migrate_profile_mode() {
     /^REGISTER_INITIAL_FETCH_REQUEST=/ { next }
     /^SEPARATE_SERIAL_INTEGER_ALU=/ { next }
     /^SERIAL_EXECUTE_RESULT_FORWARDING=/ { next }
+    /^BRANCH_PREDICTOR=/ { next }
     /^DPI_MEMORY_TIMING_ENABLED=/ { next }
     /^DPI_MEMORY_READ_RESPONSE_MIN_CYCLES=/ { next }
     /^DPI_MEMORY_READ_RESPONSE_MAX_CYCLES=/ { next }
@@ -418,6 +430,7 @@ migrate_profile_mode() {
     echo "REGISTER_INITIAL_FETCH_REQUEST=$register_initial_fetch_request"
     echo "SEPARATE_SERIAL_INTEGER_ALU=$separate_serial_integer_alu"
     echo "SERIAL_EXECUTE_RESULT_FORWARDING=$serial_execute_result_forwarding"
+    echo "BRANCH_PREDICTOR=$branch_predictor"
     echo "DPI_MEMORY_TIMING_ENABLED=$dpi_timing_enabled"
     echo "DPI_MEMORY_READ_RESPONSE_MIN_CYCLES=$dpi_read_min"
     echo "DPI_MEMORY_READ_RESPONSE_MAX_CYCLES=$dpi_read_max"

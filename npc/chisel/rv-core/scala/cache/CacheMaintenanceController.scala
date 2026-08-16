@@ -74,8 +74,15 @@ class CacheMaintenanceController(
   }
 
   def flushL2OrRelease(): Unit = {
-    if (hasUnifiedL2) state := sFlushL2
-    else releaseOrInvalidateInstruction()
+    // 单核 FENCE/FENCE.I 在 D$ 已经写入共享 L2 后即可建立可见顺序：后续取指和
+    // 数据访问都会经过同一 L2。只有 host 观察完成或复位边界时，才需要继续写回
+    // 外部主存；把本地屏障也扩展到 HBM 会平白增加一次完整写延迟。
+    if (hasUnifiedL2) {
+      when(externalOperation) { state := sFlushL2 }
+        .otherwise { releaseOrInvalidateInstruction() }
+    } else {
+      releaseOrInvalidateInstruction()
+    }
   }
 
   switch(state) {
@@ -111,8 +118,7 @@ class CacheMaintenanceController(
       }
     }
     is(sFlushL2) {
-      // 统一 L2 只在 D$ 完成后 drain，保持 write-back 层级要求的
-      // D$ -> L2 顺序。
+      // 只有外部完成/复位 drain 才从共享 L2 写回主存，且始终在 D$ 完成之后。
       when(io.l2FlushDone) {
         releaseOrInvalidateInstruction()
       }

@@ -154,10 +154,10 @@ class IFetchAXIAdapter(
   }
 }
 
-/** 流水取指在 AR 发射时保存的 PC/epoch。 */
-class PipelinedFetchRequest(addrWidth: Int) extends Bundle {
+/** 流水取指在 AR 发射时保存的 PC/generation。 */
+class PipelinedFetchRequest(addrWidth: Int, generationWidth: Int) extends Bundle {
   val pc = UInt(addrWidth.W)
-  val epoch = Bool()
+  val generation = UInt(generationWidth.W)
   val issueCycle = UInt(64.W)
 }
 
@@ -199,9 +199,12 @@ class PipelinedIFetchAXIAdapter(
     val axi = new AxiLiteMasterIO(addrWidth, dataWidth)
   })
 
-  val requests = Module(new Queue(new PipelinedFetchRequest(addrWidth),
+  // 未返回的旧请求最多与 FIFO 深度相同。generation 必须比这一窗口多一个状态，
+  // 否则连续 redirect 在最旧 R 到达前回绕，会把错误路径响应当成新路径指令。
+  private val generationWidth = math.max(1, log2Ceil(outstandingDepth + 1))
+  val requests = Module(new Queue(new PipelinedFetchRequest(addrWidth, generationWidth),
     outstandingDepth, pipe = false, flow = false))
-  val currentEpoch = RegInit(false.B)
+  val currentGeneration = RegInit(0.U(generationWidth.W))
   val nextPc = RegInit(0.U(addrWidth.W))
   val initialized = RegInit(false.B)
   val drainingOld = RegInit(false.B)
@@ -231,11 +234,11 @@ class PipelinedIFetchAXIAdapter(
   io.axi.ar.bits.prot := "b100".U
   requests.io.enq.valid := io.axi.ar.fire
   requests.io.enq.bits.pc := issuePc
-  requests.io.enq.bits.epoch := currentEpoch
+  requests.io.enq.bits.generation := currentGeneration
   requests.io.enq.bits.issueCycle := io.performanceCycle
 
   val responseRequest = requests.io.deq.bits
-  val responseEpochMatches = responseRequest.epoch === currentEpoch &&
+  val responseGenerationMatches = responseRequest.generation === currentGeneration &&
     (allowRedirectRequestOverlap.B || !drainingOld)
   val responseOk = io.axi.r.bits.resp === AxiLiteResp.OKAY
   val responseWord = (io.axi.r.bits.data >>
@@ -243,9 +246,9 @@ class PipelinedIFetchAXIAdapter(
   io.responsePc := responseRequest.pc
   io.responseIssueCycle := responseRequest.issueCycle
   io.inst := responseWord
-  io.responseValid := io.axi.r.valid && requests.io.deq.valid && responseEpochMatches && responseOk
+  io.responseValid := io.axi.r.valid && requests.io.deq.valid && responseGenerationMatches && responseOk
   io.axi.r.ready := requests.io.deq.valid &&
-    (drainingOld || !responseEpochMatches || !responseOk || io.responseReady)
+    (drainingOld || !responseGenerationMatches || !responseOk || io.responseReady)
   requests.io.deq.ready := io.axi.r.fire
 
   when(io.axi.ar.fire) {
@@ -258,7 +261,7 @@ class PipelinedIFetchAXIAdapter(
     faultReason := MemoryFaultReason.misaligned
   }
   when(io.axi.r.fire && (!drainingOld || allowRedirectRequestOverlap.B) &&
-    responseEpochMatches && !responseOk) {
+    responseGenerationMatches && !responseOk) {
     faultValid := true.B
     faultAddr := responseRequest.pc
     faultReason := MemoryFaultReason.readResponse
@@ -266,12 +269,15 @@ class PipelinedIFetchAXIAdapter(
   // 预测命中的控制流不会等待 EX 的重复 redirect。非重叠路径则先清空旧 epoch，
   // 使标量核不会在后端恢复前保留跨越 redirect 的错误路径请求。
   when(io.predictionValid) {
-    currentEpoch := !currentEpoch
+    currentGeneration := currentGeneration + 1.U
     nextPc := io.predictionTarget
     initialized := true.B
+    // 一拍分支预测也必须先消费已经提交给 AXI 的旧 epoch 请求。缓存命中和 miss
+    // 的完成时刻不同，若让目标请求与它们重叠，PC FIFO 会把返回数据配给错误指令。
+    drainingOld := !allowRedirectRequestOverlap.B && (requests.io.deq.valid || io.axi.r.valid)
   }
   when(io.flush) {
-    currentEpoch := !currentEpoch
+    currentGeneration := currentGeneration + 1.U
     nextPc := io.restartPc
     initialized := true.B
     drainingOld := !allowRedirectRequestOverlap.B && (requests.io.deq.valid || io.axi.r.valid)

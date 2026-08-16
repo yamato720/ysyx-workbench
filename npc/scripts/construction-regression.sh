@@ -289,7 +289,7 @@ build_hold=''
 sed -i -e 's/^PROFILE_FORMAT=.*/PROFILE_FORMAT=2/' -e 's/^CAPABILITY=run$/CAPABILITY=verilator/' \
   -e '/^INTEGER_EXECUTE_STAGES=/d' -e '/^REGISTER_INITIAL_FETCH_REQUEST=/d' \
   -e '/^SERIAL_EXECUTE_STAGES=/d' \
-  -e '/^SEPARATE_SERIAL_INTEGER_ALU=/d' -e '/^SERIAL_EXECUTE_RESULT_FORWARDING=/d' \
+  -e '/^SEPARATE_SERIAL_INTEGER_ALU=/d' -e '/^SERIAL_EXECUTE_RESULT_FORWARDING=/d' -e '/^BRANCH_PREDICTOR=/d' \
   -e '/^NEMU_CACHE_HTML=/d' \
   -e '/^FPGA_DIVIDER_NON_BLOCKING=/d' "$dpi/profile.env"
 sed -i -e 's/^CAPABILITY=run$/CAPABILITY=verilator/' \
@@ -302,12 +302,13 @@ sed -i -e 's/^HOST_FORMAT=.*/HOST_FORMAT=4/' \
   -e '/^NEMU_CACHE_HTML=/d' \
   "$dpi/abi/nemu/host.env"
 "$manager" ensure "$npc_root" SimulationConfig 0 0
-[[ $(value "$dpi/profile.env" PROFILE_FORMAT) == 22 && $(value "$dpi/profile.env" CAPABILITY) == run &&
+[[ $(value "$dpi/profile.env" PROFILE_FORMAT) == 24 && $(value "$dpi/profile.env" CAPABILITY) == run &&
   $(value "$dpi/profile.env" INTEGER_EXECUTE_STAGES) == 1 &&
   $(value "$dpi/profile.env" SERIAL_EXECUTE_STAGES) == 1 &&
   $(value "$dpi/profile.env" REGISTER_INITIAL_FETCH_REQUEST) == 0 &&
   $(value "$dpi/profile.env" SEPARATE_SERIAL_INTEGER_ALU) == 0 &&
-  $(value "$dpi/profile.env" SERIAL_EXECUTE_RESULT_FORWARDING) == 1 ]] ||
+  $(value "$dpi/profile.env" SERIAL_EXECUTE_RESULT_FORWARDING) == 1 &&
+  $(value "$dpi/profile.env" BRANCH_PREDICTOR) == 1 ]] ||
   fail '已保存 profile 未迁移到 run 模式'
 [[ $(value "$dpi/construction.env" CAPABILITY) == run ]] ||
   fail '已保存 construction.env 未迁移到 run 模式'
@@ -639,12 +640,13 @@ fi
 "$manager" rebuild "$npc_root" U55cYsyxSocFpgaConfig
 sed -i -e 's/^PROFILE_FORMAT=.*/PROFILE_FORMAT=3/' -e 's/^SCOPE=fpga$/SCOPE=fpga-soc/' "$u55c/profile.env"
 "$manager" ensure "$npc_root" U55cYsyxSocFpgaConfig 0 0
-[[ $(value "$u55c/profile.env" PROFILE_FORMAT) == 22 && $(value "$u55c/profile.env" SCOPE) == fpga &&
+[[ $(value "$u55c/profile.env" PROFILE_FORMAT) == 24 && $(value "$u55c/profile.env" SCOPE) == fpga &&
   $(value "$u55c/profile.env" INTEGER_EXECUTE_STAGES) == 1 &&
   $(value "$u55c/profile.env" SERIAL_EXECUTE_STAGES) == 1 &&
   $(value "$u55c/profile.env" REGISTER_INITIAL_FETCH_REQUEST) == 0 &&
   $(value "$u55c/profile.env" SEPARATE_SERIAL_INTEGER_ALU) == 0 &&
   $(value "$u55c/profile.env" SERIAL_EXECUTE_RESULT_FORWARDING) == 1 &&
+  $(value "$u55c/profile.env" BRANCH_PREDICTOR) == 1 &&
   $(value "$u55c/profile.env" FPGA_DIVIDER_NON_BLOCKING) == 0 &&
   $(value "$u55c/profile.env" FPGA_RUNTIME_SDB) == 1 &&
   $(value "$u55c/profile.env" FPGA_RUNTIME_TRACE) == 0 &&

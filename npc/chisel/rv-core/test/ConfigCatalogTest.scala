@@ -213,7 +213,7 @@ class ConfigCatalogTest extends AnyFlatSpec {
     val construction = new SimulationConfig
     val values = ConstructionProfile.values(entry, construction, construction.config).toMap
 
-    assert(values("PROFILE_FORMAT") == "22")
+    assert(values("PROFILE_FORMAT") == "24")
     assert(values("HOST_ABI") == "nemu-construction-v1")
     assert(values("NEMU_PRESET") == "LocalPipelineTrace")
     assert(values("NEMU_BACKEND") == "local")
@@ -225,6 +225,7 @@ class ConfigCatalogTest extends AnyFlatSpec {
     assert(values("REGISTER_INITIAL_FETCH_REQUEST") == "0")
     assert(values("SEPARATE_SERIAL_INTEGER_ALU") == "0")
     assert(values("SERIAL_EXECUTE_RESULT_FORWARDING") == "1")
+    assert(values("BRANCH_PREDICTOR") == "1")
 
     val serviceOnlyHost = new HostConstruction {
       override protected val configuredNemu: NemuHostConfig =
@@ -255,6 +256,7 @@ class ConfigCatalogTest extends AnyFlatSpec {
     assert(values("REGISTER_INITIAL_FETCH_REQUEST") == "0")
     assert(values("SEPARATE_SERIAL_INTEGER_ALU") == "0")
     assert(values("SERIAL_EXECUTE_RESULT_FORWARDING") == "1")
+    assert(values("BRANCH_PREDICTOR") == "1")
   }
 
   it should "enable committed-instruction HTML for every local NPC terminal" in {

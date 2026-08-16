@@ -150,7 +150,7 @@ class CacheControlBehaviorTest extends AnyFlatSpec {
     }
   }
 
-  it should "drain D$ before the shared L2 for fences and external maintenance" in {
+  it should "drain FENCE into the shared L2 and write it back only for external maintenance" in {
     simulate(new CacheMaintenanceController(
       hasInstructionCache = true, hasDataCache = true, hasUnifiedL2 = true)) { dut =>
       dut.io.fencePending.poke(false)
@@ -164,6 +164,21 @@ class CacheControlBehaviorTest extends AnyFlatSpec {
       dut.reset.poke(true)
       dut.clock.step(2)
       dut.reset.poke(false)
+
+      // FENCE/FENCE.I 只需把 D$ 写入共享 L2；后续核心取指和数据访问都经过该层，
+      // 因而无需在每条屏障上同步等待外部 HBM 写回。
+      dut.io.fencePending.poke(true)
+      dut.clock.step(2)
+      dut.io.dcacheFlush.expect(true.B)
+      dut.io.dcacheFlushDone.poke(true)
+      dut.clock.step()
+      dut.io.dcacheFlushDone.poke(false)
+      dut.io.l2Flush.expect(false.B)
+      dut.io.dispatchPermit.expect(true.B)
+      dut.io.fenceAccepted.poke(true)
+      dut.clock.step()
+      dut.io.fenceAccepted.poke(false)
+      dut.io.fencePending.poke(false)
 
       dut.io.externalDrainRequest.poke(true)
       dut.clock.step(2)
@@ -458,6 +473,61 @@ class CacheControlBehaviorTest extends AnyFlatSpec {
       dut.io.predictionValid.poke(false)
       dut.io.axi.ar.valid.expect(true.B)
       dut.io.axi.ar.bits.addr.expect(0x80000100L.U)
+      dut.clock.step()
+    }
+  }
+
+  it should "not revive an old response after consecutive overlapping redirects" in {
+    simulate(new PipelinedIFetchAXIAdapter(addrWidth = 32, dataWidth = 32, outstandingDepth = 4)) { dut =>
+      dut.io.pc.poke(0x80000000L)
+      dut.io.restartPc.poke(0x80000000L)
+      dut.io.responseReady.poke(true)
+      dut.io.performanceCycle.poke(0)
+      dut.io.issueHold.poke(false)
+      dut.io.predictionValid.poke(false)
+      dut.io.predictionTarget.poke(0)
+      dut.io.flush.poke(false)
+      dut.io.axi.aw.ready.poke(false)
+      dut.io.axi.w.ready.poke(false)
+      dut.io.axi.b.valid.poke(false)
+      dut.io.axi.b.bits.resp.poke(0)
+      dut.io.axi.ar.ready.poke(true)
+      dut.io.axi.r.valid.poke(false)
+      dut.io.axi.r.bits.data.poke(0)
+      dut.io.axi.r.bits.resp.poke(0)
+      dut.reset.poke(true)
+      dut.clock.step(2)
+      dut.reset.poke(false)
+
+      // 先排入旧路径请求，再连续两次 redirect；两个旧 R 都在最后目标请求之前返回。
+      dut.io.axi.ar.bits.addr.expect(0x80000000L.U)
+      dut.clock.step()
+      dut.io.restartPc.poke(0x80000100L)
+      dut.io.flush.poke(true)
+      dut.clock.step()
+      dut.io.flush.poke(false)
+      dut.io.axi.ar.bits.addr.expect(0x80000100L.U)
+      dut.clock.step()
+      dut.io.restartPc.poke(0x80000200L)
+      dut.io.flush.poke(true)
+      dut.clock.step()
+      dut.io.flush.poke(false)
+      dut.io.axi.ar.bits.addr.expect(0x80000200L.U)
+      dut.clock.step()
+
+      dut.io.axi.r.bits.data.poke("h11111113".U)
+      dut.io.axi.r.valid.poke(true)
+      dut.io.responseValid.expect(false.B)
+      dut.io.axi.r.ready.expect(true.B)
+      dut.clock.step()
+      dut.io.axi.r.bits.data.poke("h22222213".U)
+      dut.io.responseValid.expect(false.B)
+      dut.io.axi.r.ready.expect(true.B)
+      dut.clock.step()
+      dut.io.axi.r.bits.data.poke("h33333313".U)
+      dut.io.responseValid.expect(true.B)
+      dut.io.responsePc.expect(0x80000200L.U)
+      dut.io.inst.expect("h33333313".U)
       dut.clock.step()
     }
   }

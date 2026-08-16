@@ -17,7 +17,9 @@ class InstructionCache(config: NpcConfig) extends Module {
   if (config.cache.accessMode == CacheAccessMode.PipelinedTwoCycle) {
     val controller = Module(new PipelinedCacheController(cache, axi.addrWidth, axi.dataWidth,
       config.memory.mainMemoryBase, config.memory.mainMemorySize, readOnly = true,
-      config.cache.pipelinedQueues, memoryDataWidth))
+      config.cache.pipelinedQueues, memoryDataWidth,
+      enableNextLinePrefetch = config.memory.dpiTiming.enabled,
+      eagerNextLinePrefetch = config.memory.dpiTiming.enabled))
     controller.io.cpu <> io.cpu
     io.memory <> controller.io.memory
     controller.io.maintenanceRequest := io.invalidate

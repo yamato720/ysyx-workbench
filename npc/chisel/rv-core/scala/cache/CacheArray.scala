@@ -41,8 +41,9 @@ private class UramSyncMemory(depth: Int, width: Int) extends BlackBox(Map(
       |""".stripMargin)
 }
 
-/** Valid/dirty bits reset explicitly; Auto tag and line payloads infer synchronous SRAM. */
-class CacheArray(cache: CacheConfig, addrWidth: Int, dataWidth: Int, hasDirty: Boolean) extends Module {
+/** valid/dirty 显式复位；Auto 存储中的 tag 与 line 载荷推导为同步 SRAM。 */
+class CacheArray(cache: CacheConfig, addrWidth: Int, dataWidth: Int, hasDirty: Boolean,
+                 useValidityEpoch: Boolean = false, indexBitOffset: Int = 0) extends Module {
   private val geometry = cache.geometry
   private val sets = geometry.sets
   private val ways = geometry.ways
@@ -50,7 +51,9 @@ class CacheArray(cache: CacheConfig, addrWidth: Int, dataWidth: Int, hasDirty: B
   private val lineWidth = beats * dataWidth
   private val setWidth = math.max(1, log2Ceil(sets))
   private val wayWidth = math.max(1, log2Ceil(ways))
-  private val tagWidth = geometry.tagBits(addrWidth)
+  require(indexBitOffset >= 0 && geometry.offsetBits + indexBitOffset + geometry.indexBits < addrWidth,
+    s"cache index bit offset $indexBitOffset is invalid for address width $addrWidth")
+  private val tagWidth = geometry.tagBits(addrWidth) - indexBitOffset
 
   val io = IO(new Bundle {
     val readEnable = Input(Bool())
@@ -67,9 +70,13 @@ class CacheArray(cache: CacheConfig, addrWidth: Int, dataWidth: Int, hasDirty: B
     val metaWriteSet = Input(UInt(setWidth.W))
     val metaWriteWay = Input(UInt(wayWidth.W))
     val metaWrite = Input(new CacheTagMeta(tagWidth))
+    val validEpoch = Input(UInt(CacheValidityEpoch.width.W))
   })
 
   val validBits = RegInit(VecInit(Seq.fill(sets)(VecInit(Seq.fill(ways)(false.B)))))
+  // 只有 I$ 分配代际存储。D$/L2 不承受 FENCE.I 的失效语义，避免引入无用状态位。
+  val validEpochBits = if (useValidityEpoch) Some(RegInit(VecInit(Seq.fill(sets)(VecInit(
+    Seq.fill(ways)(0.U(CacheValidityEpoch.width.W))))))) else None
   val dirtyBits = if (hasDirty) {
     Some(RegInit(VecInit(Seq.fill(sets)(VecInit(Seq.fill(ways)(false.B))))))
   } else None
@@ -78,6 +85,9 @@ class CacheArray(cache: CacheConfig, addrWidth: Int, dataWidth: Int, hasDirty: B
   val readSetReg = RegInit(0.U(setWidth.W))
   when(io.readEnable) { readSetReg := io.readSet }
   val readValid = if (sets == 1) validBits(0) else validBits(readSetReg)
+  val readValidEpoch = validEpochBits.map { bits =>
+    if (sets == 1) bits(0) else bits(readSetReg)
+  }
   val readDirty = dirtyBits.map(bits => if (sets == 1) bits(0) else bits(readSetReg))
     .getOrElse(VecInit(Seq.fill(ways)(false.B)))
   val readTags = Wire(Vec(ways, UInt(tagWidth.W)))
@@ -109,7 +119,9 @@ class CacheArray(cache: CacheConfig, addrWidth: Int, dataWidth: Int, hasDirty: B
   }
 
   for (way <- 0 until ways) {
-    io.readMeta(way).valid := readValid(way)
+    io.readMeta(way).valid := (if (useValidityEpoch) {
+      readValid(way) && readValidEpoch.get(way) === io.validEpoch
+    } else readValid(way))
     io.readMeta(way).dirty := readDirty(way)
     io.readMeta(way).tag := readTags(way)
   }
@@ -159,6 +171,9 @@ class CacheArray(cache: CacheConfig, addrWidth: Int, dataWidth: Int, hasDirty: B
       when((if (sets == 1) true.B else io.metaWriteSet === set.U) &&
         (if (ways == 1) true.B else io.metaWriteWay === way.U)) {
         validBits(set)(way) := io.metaWrite.valid
+        validEpochBits.foreach { bits =>
+          when(io.metaWrite.valid) { bits(set)(way) := io.validEpoch }
+        }
         dirtyBits.foreach(bits => bits(set)(way) := io.metaWrite.dirty)
       }
     }

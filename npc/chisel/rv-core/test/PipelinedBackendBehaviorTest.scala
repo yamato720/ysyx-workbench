@@ -9,7 +9,13 @@ import scala.collection.mutable
 /** 直接驱动后端派发口，检查两拍整数 EX 与流水 MEM 重叠时仍保持 RAW 前递。 */
 class PipelinedBackendBehaviorTest extends AnyFlatSpec {
   private val config = new PipelinedTwoCycleWideL2SimulationCoreConfig().build
-  private val oneStageConfig = new HbmJitterCacheSimulationCoreConfig().build
+  private val oneStageConfig = {
+    val hbm = new HbmJitterCacheSimulationCoreConfig().build
+    hbm.copy(pipeline = hbm.pipeline.copy(
+      forwarding = hbm.pipeline.forwarding.copy(enableOutstandingCompletionForwarding = false)
+    ))
+  }
+  private val oneStageOutstandingConfig = new HbmJitterCacheSimulationCoreConfig().build
 
   private def clearDispatch(dut: NpcBackend): Unit = {
     val bits = dut.io.dispatch.bits
@@ -103,6 +109,17 @@ class PipelinedBackendBehaviorTest extends AnyFlatSpec {
     dut.io.dispatch.bits.immediate.poke(target - pc)
     dut.io.dispatch.bits.branch.poke(true)
     dut.io.dispatch.bits.aluCtrl.poke(NpcAluOp.Integer.BEQ.asUInt)
+  }
+
+  private def setMul(dut: NpcBackend, pc: BigInt, rd: Int): Unit = {
+    clearDispatch(dut)
+    dut.io.dispatch.bits.pc.poke(pc)
+    dut.io.dispatch.bits.instruction.poke(0x02000033L)
+    dut.io.dispatch.bits.predictedNextPc.poke(pc + 4)
+    dut.io.dispatch.bits.rd.poke(rd)
+    dut.io.dispatch.bits.registerWriteEnable.poke(true)
+    dut.io.dispatch.bits.executionUnit.poke(NpcExecutionUnit.multiply)
+    dut.io.dispatch.bits.aluCtrl.poke(NpcAluOp.MulDiv.MUL.asUInt)
   }
 
   private def initialize(dut: NpcBackend): Unit = {
@@ -241,7 +258,7 @@ class PipelinedBackendBehaviorTest extends AnyFlatSpec {
     }
   }
 
-  it should "write an isolated one-stage integer instruction into WB without an ID/EX residency" in {
+  it should "write an isolated one-stage integer instruction into WB after one ID/EX residency" in {
     simulate(new NpcBackend(oneStageConfig)) { dut =>
       initialize(dut)
       dut.reset.poke(true)
@@ -264,10 +281,10 @@ class PipelinedBackendBehaviorTest extends AnyFlatSpec {
         dut.clock.step()
         if (dut.io.debug.commitValid.peek().litToBoolean) {
           dut.io.debug.commitDecodeStartCycle.expect(decodeStart.U)
-          dut.io.debug.commitExecuteStartCycle.expect(decodeStart.U)
-          dut.io.debug.commitMemoryStartCycle.expect(decodeStart.U)
-          dut.io.debug.commitWritebackStartCycle.expect(decodeStart.U)
-          dut.io.debug.commitDecodeCycles.expect(0.U)
+          dut.io.debug.commitExecuteStartCycle.expect((decodeStart + 1).U)
+          dut.io.debug.commitMemoryStartCycle.expect((decodeStart + 1).U)
+          dut.io.debug.commitWritebackStartCycle.expect((decodeStart + 1).U)
+          dut.io.debug.commitDecodeCycles.expect(1.U)
           dut.io.debug.commitExecuteCycles.expect(1.U)
           dut.io.debug.commitMemoryCycles.expect(0.U)
           observed = true
@@ -278,7 +295,7 @@ class PipelinedBackendBehaviorTest extends AnyFlatSpec {
     }
   }
 
-  it should "keep dispatch-to-WB bypass active for consecutive independent integers" in {
+  it should "keep the one-cycle ID/EX-to-WB bypass active for consecutive independent integers" in {
     simulate(new NpcBackend(oneStageConfig)) { dut =>
       initialize(dut)
       dut.reset.poke(true)
@@ -316,11 +333,44 @@ class PipelinedBackendBehaviorTest extends AnyFlatSpec {
       }
 
       assert(decodeCycles.size == instructionCount)
-      assert(decodeCycles.forall(_ == 0), s"unexpected ID/EX residency: $decodeCycles")
+      assert(decodeCycles.forall(_ == 1), s"unexpected ID/EX residency: $decodeCycles")
     }
   }
 
-  it should "write a correctly predicted branch directly to WB and recover only wrong predictions" in {
+  it should "dispatch independent multiply requests without an ID/EX bubble" in {
+    simulate(new NpcBackend(oneStageOutstandingConfig)) { dut =>
+      initialize(dut)
+      dut.reset.poke(true)
+      dut.clock.step(2)
+      dut.reset.poke(false)
+
+      setMul(dut, 0x440, rd = 5)
+      dut.io.dispatch.valid.poke(true)
+      dut.io.dispatch.ready.expect(true.B)
+      dut.clock.step()
+
+      // 上一条 MUL 在本拍从 ID/EX 发射；完成表拥有独立槽位，因此下一条独立
+      // MUL 必须能同时写入 ID/EX，不能人为插入一个译码气泡。
+      setMul(dut, 0x444, rd = 6)
+      dut.io.dispatch.ready.expect(true.B)
+      dut.clock.step()
+      dut.io.dispatch.valid.poke(false)
+
+      val commits = mutable.ArrayBuffer.empty[BigInt]
+      var guard = 0
+      while (commits.size < 2 && guard < 80) {
+        if (dut.io.debug.sampleCommitValid.peek().litToBoolean) {
+          commits += dut.io.debug.sampleCommitPc.peek().litValue
+        }
+        dut.clock.step()
+        guard += 1
+      }
+
+      assert(commits.toSeq == Seq(BigInt(0x440), BigInt(0x444)))
+    }
+  }
+
+  it should "commit a correctly predicted branch through EX/MEM and recover only wrong predictions" in {
     def observeBranch(predictedNextPc: BigInt): (Option[BigInt], Boolean, Option[BigInt], Option[BigInt]) = {
       var observed: Option[BigInt] = None
       var sawExecuteMemoryFire = false
@@ -356,8 +406,8 @@ class PipelinedBackendBehaviorTest extends AnyFlatSpec {
 
     val (correctRedirect, correctExecuteMemoryFire, correctDecodeCycles, correctNextPc) = observeBranch(0x508)
     assert(correctRedirect.isEmpty)
-    assert(!correctExecuteMemoryFire)
-    assert(correctDecodeCycles.contains(BigInt(0)))
+    assert(correctExecuteMemoryFire)
+    assert(correctDecodeCycles.contains(BigInt(1)))
     assert(correctNextPc.contains(BigInt(0x508)))
 
     val (wrongRedirect, wrongExecuteMemoryFire, wrongDecodeCycles, wrongNextPc) = observeBranch(0x504)
