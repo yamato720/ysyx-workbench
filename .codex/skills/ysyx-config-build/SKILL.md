@@ -18,7 +18,7 @@ Read these sources before changing build behavior or Config composition:
 
 1. `npc/README.md` and `npc/chisel/configs/README.md` for the public interface and layer model.
 2. `npc/chisel/configs/parameters/ConfigCatalogGenerator.scala` for automatic terminal discovery.
-3. `npc/chisel/configs/npc/base/ConfigBase.scala` and `npc/chisel/configs/npc/core/ConstructionConfig.scala` for `NpcCoreConfigKey` and L1 composition.
+3. `npc/chisel/configs/npc/base/ConfigBase.scala` and `npc/chisel/configs/npc/base/ConstructionConfig.scala` for `NpcCoreConfigKey` and L1 composition.
 4. `npc/chisel/configs/common/base/ConstructionTraits.scala`, `npc/chisel/configs/common/base/IpComputeSelectionTraits.scala`, `npc/chisel/configs/common/core/TerminalCoreTraits.scala`, `npc/chisel/configs/common/core/IpTerminalCoreTraits.scala`, `npc/chisel/configs/common/TerminalTraits.scala`, and `npc/chisel/configs/common/IpTerminalTraits.scala` for the base construction interfaces, IP selection contract, terminal child groups, Make terminals, and FPGA/NEMU compute-IP terminals.
 5. `npc/chisel/configs/accelerators/spmv/` and `npc/chisel/configs/fpga/<board>/{npc,ysyx,spmv}/Configs.scala` when working on accelerator or board terminal ownership.
 6. `npc/Makefile`, `npc/scripts/construction-manager.sh`, and `am-kernels/tests/cpu-tests/Makefile` for the actual lifecycle and user-facing commands.
