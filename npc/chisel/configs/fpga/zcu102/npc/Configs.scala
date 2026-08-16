@@ -15,5 +15,5 @@ class Zcu102NpcFpgaConfig extends CDEConfig(
         new PipelineDualFwdPerformConfig ++
         new FpgaNpcIntegrationConfig ++
         new BaseConfig
-    ) {}
+    )
 ) with Zcu102NpcTerminal with FpgaIpTerminal
