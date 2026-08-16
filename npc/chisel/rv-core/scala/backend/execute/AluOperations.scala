@@ -12,10 +12,8 @@ class AluRequest(width: Int, tagWidth: Int) extends Bundle {
   val operandB = UInt(width.W)
   val operandC = UInt(width.W)
   val aluOp = UInt(NpcAluOp.width.W)
-  val roundingMode = UInt(3.W)
   val pc = UInt(width.W)
   val instruction = UInt(32.W)
-  val fcsr = UInt(8.W)
   val tag = UInt(tagWidth.W)
 }
 
@@ -28,8 +26,8 @@ class AluIO(width: Int, tagWidth: Int) extends Bundle {
 
 object NpcAluOp {
   /**
-    * `aluCtrl` 是五位的执行单元私有协议字段。整数 ALU、M 扩展单元和 F 单元
-    * 复用同一根连线，因此数值仅与 `NpcExecutionUnit` 结合时有意义。保持三个
+    * `aluCtrl` 是五位的执行单元私有协议字段。整数 ALU 和 M 扩展单元
+    * 复用同一根连线，因此数值仅与 `NpcExecutionUnit` 结合时有意义。保持两个
     * 命名空间显式分离，避免在一个扁平对象中维护互不相关的二进制字面量。
     *
     * 声明顺序即稳定的硬件/DPI 编码。ChiselEnum 还会把符号名称写入生成的
@@ -48,16 +46,8 @@ object NpcAluOp {
       MULW, DIVW, DIVUW, REMW, REMUW = Value
   }
 
-  object Floating extends ChiselEnum {
-    val FADD, FSUB, FMUL, FDIV, FSQRT, FMADD, FMSUB, FNMSUB, FNMADD,
-      FSGNJ, FSGNJN, FSGNJX, FMIN, FMAX, FEQ, FLT, FLE,
-      FCVT_W, FCVT_WU, FCVT_L, FCVT_LU, FCVT_S_W, FCVT_S_WU,
-      FCVT_S_L, FCVT_S_LU, FMV_X_W, FCLASS, FMV_W_X = Value
-  }
-
   require(Integer.getWidth <= width, "Integer ALU encoding exceeds aluCtrl width")
   require(MulDiv.getWidth <= width, "M-extension encoding exceeds aluCtrl width")
-  require(Floating.getWidth <= width, "Floating-point encoding exceeds aluCtrl width")
 }
 
 object NpcBranchResult {
@@ -85,5 +75,4 @@ object NpcExecutionUnit {
   def integer = "b00".U(width.W)
   def multiply = "b01".U(width.W)
   def divide = "b10".U(width.W)
-  def floating = "b11".U(width.W)
 }

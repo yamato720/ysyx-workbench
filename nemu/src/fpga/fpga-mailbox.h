@@ -27,9 +27,6 @@ enum nemu_fpga_runtime_register {
   NEMU_FPGA_RT_REGISTER_INDEX = 0x8c,
   NEMU_FPGA_RT_GPR_LOW = 0x90,
   NEMU_FPGA_RT_GPR_HIGH = 0x94,
-  NEMU_FPGA_RT_FPR_LOW = 0x98,
-  NEMU_FPGA_RT_FPR_HIGH = 0x9c,
-  NEMU_FPGA_RT_FCSR = 0xa0,
   NEMU_FPGA_RT_MSTATUS_LOW = 0xa4,
   NEMU_FPGA_RT_MSTATUS_HIGH = 0xa8,
   NEMU_FPGA_RT_CURRENT_PC_LOW = 0xac,
@@ -201,8 +198,7 @@ enum nemu_fpga_debug_csr {
   NEMU_FPGA_CSR_MCAUSE = 1,
   NEMU_FPGA_CSR_MEPC = 2,
   NEMU_FPGA_CSR_MTVEC = 3,
-  NEMU_FPGA_CSR_FCSR = 4,
-  NEMU_FPGA_CSR_PC = 5,
+  NEMU_FPGA_CSR_PC = 4,
 };
 
 struct nemu_fpga_mailbox_io {

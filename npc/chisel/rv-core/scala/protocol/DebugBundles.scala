@@ -24,8 +24,6 @@ class NpcFrontendDebugBundle(cfg: ISAConfig) extends Bundle {
 /** 按序执行和提交后端产生的调试遥测信息。 */
 class NpcBackendDebugBundle(cfg: ISAConfig) extends Bundle {
   val registers = Vec(32, UInt(cfg.xlen.W))
-  val floatingRegisters = Vec(32, UInt(cfg.xlen.W))
-  val fcsr = UInt(8.W)
   val mstatus = UInt(cfg.xlen.W)
   val mcause = UInt(cfg.xlen.W)
   val mtvec = UInt(cfg.xlen.W)

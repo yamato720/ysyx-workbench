@@ -31,7 +31,7 @@ object ElaborateFPGA extends App {
     s"FPGA toolchain selected ${toolchain.device.board}, but hardware CDE selected ${platform.board.name}")
   require(!performanceMonitor.enabled || platform.board == FpgaBoard.U55c,
     s"${entry.className} 的 FPGA 性能监测只支持 U55C")
-  println(s"正在生成 ${platform.board.name} FPGA 顶层：XLEN=${config.isa.xlen}, F=${config.isa.F}, 输出目录=$output")
+  println(s"正在生成 ${platform.board.name} FPGA 顶层：XLEN=${config.isa.xlen}, 输出目录=$output")
   _root_.circt.stage.ChiselStage.emitSystemVerilogFile(
     platform.board match {
       case FpgaBoard.Zcu102 => new Zcu102NpcFpgaShell

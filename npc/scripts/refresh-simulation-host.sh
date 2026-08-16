@@ -115,7 +115,6 @@ render_defconfig() {
     echo 'CONFIG_MODE_SYSTEM=y'
     echo 'CONFIG_TARGET_NATIVE_ELF=y'
     echo "$backend_symbol=y"
-    if [[ $F == 1 ]]; then echo 'CONFIG_RISCV_F=y'; else echo '# CONFIG_RISCV_F is not set'; fi
     if [[ $NEMU_TRACE == 1 ]]; then echo 'CONFIG_TRACE=y'; else echo '# CONFIG_TRACE is not set'; fi
     if [[ $NEMU_VCD == 1 ]]; then echo 'CONFIG_NPC_VCD_TRACE=y'; else echo '# CONFIG_NPC_VCD_TRACE is not set'; fi
     if [[ $NEMU_PERFORMANCE_HTML == 1 ]]; then echo 'CONFIG_NPC_PERFORMANCE_HTML=y'; else echo '# CONFIG_NPC_PERFORMANCE_HTML is not set'; fi
@@ -172,7 +171,7 @@ else
   make -C "$nemu_root" ISA="riscv${XLEN}" app \
     NEMU_HOME="$nemu_root" NEMU_CONFIG_ROOT="$config_root" NEMU_BUILD_ROOT="$build_root" NEMU_OBJ_DIR="$objects" \
     USENPC="$usenpc" NPC_SOC="$npc_soc" NPC_OBJ_DIR="$construction/abi/verilator" \
-    NPC_GLUE_DIR="$construction/abi/glue/include" NPC_SOFTFLOAT_LIB="$construction/abi/softfloat/softfloat.a" \
+    NPC_GLUE_DIR="$construction/abi/glue/include" \
     NPC_CLOCK_MHZ="$core_clock_mhz"
   host_binary=$(find "$build_root" -maxdepth 1 -type f -perm -u+x -print -quit)
   [[ -n ${host_binary:-} ]] || { echo "NEMU host 未生成可执行文件" >&2; exit 1; }
@@ -206,7 +205,6 @@ fi
   echo "SCOPE=$SCOPE"
   echo "TARGET=$TARGET"
   echo "XLEN=$XLEN"
-  echo "F=$F"
   echo "FPGA_BOARD=${FPGA_BOARD:-}"
   echo "CORE_CLOCK_MHZ=$core_clock_mhz"
   echo "HOST_ABI=$HOST_ABI"

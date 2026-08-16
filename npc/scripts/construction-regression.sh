@@ -188,13 +188,13 @@ pipeline_version=$(value "$pipeline/construction.env" VERSION_INDEX)
 version_list=$("$manager" list "$npc_root")
 grep -q '^=== 构造属性位图（+ 表示启用）===$' <<< "$version_list" ||
   fail '版本列表没有显示属性位图'
-attribute_header=$(grep '^Version  *RV32  *RV64  *M  *F  *Zicsr  *Pipe  *ID  *EX  *valid?  *Arch  *RunningTime  *Config' <<< "$version_list" || true)
+attribute_header=$(grep '^Version  *RV32  *RV64  *M  *Zicsr  *Pipe  *ID  *EX  *valid?  *Arch  *RunningTime  *Config' <<< "$version_list" || true)
 [[ -n $attribute_header ]] || fail '属性位图表头不完整'
 [[ $version_list != *'=== Config 名称 ==='* && $version_list != *'=== 可构造 Config ==='* ]] ||
   fail '版本列表仍显示 Config 补充表'
 grep -Eq '^1.*SimulationConfig$' <<< "$version_list" || fail '版本列表没有显示对应 Config 短名'
 [[ $(value "$dpi/version.info" RV32) == 0 && $(value "$dpi/version.info" RV64) == 1 &&
-  $(value "$dpi/version.info" M) == 1 && $(value "$dpi/version.info" F) == 0 &&
+  $(value "$dpi/version.info" M) == 1 &&
   $(value "$dpi/version.info" ZICSR) == 1 && $(value "$dpi/version.info" PIPE) == 0 &&
   $(value "$dpi/version.info" ID) == 0 && $(value "$dpi/version.info" EX) == 0 ]] ||
   fail '标量构造的属性信息不正确'
@@ -302,7 +302,7 @@ sed -i -e 's/^HOST_FORMAT=.*/HOST_FORMAT=4/' \
   -e '/^NEMU_CACHE_HTML=/d' \
   "$dpi/abi/nemu/host.env"
 "$manager" ensure "$npc_root" SimulationConfig 0 0
-[[ $(value "$dpi/profile.env" PROFILE_FORMAT) == 24 && $(value "$dpi/profile.env" CAPABILITY) == run &&
+[[ $(value "$dpi/profile.env" PROFILE_FORMAT) == 25 && $(value "$dpi/profile.env" CAPABILITY) == run &&
   $(value "$dpi/profile.env" INTEGER_EXECUTE_STAGES) == 1 &&
   $(value "$dpi/profile.env" SERIAL_EXECUTE_STAGES) == 1 &&
   $(value "$dpi/profile.env" REGISTER_INITIAL_FETCH_REQUEST) == 0 &&
@@ -486,7 +486,7 @@ BUILD_DIR="$spmv_host_build" make --no-print-directory -s -C "$npc_root/.." buil
 [[ ! -d $spmv ]] || fail 'SPMV 回归构造没有从隔离版本库清理'
 
 # 本地 SPMV 正式驱动 16 路 A 与两路 X 条带广播：三阶段产物全部保存在 abi 下，不能生成
-# NEMU、CPU、FPGA 或 SoftFloat 资产；run 直接执行冻结的 Verilator host。
+# NEMU、CPU 或 FPGA 资产；run 直接执行冻结的 Verilator host。
 spmv_input_fqcn=accelerators.spmv.SpmvInputSimulationConfig
 spmv_input="$CONSTRUCTION_TEST_ROOT/$spmv_input_fqcn"
 "$manager" build "$npc_root" SpmvInputSimulationConfig
@@ -506,7 +506,6 @@ for asset in \
   [[ -s $spmv_input/$asset ]] || fail "SPMV 正式输入 dry-run 缺少资产 $asset"
 done
 [[ -x $spmv_input/abi/spmv/spmv-host && ! -e $spmv_input/abi/nemu &&
-  ! -e $spmv_input/abi/softfloat &&
   -s $spmv_input/logs/build/elaborate.log &&
   -s $spmv_input/logs/build/verilator.log &&
   -s $spmv_input/logs/build/accelerator-host.log ]] ||
@@ -640,7 +639,7 @@ fi
 "$manager" rebuild "$npc_root" U55cYsyxSocFpgaConfig
 sed -i -e 's/^PROFILE_FORMAT=.*/PROFILE_FORMAT=3/' -e 's/^SCOPE=fpga$/SCOPE=fpga-soc/' "$u55c/profile.env"
 "$manager" ensure "$npc_root" U55cYsyxSocFpgaConfig 0 0
-[[ $(value "$u55c/profile.env" PROFILE_FORMAT) == 24 && $(value "$u55c/profile.env" SCOPE) == fpga &&
+[[ $(value "$u55c/profile.env" PROFILE_FORMAT) == 25 && $(value "$u55c/profile.env" SCOPE) == fpga &&
   $(value "$u55c/profile.env" INTEGER_EXECUTE_STAGES) == 1 &&
   $(value "$u55c/profile.env" SERIAL_EXECUTE_STAGES) == 1 &&
   $(value "$u55c/profile.env" REGISTER_INITIAL_FETCH_REQUEST) == 0 &&

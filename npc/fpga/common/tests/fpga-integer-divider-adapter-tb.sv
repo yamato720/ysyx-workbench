@@ -63,7 +63,6 @@ module FpgaIntegerDividerAdapterTb #(
   logic resp_ready = 1;
   logic resp_valid;
   logic [63:0] result;
-  logic [4:0] exception_flags;
   logic illegal;
   logic [3:0] response_tag;
 
@@ -78,15 +77,12 @@ module FpgaIntegerDividerAdapterTb #(
     .arithmetic_req_bits_operandB(operand_b),
     .arithmetic_req_bits_operandC(64'b0),
     .arithmetic_req_bits_operation(operation),
-    .arithmetic_req_bits_roundingMode(3'b0),
     .arithmetic_req_bits_pc(64'b0),
     .arithmetic_req_bits_instruction(32'b0),
-    .arithmetic_req_bits_fcsr(8'b0),
     .arithmetic_req_bits_tag(request_tag),
     .arithmetic_resp_ready(resp_ready),
     .arithmetic_resp_valid(resp_valid),
     .arithmetic_resp_bits_result(result),
-    .arithmetic_resp_bits_exceptionFlags(exception_flags),
     .arithmetic_resp_bits_illegal(illegal),
     .arithmetic_resp_bits_tag(response_tag)
   );
@@ -109,7 +105,7 @@ module FpgaIntegerDividerAdapterTb #(
     @(negedge clock);
     req_valid = 0;
     while (!resp_valid) @(negedge clock);
-    if (result !== expected_result || exception_flags !== 0 || illegal || response_tag !== expected_tag) begin
+    if (result !== expected_result || illegal || response_tag !== expected_tag) begin
       $fatal(1, "op=%0d a=%h b=%h result=%h tag=%h expected=%h/%h", selected_operation,
         a, b, result, response_tag, expected_result, expected_tag);
     end

@@ -15,15 +15,12 @@ module npc_int_multiplier_adapter #(
   input  wire [WIDTH-1:0]     arithmetic_req_bits_operandB,
   input  wire [WIDTH-1:0]     arithmetic_req_bits_operandC,
   input  wire [4:0]           arithmetic_req_bits_operation,
-  input  wire [2:0]           arithmetic_req_bits_roundingMode,
   input  wire [WIDTH-1:0]     arithmetic_req_bits_pc,
   input  wire [31:0]          arithmetic_req_bits_instruction,
-  input  wire [7:0]           arithmetic_req_bits_fcsr,
   input  wire [TAG_WIDTH-1:0] arithmetic_req_bits_tag,
   input  wire                 arithmetic_resp_ready,
   output wire                 arithmetic_resp_valid,
   output wire [WIDTH-1:0]     arithmetic_resp_bits_result,
-  output wire [4:0]           arithmetic_resp_bits_exceptionFlags,
   output wire                 arithmetic_resp_bits_illegal,
   output wire [TAG_WIDTH-1:0] arithmetic_resp_bits_tag
 );
@@ -79,7 +76,6 @@ module npc_int_multiplier_adapter #(
   assign arithmetic_req_ready = !in_flight;
   assign arithmetic_resp_valid = response_valid;
   assign arithmetic_resp_bits_result = response_result;
-  assign arithmetic_resp_bits_exceptionFlags = 0;
   assign arithmetic_resp_bits_illegal = 1'b0;
   assign arithmetic_resp_bits_tag = response_tag;
 
@@ -134,15 +130,12 @@ module npc_int_divider_adapter #(
   input  wire [WIDTH-1:0]     arithmetic_req_bits_operandB,
   input  wire [WIDTH-1:0]     arithmetic_req_bits_operandC,
   input  wire [4:0]           arithmetic_req_bits_operation,
-  input  wire [2:0]           arithmetic_req_bits_roundingMode,
   input  wire [WIDTH-1:0]     arithmetic_req_bits_pc,
   input  wire [31:0]          arithmetic_req_bits_instruction,
-  input  wire [7:0]           arithmetic_req_bits_fcsr,
   input  wire [TAG_WIDTH-1:0] arithmetic_req_bits_tag,
   input  wire                 arithmetic_resp_ready,
   output wire                 arithmetic_resp_valid,
   output wire [WIDTH-1:0]     arithmetic_resp_bits_result,
-  output wire [4:0]           arithmetic_resp_bits_exceptionFlags,
   output wire                 arithmetic_resp_bits_illegal,
   output wire [TAG_WIDTH-1:0] arithmetic_resp_bits_tag
 );
@@ -253,7 +246,6 @@ module npc_int_divider_adapter #(
   assign arithmetic_req_ready = !in_flight && vendor_request_ready;
   assign arithmetic_resp_valid = pad_valid[PAD_LATENCY-1];
   assign arithmetic_resp_bits_result = pad_result[PAD_LATENCY-1];
-  assign arithmetic_resp_bits_exceptionFlags = 0;
   assign arithmetic_resp_bits_illegal = 1'b0;
   assign arithmetic_resp_bits_tag = pad_tag[PAD_LATENCY-1];
 

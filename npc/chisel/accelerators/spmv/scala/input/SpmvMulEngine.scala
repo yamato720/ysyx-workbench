@@ -4,7 +4,7 @@ import accelerators.spmv.SpmvInputConfig
 import accelerators.spmv.reader.SpmvReaderBeat
 import chisel3._
 import chisel3.util._
-import npc.ip.arithmetic.{ArithmeticIpTiming, FloatingOperation}
+import npc.ip.arithmetic.ArithmeticIpTiming
 
 /** FMUL 响应的真实产品流。
   *
@@ -104,8 +104,7 @@ final class SpmvMulEngine(config: SpmvInputConfig, channel: Int = 0) extends Mod
     multiply(slot).io.req.bits := 0.U.asTypeOf(multiply(slot).io.req.bits)
     multiply(slot).io.req.bits.operandA := promote(slot).io.out
     multiply(slot).io.req.bits.operandB := io.xReadData(slot)
-    multiply(slot).io.req.bits.operation := FloatingOperation.multiply.asUInt
-    multiply(slot).io.req.bits.roundingMode := 0.U
+    multiply(slot).io.req.bits.operation := 0.U
     multiply(slot).io.req.bits.tag := Cat(stageBatch, stageTag(slot), stageRow(slot))
     io.product(slot).valid := multiply(slot).io.resp.valid
     io.product(slot).bits.product := multiply(slot).io.resp.bits.result

@@ -36,7 +36,7 @@ validate_synthesis_source() {
   local path=$1 name
   name=${path##*/}
   case "$name" in
-    DPIMem.v|MMIOCore.v|MemoryFaultDpi.v|NpcFloatingPointDpi.sv|SimAPBDpiRam.v|SimAPBDpiMmio.v|SimPutchSink.v)
+    DPIMem.v|MMIOCore.v|MemoryFaultDpi.v|SimAPBDpiRam.v|SimAPBDpiMmio.v|SimPutchSink.v)
       fail "synthesis manifest rejects simulation-only source: $path" ;;
   esac
   if grep -Eq 'import[[:space:]]+"DPI-C"|pmem_(read|write)|mmio_(read|write)|memory_fault|flash_read|mrom_read' "$path"; then

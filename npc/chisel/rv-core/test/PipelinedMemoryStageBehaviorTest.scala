@@ -34,9 +34,6 @@ class PipelinedMemoryStageBehaviorTest extends AnyFlatSpec {
     bits.writebackFromMemory.poke(false)
     bits.storeEnable.poke(false)
     bits.registerWriteEnable.poke(false)
-    bits.floatRegisterWriteEnable.poke(false)
-    bits.floatingInstruction.poke(false)
-    bits.floatingExceptionFlags.poke(0)
     bits.csrReadWritebackEnable.poke(false)
     bits.csrAddress.poke(0)
     bits.csrWriteEnable.poke(false)
@@ -97,7 +94,6 @@ class PipelinedMemoryStageBehaviorTest extends AnyFlatSpec {
       completion.valid.poke(false)
       completion.bits.tag.poke(0)
       completion.bits.result.poke(0)
-      completion.bits.exceptionFlags.poke(0)
       completion.bits.illegal.poke(false)
     }
     dut.io.response.ready.poke(true)
@@ -272,7 +268,6 @@ class PipelinedMemoryStageBehaviorTest extends AnyFlatSpec {
 
       dut.io.arithmeticCompletion(0).bits.tag.poke(arithmeticTag)
       dut.io.arithmeticCompletion(0).bits.result.poke(0x55)
-      dut.io.arithmeticCompletion(0).bits.exceptionFlags.poke(0)
       dut.io.arithmeticCompletion(0).bits.illegal.poke(false)
       dut.io.arithmeticCompletion(0).valid.poke(true)
       dut.io.arithmeticCompletion(0).ready.expect(true.B)

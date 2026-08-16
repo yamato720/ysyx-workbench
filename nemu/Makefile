@@ -95,31 +95,6 @@ ifneq ($(strip $(NPC_CLOCK_MHZ)),)
 CFLAGS += -DNPC_CLOCK_MHZ=$(NPC_CLOCK_MHZ)
 endif
 
-# The interpreter owns a separate SoftFloat archive.  It uses the vendored
-# source tree, but never consumes NPC's intermediate build products.
-ifeq ($(CONFIG_RISCV_F),y)
-SOFTFLOAT_HOME ?= $(NEMU_HOME)/../npc/chisel/ysyxSoC/rocket-chip/dependencies/hardfloat/berkeley-softfloat-3
-SOFTFLOAT_SOURCE ?= $(SOFTFLOAT_HOME)/source
-SOFTFLOAT_TEMPLATE ?= $(SOFTFLOAT_HOME)/build/Linux-x86_64-GCC
-SOFTFLOAT_BUILD_DIR ?= $(NEMU_BUILD_ROOT)/softfloat
-SOFTFLOAT_LIB ?= $(SOFTFLOAT_BUILD_DIR)/softfloat.a
-SOFTFLOAT_CC ?= $(CC)
-SOFTFLOAT_AR ?= $(if $(filter %gcc,$(notdir $(SOFTFLOAT_CC))),$(patsubst %gcc,%ar,$(SOFTFLOAT_CC)),ar)
-SOFTFLOAT_INPUTS := $(shell find "$(SOFTFLOAT_SOURCE)" "$(SOFTFLOAT_TEMPLATE)" -type f 2>/dev/null)
-CFLAGS += -I$(SOFTFLOAT_SOURCE)/include
-ARCHIVES += $(SOFTFLOAT_LIB)
-
-$(SOFTFLOAT_LIB): $(SOFTFLOAT_INPUTS)
-	@set -e; \
-	test -f "$(SOFTFLOAT_TEMPLATE)/Makefile" || { echo "SoftFloat build template not found: $(SOFTFLOAT_TEMPLATE)" >&2; exit 2; }; \
-	rm -rf "$(SOFTFLOAT_BUILD_DIR)"; mkdir -p "$(SOFTFLOAT_BUILD_DIR)"; \
-	cp "$(SOFTFLOAT_TEMPLATE)/platform.h" "$(SOFTFLOAT_BUILD_DIR)/platform.h"; \
-	$(MAKE) -C "$(SOFTFLOAT_BUILD_DIR)" -f "$(SOFTFLOAT_TEMPLATE)/Makefile" \
-		SOURCE_DIR="$(SOFTFLOAT_SOURCE)" SPECIALIZE_TYPE=RISCV \
-		COMPILE_C='$(SOFTFLOAT_CC) -c -Werror-implicit-function-declaration -DSOFTFLOAT_FAST_INT64 $$(SOFTFLOAT_OPTS) $$(C_INCLUDES) -O2 -o $$@' \
-		MAKELIB='$(SOFTFLOAT_AR) crs $$@'
-endif
-
 # Add NPC flag if NPC mode is enabled
 ifeq ($(USENPC), 1)
 CFLAGS += -DNPC

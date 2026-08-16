@@ -15,9 +15,6 @@ trait XilinxArithmeticIpProvider extends ArithmeticIpProvider {
     spec: ArithmeticEndpointSpec): ArithmeticOperatorEndpoint =
     SimulationIpComponents.makeIntegerDivider(width, tagWidth, timing, spec)
 
-  override final def makeFloating(width: Int, tagWidth: Int, timing: ArithmeticIpTiming,
-    spec: ArithmeticEndpointSpec): ArithmeticOperatorEndpoint =
-    SimulationIpComponents.makeFloating(width, tagWidth, timing, spec)
 }
 
 /** 未绑定物理板卡的公共 Xilinx 算术实现。 */

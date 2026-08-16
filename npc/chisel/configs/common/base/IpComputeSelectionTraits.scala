@@ -12,25 +12,14 @@ trait IpComputeSelection {
   /** M 扩展计算单元采用的后端。 */
   protected def mulDivComputeUnit: ComputeUnitConfig
 
-  /** F 扩展计算单元采用的后端；`None` 表示该配置不设置 F 单元。 */
-  protected def floatingComputeUnit: Option[ComputeUnitConfig]
-
   /** 将本配置的计算单元与时序属性写入 NPC 配置。 */
-  final def computeUnitConfig: ConfigFragment = {
-    val implementations: ConfigFragment = floatingComputeUnit match {
-      case Some(floating) =>
-        new WithMulDivComputeConfig(mulDivComputeUnit) ++
-          new WithFloatingComputeConfig(floating)
-      case None => new WithMulDivComputeConfig(mulDivComputeUnit)
-    }
-    // 时序最后应用，确保自定义 outputFifoDepth 同时作用于所选计算后端。
-    new WithArithmeticTimingConfig(operatorTiming) ++ implementations
-  }
+  final def computeUnitConfig: ConfigFragment =
+    new WithArithmeticTimingConfig(operatorTiming) ++
+      new WithMulDivComputeConfig(mulDivComputeUnit)
 }
 
 /** FPGA 整数厂商 IP 的非终端计算单元选择。 */
 trait FpgaIpComputeSelection extends IpComputeSelection {
   override protected final val mulDivComputeUnit: ComputeUnitConfig =
     ComputeUnitConfig(backend = ComputeBackend.FPGA)
-  override protected final val floatingComputeUnit: Option[ComputeUnitConfig] = None
 }

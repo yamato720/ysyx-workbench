@@ -569,15 +569,6 @@ uint64_t npc_get_reg(int index) {
   return read64(NEMU_FPGA_RT_GPR_LOW, NEMU_FPGA_RT_GPR_HIGH);
 }
 
-uint64_t npc_get_freg(int index) {
-  (void)index;
-  return 0;
-}
-
-uint32_t npc_get_fcsr(void) {
-  return 0;
-}
-
 uint64_t npc_get_mstatus(void) {
   if (!runtime_interactive)
     return read64(NEMU_FPGA_RT_MSTATUS_LOW, NEMU_FPGA_RT_MSTATUS_HIGH);

@@ -45,8 +45,6 @@ extern uint64_t npc_get_current_pc();
 extern uint32_t npc_get_frontend_instruction();
 extern int npc_is_finished();
 extern uint64_t npc_get_reg(int idx);
-extern uint64_t npc_get_freg(int idx);
-extern uint32_t npc_get_fcsr(void);
 extern uint64_t npc_get_last_store_sequence(void);
 extern uint64_t npc_get_last_store_address(void);
 extern uint64_t npc_get_last_store_data(void);
@@ -1011,7 +1009,7 @@ static void exec_once(Decode *s, vaddr_t pc) {
     nemu_s.snpc = pc;
     const uint32_t reference_inst = paddr_read(pc, 4);
     const uint32_t reference_opcode = reference_inst & 0x7f;
-    const bool reference_is_store = reference_opcode == 0x23 || reference_opcode == 0x27;
+    const bool reference_is_store = reference_opcode == 0x23;
     uint64_t expected_store_address = 0;
     uint64_t expected_store_data = 0;
     uint32_t expected_store_strobe = 0;
@@ -1028,7 +1026,7 @@ static void exec_once(Decode *s, vaddr_t pc) {
       const uint32_t byte_offset = store_address & (expected_store_word_bytes - 1);
       const uint64_t value_mask = access_bytes == 8 ? UINT64_MAX :
         ((UINT64_C(1) << (access_bytes * 8)) - 1);
-      const uint64_t source = reference_opcode == 0x27 ? cpu.fpr[rs2] : cpu.gpr[rs2];
+      const uint64_t source = cpu.gpr[rs2];
       expected_store_address = store_address;
       expected_store_strobe = ((1u << access_bytes) - 1) << byte_offset;
       expected_store_data = (source & value_mask) << (byte_offset * 8);
@@ -1038,10 +1036,8 @@ static void exec_once(Decode *s, vaddr_t pc) {
     // cpu.gpr[] has been updated by isa_exec_once
     const bool reference_terminated = nemu_state.state == NEMU_END;
 
-    // Collect all architectural mismatches before printing anything. Floating
-    // state is essential here: otherwise an FPU error is only reported when a
-    // later compare or move instruction exposes it through a GPR.
-    struct { char name[12]; uint64_t nemu_val; uint64_t npc_val; } mm[71];
+    // Collect all architectural mismatches before printing anything.
+    struct { char name[12]; uint64_t nemu_val; uint64_t npc_val; } mm[39];
     int nm = 0;
     for (int i = 0; i < 32; i++) {
       uint64_t npc_val = npc_get_reg(i);
@@ -1052,25 +1048,6 @@ static void exec_once(Decode *s, vaddr_t pc) {
         nm++;
       }
     }
-#ifdef CONFIG_RISCV_F
-    for (int i = 0; i < 32; i++) {
-      uint64_t npc_val = npc_get_freg(i);
-      if ((uint64_t)cpu.fpr[i] != npc_val) {
-        snprintf(mm[nm].name, sizeof(mm[nm].name), "f%d", i);
-        mm[nm].nemu_val = cpu.fpr[i];
-        mm[nm].npc_val  = npc_val;
-        nm++;
-      }
-    }
-    uint32_t nemu_fcsr = ((cpu.frm & 0x7) << 5) | (cpu.fflags & 0x1f);
-    uint32_t npc_fcsr = npc_get_fcsr() & 0xff;
-    if (nemu_fcsr != npc_fcsr) {
-      snprintf(mm[nm].name, sizeof(mm[nm].name), "fcsr");
-      mm[nm].nemu_val = nemu_fcsr;
-      mm[nm].npc_val  = npc_fcsr;
-      nm++;
-    }
-#endif
     if (compare_store) {
       const uint64_t store_sequence = npc_get_last_store_sequence();
       const uint64_t store_address = npc_get_last_store_address();
@@ -1337,7 +1314,7 @@ void cpu_exec(uint64_t n) {
     static bool npc_difftest_logged = false;
     if (!npc_difftest_logged) {
     Log("NPC self-difftest: " ANSI_FMT("ON", ANSI_FG_GREEN)
-        " (NEMU reference: GPR/FPR/FCSR/next-PC/main-memory stores)");
+        " (NEMU reference: GPR/next-PC/main-memory stores)");
       npc_difftest_logged = true;
     }
   );

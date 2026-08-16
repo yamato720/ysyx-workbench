@@ -1,5 +1,4 @@
 # 这些模型由 Chisel BlackBox 资源嵌入生成 RTL，清单记录其仿真身份。
-chisel/ip-interface/resources/npc/ip/arithmetic/NpcFloatingPointDpi.sv
 chisel/ip-interface/resources/npc/ip/memory/DPIMem.v
 chisel/ip-interface/resources/npc/ip/memory/MMIOCore.v
 chisel/ip-interface/resources/npc/ip/memory/MemoryFaultDpi.v

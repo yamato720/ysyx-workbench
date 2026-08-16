@@ -253,7 +253,7 @@ class FpgaRuntimeMailbox(width: Int, sdbEnabled: Boolean = true, cacheEnabled: B
       1.U -> sdb.mcause,
       2.U -> sdb.mepc,
       3.U -> sdb.mtvec,
-      5.U -> sdb.nextArchitecturalPc
+      4.U -> sdb.nextArchitecturalPc
     ))
     selectedGpr := Mux(completionPending, completionGprs.get(gprIndex.get), sdb.gprs(gprIndex.get))
     sdbMstatus := sdb.mstatus

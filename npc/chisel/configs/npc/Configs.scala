@@ -33,22 +33,22 @@ class PipelineSimulationConfig extends ConstructionConfig(
   new PipelineSimulationCoreConfig
 ) with LocalNpcTerminal with NemuSimulationIpTerminal
 
-/** RV64IMF_Zicsr 对比基线：无流水线、无旁路。 */
+/** RV64IM_Zicsr 对比基线：无流水线、无旁路。 */
 class FullIsa64NoPipelineSimulationConfig extends ConstructionConfig(
   new FullIsa64NoPipelineSimulationCoreConfig
 ) with LocalNpcTerminal with NemuSimulationIpTerminal
 
-/** RV64IMF_Zicsr 对比构造：流水线开启，但 ID/EX 前递都关闭。 */
+/** RV64IM_Zicsr 对比构造：流水线开启，但 ID/EX 前递都关闭。 */
 class FullIsa64PipelineNoForwardingSimulationConfig extends ConstructionConfig(
   new FullIsa64PipelineNoForwardingSimulationCoreConfig
 ) with LocalNpcTerminal with NemuSimulationIpTerminal
 
-/** RV64IMF_Zicsr 对比构造：流水线开启，并同时启用 ID 与 EX 两条前递路径。 */
+/** RV64IM_Zicsr 对比构造：流水线开启，并同时启用 ID 与 EX 两条前递路径。 */
 class FullIsa64PipelineDualForwardingSimulationConfig extends ConstructionConfig(
   new FullIsa64PipelineDualForwardingSimulationCoreConfig
 ) with LocalNpcTerminal with NemuSimulationIpTerminal
 
-/** ZCU102 RV32 算子能力和时序的本地周期精确模拟，不引入 FPO 数值近似。 */
+/** ZCU102 RV32 算子能力和时序的本地周期精确模拟。 */
 class Zcu102Rv32OperatorSimulationConfig extends ConstructionConfig(
   new Zcu102Rv32OperatorSimulationCoreConfig
 ) with LocalNpcTerminal with NemuSimulationIpTerminal
@@ -58,7 +58,7 @@ class U55cRv32OperatorSimulationConfig extends ConstructionConfig(
   new U55cRv32OperatorSimulationCoreConfig
 ) with LocalNpcTerminal with NemuSimulationIpTerminal
 
-/** U55C RV64 M/F 算子时序模拟，覆盖 RV64 W 指令而不链接厂商黑盒。 */
+/** U55C RV64 M 算子时序模拟，覆盖 RV64 W 指令而不链接厂商黑盒。 */
 class U55cRv64OperatorSimulationConfig extends ConstructionConfig(
   new U55cRv64OperatorSimulationCoreConfig
 ) with LocalNpcTerminal with NemuSimulationIpTerminal

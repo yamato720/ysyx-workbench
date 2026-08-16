@@ -18,7 +18,6 @@
 #include <cpu/ifetch.h>
 #include <cpu/decode.h>
 #include "csr.h"
-#include "fpu.h"
 
 #define R(i) gpr(i)
 #define Mr vaddr_read
@@ -84,13 +83,6 @@ static void decode_operand(Decode *s, int *rd, word_t *src1, word_t *src2, word_
 
 static int decode_exec(Decode *s) {
   s->dnpc = s->snpc;
-
-  // F opcodes are decoded in one shared helper so RV32 and RV64 use exactly
-  // the same SoftFloat, FCSR, FS, and NaN-boxing semantics.
-  if (riscv_f_exec(s)) {
-    R(0) = 0;
-    return 0;
-  }
 
 #define INSTPAT_INST(s) ((s)->isa.inst)
 #define INSTPAT_MATCH(s, name, type, ... /* execute body */ ) { \

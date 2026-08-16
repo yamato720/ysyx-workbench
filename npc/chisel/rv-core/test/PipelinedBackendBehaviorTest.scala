@@ -51,12 +51,6 @@ class PipelinedBackendBehaviorTest extends AnyFlatSpec {
     bits.csrOperation.poke(0)
     bits.csrUseImmediate.poke(false)
     bits.csrReadWritebackEnable.poke(false)
-    bits.floatingOperation.poke(false)
-    bits.floatingInstruction.poke(false)
-    bits.floatRegisterWriteEnable.poke(false)
-    bits.usesFrs1.poke(false)
-    bits.usesFrs2.poke(false)
-    bits.usesFrs3.poke(false)
   }
 
   private def setAddi(dut: NpcBackend, pc: BigInt, rd: Int, rs1: Int, immediate: BigInt): Unit = {

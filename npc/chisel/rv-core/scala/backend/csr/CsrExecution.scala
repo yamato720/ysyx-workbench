@@ -34,7 +34,6 @@ class CsrExecution(cfg: ISAConfig = ISAConfig()) extends Module {
 
   val validAddresses = Seq(
     CsrAddress.mvendorid, CsrAddress.marchid, CsrAddress.mimpid, CsrAddress.mhartid,
-    CsrAddress.fflags, CsrAddress.frm, CsrAddress.fcsr,
     CsrAddress.mstatus, CsrAddress.misa, CsrAddress.mie, CsrAddress.mtvec,
     CsrAddress.mscratch, CsrAddress.mepc, CsrAddress.mcause, CsrAddress.mtval, CsrAddress.mip,
     CsrAddress.mtestexit

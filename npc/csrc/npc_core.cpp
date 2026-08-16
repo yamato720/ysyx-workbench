@@ -29,7 +29,6 @@ VerilatedVcdC *npc_trace = nullptr;
 #define NPC_DEBUG_CORE(field) (npc_cpu->io_debug_##field)
 #define NPC_DEBUG_MASTER(field) (npc_cpu->io_debug_master_##field)
 #define NPC_DEBUG_REGISTER(index) (npc_cpu->io_debug_backend_registers_##index)
-#define NPC_DEBUG_FREGISTER(index) (npc_cpu->io_debug_backend_floatingRegisters_##index)
 
 // Simulation state
 uint64_t sim_time = 5;
@@ -813,33 +812,6 @@ uint64_t get_npc_reg(int idx) {
     }
 }
 
-uint64_t get_npc_freg(int idx) {
-    if (!npc_cpu || idx < 0 || idx > 31) return 0;
-    switch(idx) {
-        case 0: return NPC_DEBUG_FREGISTER(0); case 1: return NPC_DEBUG_FREGISTER(1);
-        case 2: return NPC_DEBUG_FREGISTER(2); case 3: return NPC_DEBUG_FREGISTER(3);
-        case 4: return NPC_DEBUG_FREGISTER(4); case 5: return NPC_DEBUG_FREGISTER(5);
-        case 6: return NPC_DEBUG_FREGISTER(6); case 7: return NPC_DEBUG_FREGISTER(7);
-        case 8: return NPC_DEBUG_FREGISTER(8); case 9: return NPC_DEBUG_FREGISTER(9);
-        case 10: return NPC_DEBUG_FREGISTER(10); case 11: return NPC_DEBUG_FREGISTER(11);
-        case 12: return NPC_DEBUG_FREGISTER(12); case 13: return NPC_DEBUG_FREGISTER(13);
-        case 14: return NPC_DEBUG_FREGISTER(14); case 15: return NPC_DEBUG_FREGISTER(15);
-        case 16: return NPC_DEBUG_FREGISTER(16); case 17: return NPC_DEBUG_FREGISTER(17);
-        case 18: return NPC_DEBUG_FREGISTER(18); case 19: return NPC_DEBUG_FREGISTER(19);
-        case 20: return NPC_DEBUG_FREGISTER(20); case 21: return NPC_DEBUG_FREGISTER(21);
-        case 22: return NPC_DEBUG_FREGISTER(22); case 23: return NPC_DEBUG_FREGISTER(23);
-        case 24: return NPC_DEBUG_FREGISTER(24); case 25: return NPC_DEBUG_FREGISTER(25);
-        case 26: return NPC_DEBUG_FREGISTER(26); case 27: return NPC_DEBUG_FREGISTER(27);
-        case 28: return NPC_DEBUG_FREGISTER(28); case 29: return NPC_DEBUG_FREGISTER(29);
-        case 30: return NPC_DEBUG_FREGISTER(30); case 31: return NPC_DEBUG_FREGISTER(31);
-        default: return 0;
-    }
-}
-
-uint32_t get_npc_fcsr() {
-    return npc_cpu ? NPC_DEBUG_BACKEND(fcsr) : 0;
-}
-
 uint64_t get_npc_mstatus() {
     return npc_cpu ? NPC_DEBUG_BACKEND(mstatus) : 0;
 }
@@ -1025,14 +997,6 @@ extern "C" {
     
     uint64_t npc_get_reg(int idx) {
         return get_npc_reg(idx);
-    }
-
-    uint64_t npc_get_freg(int idx) {
-        return get_npc_freg(idx);
-    }
-
-    uint32_t npc_get_fcsr() {
-        return get_npc_fcsr();
     }
 
     uint64_t npc_get_mstatus() {

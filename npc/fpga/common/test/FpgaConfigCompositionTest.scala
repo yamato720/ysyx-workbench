@@ -6,7 +6,7 @@ import org.scalatest.flatspec.AnyFlatSpec
 import _root_.fpga._
 import _root_.fpga.u55c.U55cXilinxIpAttachment
 import npc.ExternalAxiConfig
-import npc.{ArithmeticRouteOperation, ComputeBackend, ConfigCatalog, ConstructionConfig, ConstructionProfile, FloatingCheckConfig, FpgaIpTerminal, FpgaToolchainConfig, NemuHostConfig, NemuSimulationIpTerminal, NpcConfig, NpcCoreComponents, NpcCoreConfigKey, OperatorIpTimingConfig, OperatorRouteTarget, Rv64IMFZicsrConfig, WithNpcCoreConfig}
+import npc.{ArithmeticRouteOperation, ComputeBackend, ConfigCatalog, ConstructionConfig, ConstructionProfile, FpgaIpTerminal, FpgaToolchainConfig, NemuHostConfig, NemuSimulationIpTerminal, NpcConfig, NpcCoreComponents, NpcCoreConfigKey, OperatorIpTimingConfig, OperatorRouteTarget, Rv64IMZicsrConfig, WithNpcCoreConfig}
 import npc.fpga.u55c.{U55cNpcFpgaConfig, U55cRv64Npc300MHzPerformanceMonitorFpgaConfig, U55cRv64Npc300MHzFpgaConfig, U55cRv64NpcFpgaConfig}
 import npc.fpga.zcu102.Zcu102NpcFpgaConfig
 import ysyx.{YsyxPlatformParameters, YsyxSimulationConfig, YsyxSocConfig}
@@ -26,15 +26,10 @@ class FpgaConfigCompositionTest extends AnyFlatSpec {
 
   private def assertXilinxRoutes(config: NpcConfig, width: Int): Unit = {
     config.operators.routes.validate(config.isa)
-    assert(!config.isa.F)
-    assert(!config.isa.D)
     ArithmeticRouteOperation.mOperations.foreach { operation =>
       val route = config.operators.routes.route(operation)
       assert(route.target == OperatorRouteTarget.VendorIp)
       assert(route.operandWidth == width)
-    }
-    ArithmeticRouteOperation.fOperations.foreach { operation =>
-      assert(!config.operators.routes.routes.contains(operation))
     }
   }
 
@@ -73,12 +68,10 @@ class FpgaConfigCompositionTest extends AnyFlatSpec {
     assertXilinxRoutes(npcConfig, 32)
   }
 
-  "U55cRv64NpcFpgaConfig" should "select 64-bit vendor integer routes without F" in {
+  "U55cRv64NpcFpgaConfig" should "select 64-bit vendor integer routes" in {
     implicit val parameters: Parameters = new U55cRv64NpcFpgaConfig
     val config = FpgaConfigParameters.npcCoreConfig
     assert(config.isa.xlen == 64)
-    assert(!config.isa.F)
-    assert(!config.isa.D)
     assert(config.operators.mulDiv.multiplyTiming.latency == 3)
     assert(config.operators.mulDiv.multiplyTiming.initiationInterval == 1)
     assertXilinxRoutes(config, 64)
@@ -326,20 +319,11 @@ class FpgaConfigCompositionTest extends AnyFlatSpec {
     val defaults = OperatorIpTimingConfig.Default
     val attachment = U55cXilinxIpAttachment(defaults.copy(
       outputFifoDepth = 8,
-      multiply = defaults.multiply.copy(latency = 5),
-      floatingDivide = defaults.floatingDivide.copy(latency = 31)
+      multiply = defaults.multiply.copy(latency = 5)
     ))
-    val model = (NemuSimulationIpTerminal.from(attachment).computeUnitConfig ++ new Rv64IMFZicsrConfig).build
+    val model = (NemuSimulationIpTerminal.from(attachment).computeUnitConfig ++ new Rv64IMZicsrConfig).build
 
     assert(model.operators.mulDiv.implementation.backend == ComputeBackend.Builtin)
-    assert(model.operators.floating.implementation.backend == ComputeBackend.Builtin)
     assert(model.operators.mulDiv.multiplyTiming.latency == 5)
-    assert(model.operators.floating.divideTiming.latency == 31)
-    assert(model.operators.floating.divideTiming.responseFifoDepth == 8)
-  }
-
-  it should "retain F only in local checks" in {
-    val localFloating = new FloatingCheckConfig().config
-    assert(localFloating.isa.F)
   }
 }

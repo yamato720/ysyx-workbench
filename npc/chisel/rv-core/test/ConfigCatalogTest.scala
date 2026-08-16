@@ -213,7 +213,7 @@ class ConfigCatalogTest extends AnyFlatSpec {
     val construction = new SimulationConfig
     val values = ConstructionProfile.values(entry, construction, construction.config).toMap
 
-    assert(values("PROFILE_FORMAT") == "24")
+    assert(values("PROFILE_FORMAT") == "25")
     assert(values("HOST_ABI") == "nemu-construction-v1")
     assert(values("NEMU_PRESET") == "LocalPipelineTrace")
     assert(values("NEMU_BACKEND") == "local")
@@ -242,12 +242,12 @@ class ConfigCatalogTest extends AnyFlatSpec {
     assertThrows[IllegalArgumentException](ConstructionProfile.values(fpgaEntry, construction, construction.config))
   }
 
-  it should "describe the RV64IMF forwarding comparison configuration exactly" in {
+  it should "describe the RV64IM forwarding comparison configuration exactly" in {
     val entry = ConfigCatalog.resolve("FullIsa64PipelineDualForwardingSimulationConfig", Set("npc"))
     val construction = new FullIsa64PipelineDualForwardingSimulationConfig
     val values = ConstructionProfile.values(entry, construction, construction.config).toMap
 
-    assert(values("ISA_STRING") == "rv64imf_zicsr")
+    assert(values("ISA_STRING") == "rv64im_zicsr")
     assert(values("PIPELINE") == "1")
     assert(values("ID_FWD") == "1")
     assert(values("EX_FWD") == "1")

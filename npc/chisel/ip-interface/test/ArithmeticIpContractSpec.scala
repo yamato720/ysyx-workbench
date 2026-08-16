@@ -1,6 +1,6 @@
 package npc.ip
 
-import npc.ip.arithmetic.{ArithmeticIpTiming, FloatingDirectOperator, FpgaFloatingDirectOperator, IntegerDividerModel, IntegerMultiplierModel}
+import npc.ip.arithmetic.{ArithmeticIpTiming, IntegerDividerModel, IntegerMultiplierModel}
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 import circt.stage.ChiselStage
@@ -11,9 +11,6 @@ final class ArithmeticIpContractSpec extends AnyFlatSpec with Matchers {
     Seq(32, 64).foreach { width =>
       ChiselStage.emitCHIRRTL(new IntegerMultiplierModel(width, 4, ArithmeticIpTiming(latency = 2))) should include("module IntegerMultiplierModel")
       ChiselStage.emitCHIRRTL(new IntegerDividerModel(width, 4, ArithmeticIpTiming(latency = 3))) should include("IntegerDividerModel")
-      ChiselStage.emitCHIRRTL(new FloatingDirectOperator(width, 4, ArithmeticIpTiming(latency = 1))) should include("FloatingDirectOperator")
-      ChiselStage.emitCHIRRTL(new FpgaFloatingDirectOperator(width, 4,
-        ArithmeticIpTiming(latency = 1))) should include("FpgaFloatingDirectOperator")
     }
   }
 }

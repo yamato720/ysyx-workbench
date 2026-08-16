@@ -47,8 +47,6 @@ module FpgaMachineExternalInterruptTb;
     .io_machineExternalInterruptPending(machine_external_interrupt_pending),
     .io_mret(mret),
     .io_machineExceptionPc(machine_exception_pc),
-    .io_floatingCommit(1'b0),
-    .io_floatingExceptionFlags(5'b0),
     .io_mstatusOut(mstatus),
     .io_mcauseOut(mcause)
   );

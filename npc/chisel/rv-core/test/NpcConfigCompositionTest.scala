@@ -40,8 +40,6 @@ class NpcConfigCompositionTest extends AnyFlatSpec {
 
     assert(config.isa.xlen == 32)
     assert(config.isa.M)
-    assert(!config.isa.F)
-    assert(!config.isa.D)
     assert(config.pipeline.enablePipeline)
     assert(config.pipeline.forwarding.enableIdForwarding)
     assert(config.pipeline.forwarding.enableExecuteForwarding)
@@ -52,22 +50,13 @@ class NpcConfigCompositionTest extends AnyFlatSpec {
     assert(config.axi.useExternalMaster)
     assert(config.axi.dataWidth == 32)
     assert(config.operators.routes.route(ArithmeticRouteOperation.Mul).target == OperatorRouteTarget.Model)
-    assert(!config.operators.routes.routes.contains(ArithmeticRouteOperation.Fadd))
     config.operators.routes.validate(config.isa)
   }
 
-  "Local floating-point Config" should "retain its model routes" in {
-    val localFloating = new FloatingCheckConfig().config
-    assert(localFloating.isa.F)
-    assert(localFloating.operators.routes.route(ArithmeticRouteOperation.Fadd).target ==
-      OperatorRouteTarget.Model)
-  }
-
-  "Operator route defaults" should "cover every enabled M/F operation and reject an unselected check route" in {
+  "Operator route defaults" should "cover every enabled M operation and reject an unselected check route" in {
     val model = new U55cRv64OperatorSimulationConfig().config
     assert(model.isa.xlen == 64)
-    assert(model.operators.routes.profileValues(model.isa).size ==
-      ArithmeticRouteOperation.mOperations.size + ArithmeticRouteOperation.fOperations.size)
+    assert(model.operators.routes.profileValues(model.isa).size == ArithmeticRouteOperation.mOperations.size)
 
     assertThrows[IllegalArgumentException]((
       new WithOperatorRoutesConfig(OperatorRouteConfig(Map(
@@ -94,7 +83,7 @@ class NpcConfigCompositionTest extends AnyFlatSpec {
     assert(config.axi.dataWidth == 32)
   }
 
-  "Compute fragments" should "apply one IP implementation to both arithmetic domains" in {
+  "Compute fragments" should "apply one IP implementation to the integer arithmetic domain" in {
     val ip = IpComputeConfig(moduleName = "test_ip", outputFifoDepth = 8)
     val config = (
       new WithGenericIpComputeConfig(ip) ++
@@ -103,26 +92,22 @@ class NpcConfigCompositionTest extends AnyFlatSpec {
     ).build
 
     assert(config.operators.mulDiv.implementation.backend == ComputeBackend.IP)
-    assert(config.operators.floating.implementation.backend == ComputeBackend.IP)
     assert(config.operators.mulDiv.implementation.ip.outputFifoDepth == 8)
-    assert(config.operators.floating.implementation.ip.outputFifoDepth == 8)
     assert(config.operators.mulDiv.multiplyTiming.responseFifoDepth == 8)
-    assert(config.operators.floating.divideTiming.responseFifoDepth == 8)
   }
 
   "IP terminal traits" should "reuse one timing contract for FPGA and NEMU functional simulation" in {
     val defaults = OperatorIpTimingConfig.Default
     val timing = defaults.copy(
       outputFifoDepth = 8,
-      multiply = defaults.multiply.copy(latency = 5),
-      floatingDivide = defaults.floatingDivide.copy(latency = 31)
+      multiply = defaults.multiply.copy(latency = 5)
     )
     val fpga = new FpgaIpTerminal {
       override val operatorTiming: OperatorIpTimingConfig = timing
     }
 
     val fpgaConfig = (fpga.computeUnitConfig ++ new Rv64IMZicsrConfig).build
-    val nemuConfig = (NemuSimulationIpTerminal.from(fpga).computeUnitConfig ++ new Rv64IMFZicsrConfig).build
+    val nemuConfig = (NemuSimulationIpTerminal.from(fpga).computeUnitConfig ++ new Rv64IMZicsrConfig).build
 
     assert(fpgaConfig.operators.mulDiv.implementation.backend == ComputeBackend.FPGA)
     assert(fpgaConfig.operators.mulDiv.multiplyTiming.latency == 5)
@@ -130,38 +115,30 @@ class NpcConfigCompositionTest extends AnyFlatSpec {
     assert(fpgaConfig.operators.routes.route(ArithmeticRouteOperation.Mul).latency == 5)
     assert(fpgaConfig.operators.routes.route(ArithmeticRouteOperation.Div).latency == defaults.divide.latency)
     assert(nemuConfig.operators.mulDiv.implementation.backend == ComputeBackend.Builtin)
-    assert(nemuConfig.operators.floating.implementation.backend == ComputeBackend.Builtin)
     assert(nemuConfig.operators.mulDiv.multiplyTiming.latency == 5)
-    assert(nemuConfig.operators.floating.divideTiming.latency == 31)
-    assert(nemuConfig.operators.floating.divideTiming.responseFifoDepth == 8)
     assert(nemuConfig.operators.routes.route(ArithmeticRouteOperation.Mul).latency == 5)
-    assert(nemuConfig.operators.routes.route(ArithmeticRouteOperation.Fdiv).latency == 31)
   }
 
   "Zicsr fragments" should "make the extension explicit and preserve left precedence" in {
-    val disabled = (new WithoutZicsrConfig ++ new Rv64IMFZicsrConfig).build
-    val enabled = (new WithZicsrConfig ++ new WithoutZicsrConfig ++ new Rv64IMFZicsrConfig).build
+    val disabled = (new WithoutZicsrConfig ++ new Rv64IMZicsrConfig).build
+    val enabled = (new WithZicsrConfig ++ new WithoutZicsrConfig ++ new Rv64IMZicsrConfig).build
 
     assert(!disabled.isa.Zicsr)
-    assert(!disabled.isa.F)
     assert(enabled.isa.Zicsr)
   }
 
   "NPC ISA presets" should "build RV32 variants from I and derive RV64 by overriding only XLEN" in {
     val base = new Rv64IConfig().build
-    val rv32Full = new Rv32IMFZicsrConfig().build
-    val full = new Rv64IMFZicsrConfig().build
+    val rv32Full = new Rv32IMZicsrConfig().build
+    val full = new Rv64IMZicsrConfig().build
 
     assert(base.isa.xlen == 64)
     assert(!base.isa.M)
-    assert(!base.isa.F)
     assert(!base.isa.Zicsr)
     assert(full.isa.xlen == 64)
     assert(full.isa.M)
-    assert(full.isa.F)
     assert(full.isa.Zicsr)
     assert(rv32Full.isa.M == full.isa.M)
-    assert(rv32Full.isa.F == full.isa.F)
     assert(rv32Full.isa.Zicsr == full.isa.Zicsr)
     assert(rv32Full.isa.xlen == 32)
     assert(rv32Full.axi.dataWidth == 32)

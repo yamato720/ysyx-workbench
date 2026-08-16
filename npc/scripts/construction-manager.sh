@@ -31,7 +31,7 @@ phase_log_tool="$npc_root/scripts/phase-log.sh"
 artifact_tool="$npc_root/fpga/common/scripts/artifact-manifest.sh"
 mkdir -p "$root/.profiles" "$root/.failed" "$root/.hosts" "$root/.compatible" "$root/.locks"
 catalog_ready=${NPC_CONFIG_CATALOG_READY:-0}
-profile_format=24
+profile_format=25
 profile_inputs_fingerprint_cache=''
 [[ $catalog_ready == 0 || $catalog_ready == 1 ]] || { echo "NPC_CONFIG_CATALOG_READY 只能是 0 或 1" >&2; exit 2; }
 
@@ -101,7 +101,6 @@ canonical_config_fqcn() {
     npc.NpcFpgaConfig) printf '%s\n' npc.FpgaConfig ;;
     npc.NpcExternalAxiConfig) printf '%s\n' npc.ExternalAxiConfig ;;
     npc.NpcPipelineCheckConfig) printf '%s\n' npc.PipelineCheckConfig ;;
-    npc.NpcFloatingCheckConfig) printf '%s\n' npc.FloatingCheckConfig ;;
     npc.NpcMulDivCheckConfig) printf '%s\n' npc.MulDivCheckConfig ;;
     *) printf '%s\n' "$1" ;;
   esac
@@ -312,6 +311,7 @@ migrate_profile_mode() {
       -v dpi_timing_enabled="$dpi_timing_enabled" -v dpi_read_min="$dpi_read_min" -v dpi_read_max="$dpi_read_max" \
       -v dpi_write_min="$dpi_write_min" -v dpi_write_max="$dpi_write_max" -v dpi_timing_seed="$dpi_timing_seed" '
       /^PROFILE_FORMAT=/ { print "PROFILE_FORMAT=" profile_format; next }
+      /^(F|D|FADD_CYCLES|FADD_II|FMUL_CYCLES|FMUL_II|FDIV_CYCLES|FDIV_II|FFMA_CYCLES|FFMA_II|FSQRT_CYCLES|FSQRT_II|FCVT_CYCLES|FCVT_II|FCMP_CYCLES|FCMP_II)=/ { next }
       /^CAPABILITY=/ { print "CAPABILITY=" capability; next }
       /^SCOPE=/ { print "SCOPE=" scope; next }
       /^NEMU_CONFIG_FQCN=/ { next }
@@ -380,6 +380,7 @@ migrate_profile_mode() {
   temporary=$(mktemp "$file.profile-migration.XXXXXX")
   awk -v capability="$replacement" -v scope="$normalized_scope" -v profile_format="$profile_format" -v memory_statistics_mode="$memory_statistics_mode" '
     /^PROFILE_FORMAT=/ { print "PROFILE_FORMAT=" profile_format; next }
+    /^(F|D|FADD_CYCLES|FADD_II|FMUL_CYCLES|FMUL_II|FDIV_CYCLES|FDIV_II|FFMA_CYCLES|FFMA_II|FSQRT_CYCLES|FSQRT_II|FCVT_CYCLES|FCVT_II|FCMP_CYCLES|FCMP_II)=/ { next }
     /^CAPABILITY=/ { print "CAPABILITY=" capability; next }
     /^SCOPE=/ { print "SCOPE=" scope; next }
     /^INTEGER_EXECUTE_STAGES=/ { next }
@@ -836,14 +837,12 @@ write_version_info() {
     echo "RV64=$rv64"
     if [[ $target == SPMV ]]; then
       echo 'M='
-      echo 'F='
       echo 'ZICSR='
       echo 'PIPE='
       echo 'ID='
       echo 'EX='
     else
       echo "M=$(value "$profile" M)"
-      echo "F=$(value "$profile" F)"
       echo "ZICSR=$(value "$profile" ZICSR)"
       echo "PIPE=$(value "$profile" PIPELINE)"
       echo "ID=$(value "$profile" ID_FWD)"
@@ -880,7 +879,6 @@ write_pending_version_info() {
     echo 'RV32=0'
     echo 'RV64=0'
     echo 'M=0'
-    echo 'F=0'
     echo 'ZICSR=0'
     echo 'PIPE=0'
     echo 'ID=0'
@@ -1326,8 +1324,8 @@ verify_spmv_model_assets() {
     $(value "$profile" PROTOCOL_ABI) == spmv-input-windowed-v11 ]] || {
     echo "构造不是独立 SPMV Verilator ABI：$directory" >&2; return 1;
   }
-  [[ ! -e $directory/abi/nemu && ! -e $directory/abi/softfloat && ! -e $directory/fpga ]] || {
-    echo "SPMV 正式输入构造不能包含 NEMU、SoftFloat 或 FPGA 资产：$directory" >&2; return 1;
+  [[ ! -e $directory/abi/nemu && ! -e $directory/fpga ]] || {
+    echo "SPMV 正式输入构造不能包含 NEMU 或 FPGA 资产：$directory" >&2; return 1;
   }
   local asset
   for asset in \
@@ -2593,8 +2591,8 @@ case "$command" in
 
     found=0
     echo '=== 构造属性位图（+ 表示启用）==='
-    printf '%-8s %-4s %-4s %-2s %-2s %-5s %-4s %-3s %-3s %-6s %-5s %-12s %s\n' \
-      Version RV32 RV64 M F Zicsr Pipe ID EX 'valid?' Arch RunningTime Config
+    printf '%-8s %-4s %-4s %-2s %-5s %-4s %-3s %-3s %-6s %-5s %-12s %s\n' \
+      Version RV32 RV64 M Zicsr Pipe ID EX 'valid?' Arch RunningTime Config
     if (( ${#indexes[@]} != 0 )); then
       while IFS= read -r version_index; do
         directory=${final_valid[$version_index]:-${final_any[$version_index]:-}}
@@ -2606,12 +2604,11 @@ case "$command" in
         found=$((found + 1))
         valid=''
         version_directory_is_valid "$directory" && valid=+
-        printf '%-8s %-4s %-4s %-2s %-2s %-5s %-4s %-3s %-3s %-6s %-5s %-12s %s\n' \
+        printf '%-8s %-4s %-4s %-2s %-5s %-4s %-3s %-3s %-6s %-5s %-12s %s\n' \
           "$version_index" \
           "$(feature_mark "$(value "$info" RV32)")" \
           "$(feature_mark "$(value "$info" RV64)")" \
           "$(feature_mark "$(value "$info" M)")" \
-          "$(feature_mark "$(value "$info" F)")" \
           "$(feature_mark "$(value "$info" ZICSR)")" \
           "$(feature_mark "$(value "$info" PIPE)")" \
           "$(feature_mark "$(value "$info" ID)")" \

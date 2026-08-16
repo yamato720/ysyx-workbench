@@ -26,8 +26,6 @@ void cleanup_npc();
 uint64_t get_npc_pc();
 uint32_t get_npc_inst();
 uint64_t get_npc_reg(int idx);
-uint64_t get_npc_freg(int idx);
-uint32_t get_npc_fcsr();
 uint64_t get_npc_mstatus();
 bool is_npc_finished();
 
@@ -46,8 +44,6 @@ uint32_t npc_get_inst();
 uint64_t npc_get_current_pc();
 uint32_t npc_get_frontend_instruction();
 uint64_t npc_get_reg(int idx);
-uint64_t npc_get_freg(int idx);
-uint32_t npc_get_fcsr();
 uint64_t npc_get_mstatus();
 uint64_t npc_get_cycle_count();
 uint64_t npc_get_commit_count();

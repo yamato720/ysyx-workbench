@@ -2,13 +2,11 @@ package npc
 
 import npc.ip.arithmetic.ArithmeticIpTiming
 
-/** 每个 RISC-V M/F 指令在构造期使用的稳定路由标识。 */
+/** 每个 RISC-V M 指令在构造期使用的稳定路由标识。 */
 sealed abstract class ArithmeticRouteOperation(
   val profileName: String,
-  val isFloating: Boolean = false,
   val isMultiply: Boolean = false,
-  val isDivide: Boolean = false,
-  val isDirectFloating: Boolean = false
+  val isDivide: Boolean = false
 )
 
 object ArithmeticRouteOperation {
@@ -26,43 +24,9 @@ object ArithmeticRouteOperation {
   case object Remw extends ArithmeticRouteOperation("m_remw", isDivide = true)
   case object Remuw extends ArithmeticRouteOperation("m_remuw", isDivide = true)
 
-  case object Fadd extends ArithmeticRouteOperation("f_fadd", isFloating = true)
-  case object Fsub extends ArithmeticRouteOperation("f_fsub", isFloating = true)
-  case object Fmul extends ArithmeticRouteOperation("f_fmul", isFloating = true)
-  case object Fdiv extends ArithmeticRouteOperation("f_fdiv", isFloating = true)
-  case object Fsqrt extends ArithmeticRouteOperation("f_fsqrt", isFloating = true)
-  case object Fmadd extends ArithmeticRouteOperation("f_fmadd", isFloating = true)
-  case object Fmsub extends ArithmeticRouteOperation("f_fmsub", isFloating = true)
-  case object Fnmsub extends ArithmeticRouteOperation("f_fnmsub", isFloating = true)
-  case object Fnmadd extends ArithmeticRouteOperation("f_fnmadd", isFloating = true)
-  case object Fsgnj extends ArithmeticRouteOperation("f_fsgnj", isFloating = true, isDirectFloating = true)
-  case object Fsgnjn extends ArithmeticRouteOperation("f_fsgnjn", isFloating = true, isDirectFloating = true)
-  case object Fsgnjx extends ArithmeticRouteOperation("f_fsgnjx", isFloating = true, isDirectFloating = true)
-  case object Fmin extends ArithmeticRouteOperation("f_fmin", isFloating = true, isDirectFloating = true)
-  case object Fmax extends ArithmeticRouteOperation("f_fmax", isFloating = true, isDirectFloating = true)
-  case object Feq extends ArithmeticRouteOperation("f_feq", isFloating = true, isDirectFloating = true)
-  case object Flt extends ArithmeticRouteOperation("f_flt", isFloating = true, isDirectFloating = true)
-  case object Fle extends ArithmeticRouteOperation("f_fle", isFloating = true, isDirectFloating = true)
-  case object FcvtW extends ArithmeticRouteOperation("f_fcvt_w", isFloating = true)
-  case object FcvtWu extends ArithmeticRouteOperation("f_fcvt_wu", isFloating = true)
-  case object FcvtL extends ArithmeticRouteOperation("f_fcvt_l", isFloating = true)
-  case object FcvtLu extends ArithmeticRouteOperation("f_fcvt_lu", isFloating = true)
-  case object FcvtSW extends ArithmeticRouteOperation("f_fcvt_s_w", isFloating = true)
-  case object FcvtSWu extends ArithmeticRouteOperation("f_fcvt_s_wu", isFloating = true)
-  case object FcvtSL extends ArithmeticRouteOperation("f_fcvt_s_l", isFloating = true)
-  case object FcvtSLu extends ArithmeticRouteOperation("f_fcvt_s_lu", isFloating = true)
-  case object FmvXW extends ArithmeticRouteOperation("f_fmv_x_w", isFloating = true, isDirectFloating = true)
-  case object Fclass extends ArithmeticRouteOperation("f_fclass", isFloating = true, isDirectFloating = true)
-  case object FmvWX extends ArithmeticRouteOperation("f_fmv_w_x", isFloating = true, isDirectFloating = true)
-
   val mOperations: Vector[ArithmeticRouteOperation] = Vector(
     Mul, Mulh, Mulhsu, Mulhu, Mulw, Div, Divu, Rem, Remu, Divw, Divuw, Remw, Remuw)
-  val fOperations: Vector[ArithmeticRouteOperation] = Vector(
-    Fadd, Fsub, Fmul, Fdiv, Fsqrt, Fmadd, Fmsub, Fnmsub, Fnmadd,
-    Fsgnj, Fsgnjn, Fsgnjx, Fmin, Fmax, Feq, Flt, Fle,
-    FcvtW, FcvtWu, FcvtL, FcvtLu, FcvtSW, FcvtSWu, FcvtSL, FcvtSLu,
-    FmvXW, Fclass, FmvWX)
-  val all: Vector[ArithmeticRouteOperation] = mOperations ++ fOperations
+  val all: Vector[ArithmeticRouteOperation] = mOperations
 }
 
 /** 每条算术指令的实现目标。`Model` 仅用于周期精确本地构造。 */
@@ -92,7 +56,7 @@ final case class OperatorRoute(
     s"${target.profileName}:$moduleName:$operandWidth:$latency:$initiationInterval:none"
 }
 
-/** M/F 指令到实现合同的完整路由表。 */
+/** M 指令到实现合同的完整路由表。 */
 final case class OperatorRouteConfig(routes: Map[ArithmeticRouteOperation, OperatorRoute] = Map.empty) {
   import ArithmeticRouteOperation._
 
@@ -109,8 +73,7 @@ final case class OperatorRouteConfig(routes: Map[ArithmeticRouteOperation, Opera
     OperatorRouteConfig(routes -- operations)
 
   def validate(isa: ISAConfig): Unit = {
-    val enabled = (if (isa.M) mOperations else Vector.empty) ++
-      (if (isa.F) fOperations else Vector.empty)
+    val enabled = if (isa.M) mOperations else Vector.empty
     enabled.foreach { operation =>
       val selected = routes.getOrElse(operation,
         throw new IllegalArgumentException(s"启用的算子 ${operation.profileName} 没有路由"))
@@ -118,16 +81,12 @@ final case class OperatorRouteConfig(routes: Map[ArithmeticRouteOperation, Opera
         s"算子 ${operation.profileName} 的路由宽度 ${selected.operandWidth} 与 RV${isa.xlen} 不一致")
       require(selected.target != OperatorRouteTarget.Unselected,
         s"启用的算子 ${operation.profileName} 未选择实现")
-      require(!operation.isFloating ||
-        selected.target != OperatorRouteTarget.DirectLogic || operation.isDirectFloating,
-        s"浮点数值算子 ${operation.profileName} 不能走 DirectLogic")
     }
   }
 
   def profileValues(isa: ISAConfig): Seq[(String, String)] = {
     validate(isa)
-    val enabled = (if (isa.M) mOperations else Vector.empty) ++
-      (if (isa.F) fOperations else Vector.empty)
+    val enabled = if (isa.M) mOperations else Vector.empty
     enabled.map(operation => s"OPERATOR_ROUTE_${operation.profileName.toUpperCase}" -> route(operation).profileValue)
   }
 }
@@ -144,18 +103,6 @@ object OperatorRouteConfig {
       operation -> model(width, timing)
     }.toMap
 
-  def modelF(width: Int, floating: FloatingAlu.Config): Map[ArithmeticRouteOperation, OperatorRoute] = {
-    def timing(operation: ArithmeticRouteOperation): ArithmeticIpTiming = operation match {
-      case Fadd | Fsub => floating.addSubTiming
-      case Fmul => floating.multiplyTiming
-      case Fdiv => floating.divideTiming
-      case Fsqrt => floating.sqrtTiming
-      case Fmadd | Fmsub | Fnmsub | Fnmadd => floating.fmaTiming
-      case FcvtW | FcvtWu | FcvtL | FcvtLu | FcvtSW | FcvtSWu | FcvtSL | FcvtSLu => floating.convertTiming
-      case _ => floating.compareTiming
-    }
-    fOperations.map(operation => operation -> model(width, timing(operation))).toMap
-  }
 }
 
 /** 单个算子 IP 的接口时序。
@@ -179,14 +126,7 @@ final case class OperatorIpTiming(
 final case class OperatorIpTimingConfig(
   outputFifoDepth: Int = 4,
   multiply: OperatorIpTiming = OperatorIpTiming(latency = 3),
-  divide: OperatorIpTiming = OperatorIpTiming(latency = 37),
-  floatingAddSub: OperatorIpTiming = OperatorIpTiming(latency = 3),
-  floatingMultiply: OperatorIpTiming = OperatorIpTiming(latency = 4),
-  floatingDivide: OperatorIpTiming = OperatorIpTiming(latency = 29),
-  floatingFma: OperatorIpTiming = OperatorIpTiming(latency = 4),
-  floatingSqrt: OperatorIpTiming = OperatorIpTiming(latency = 29),
-  floatingConvert: OperatorIpTiming = OperatorIpTiming(latency = 7),
-  floatingCompare: OperatorIpTiming = OperatorIpTiming(latency = 3)
+  divide: OperatorIpTiming = OperatorIpTiming(latency = 37)
 ) {
   require(outputFifoDepth >= 1, s"Operator IP output FIFO depth must be positive, got $outputFifoDepth")
 

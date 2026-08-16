@@ -2,10 +2,6 @@ package npc
 
 /** 机器态内核已实现的架构 CSR 地址。 */
 object CsrAddress {
-  val fflags = 0x001
-  val frm = 0x002
-  val fcsr = 0x003
-
   val mvendorid = 0xF11
   val marchid = 0xF12
   val mimpid = 0xF13

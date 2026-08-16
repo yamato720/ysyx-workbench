@@ -37,7 +37,6 @@ mapfile -d '' -t zcu_soc_rtl < <(find "$zcu_soc/rtl" -type f \( -name '*.v' -o -
 mapfile -d '' -t zcu_npc_rtl < <(find "$zcu_npc/rtl" -type f \( -name '*.v' -o -name '*.sv' \) -print0 | sort -z)
 mapfile -d '' -t u55c_rv64_npc_rtl < <(find "$u55c_rv64_npc/rtl" -type f \( -name '*.v' -o -name '*.sv' \) -print0 | sort -z)
 mapfile -d '' -t u55c_performance_monitor_rtl < <(find "$u55c_performance_monitor/rtl" -type f \( -name '*.v' -o -name '*.sv' \) -print0 | sort -z)
-mapfile -d '' -t u55c_cache_performance_monitor_rtl < <(find "$u55c_cache_performance_monitor/rtl" -type f \( -name '*.v' -o -name '*.sv' \) -print0 | sort -z)
 (( ${#zcu_soc_rtl[@]} > 1 )) || { echo 'ysyx FPGA elaboration 未按模块拆分 RTL' >&2; exit 1; }
 (( ${#zcu_npc_rtl[@]} > 1 )) || { echo '裸 NPC FPGA elaboration 未按模块拆分 RTL' >&2; exit 1; }
 [[ -f $u55c_soc/rtl/NpcFpgaTop.sv ]] || { echo 'U55C 未生成 NpcFpgaTop' >&2; exit 1; }

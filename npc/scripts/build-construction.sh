@@ -38,7 +38,7 @@ elif [[ $CAPABILITY == synthesize-only || $CAPABILITY == bitstream-only ]]; then
   mkdir -p "$stage/fpga"
 else
   mkdir -p "$stage/abi/rtl" "$stage/abi/verilator" "$stage/abi/nemu" \
-    "$stage/abi/softfloat" "$stage/abi/glue/include" "$stage/abi/glue/src"
+    "$stage/abi/glue/include" "$stage/abi/glue/src"
 fi
 
 phase_logs="$stage/logs/build"
@@ -95,7 +95,7 @@ copy_glue() {
   local file
   for file in "$npc_root"/csrc/*.h; do cp "$file" "$stage/abi/glue/include/"; done
   for file in "$npc_root"/csrc/npc_core.cpp "$npc_root"/csrc/pmem.cpp \
-    "$npc_root"/csrc/soc_dpi.cpp "$npc_root"/csrc/fp_dpi.cpp; do
+    "$npc_root"/csrc/soc_dpi.cpp; do
     [[ -f $file ]] && cp "$file" "$stage/abi/glue/src/"
   done
 }
@@ -123,10 +123,9 @@ dry_run() {
       note_phase chisel 1 "$total" "dry-run $SCOPE Chisel 生成"
       ;;
     run:npc|run:soc)
-      total=4
+      total=3
       note_phase chisel 1 "$total" "dry-run $SCOPE Chisel 生成"
-      note_phase softfloat 2 "$total" 'dry-run SoftFloat 构建'
-      note_phase verilator 3 "$total" 'dry-run Verilator 库构建'
+      note_phase verilator 2 "$total" 'dry-run Verilator 库构建'
       ;;
     run:spmv)
       total=3
@@ -318,25 +317,21 @@ case "$CAPABILITY:$SCOPE" in
     cp "$npc_root/chisel/ysyxSoC/build/ip-sources.manifest" "$stage/abi/rtl/ip-sources.manifest"
     ;;
   run:npc)
-    run_root_phase chisel 1 4 chisel-dpi
-    run_root_phase softfloat 2 4 softfloat-lib
-    run_root_phase verilator 3 4 chisel-cpu-lib CONSTRUCTION_PHASE_PREREQUISITES=0
+    run_root_phase chisel 1 3 chisel-dpi
+    run_root_phase verilator 2 3 chisel-cpu-lib CONSTRUCTION_PHASE_PREREQUISITES=0
     cp -a "$local_chisel_dpi_out/." "$stage/abi/rtl/"
     cp -a "$local_obj_dir/chisel-cpu-lib/." "$stage/abi/verilator/"
-    cp -a "$local_obj_dir/softfloat/." "$stage/abi/softfloat/"
-    refresh_host 4 4
+    refresh_host 3 3
     ;;
   run:soc)
-    run_root_phase chisel 1 4 soc-sim-verilog
-    run_root_phase softfloat 2 4 softfloat-lib
-    run_root_phase verilator 3 4 soc-nemu-lib CONSTRUCTION_PHASE_PREREQUISITES=0
+    run_root_phase chisel 1 3 soc-sim-verilog
+    run_root_phase verilator 2 3 soc-nemu-lib CONSTRUCTION_PHASE_PREREQUISITES=0
     cp "$local_soc_sim_dir/ysyxSoCFull.v" "$stage/abi/rtl/"
     "$ip_source_manifest" copy \
       "$local_soc_sim_dir/ip-sources.manifest" "$npc_root" "$stage/abi/rtl/sources"
     cp "$local_soc_sim_dir/ip-sources.manifest" "$stage/abi/rtl/ip-sources.manifest"
     cp -a "$local_obj_dir/soc-nemu-lib/." "$stage/abi/verilator/"
-    cp -a "$local_obj_dir/softfloat/." "$stage/abi/softfloat/"
-    refresh_host 4 4
+    refresh_host 3 3
     ;;
   run:spmv)
     run_root_phase elaborate 1 3 spmv-sim-elaborate

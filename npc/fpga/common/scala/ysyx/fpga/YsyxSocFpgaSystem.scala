@@ -109,7 +109,6 @@ class YsyxSocFpgaSystem(implicit val parameters: Parameters) extends Module {
   sdb.currentPc := debug.frontend.currentPc
   sdb.nextArchitecturalPc := debug.frontend.nextArchitecturalPc
   sdb.frontendInstruction := debug.frontend.frontendInstruction
-  sdb.fcsr := debug.backend.fcsr
   sdb.mstatus := debug.backend.mstatus
   sdb.mcause := debug.backend.mcause
   sdb.mepc := debug.backend.mepc

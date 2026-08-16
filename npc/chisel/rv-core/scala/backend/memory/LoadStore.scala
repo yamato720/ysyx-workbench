@@ -240,7 +240,6 @@ class PipelinedMemoryPending(cfg: ISAConfig) extends Bundle {
 class PipelinedArithmeticCompletion(xlen: Int) extends Bundle {
   val tag = UInt(2.W)
   val result = UInt(xlen.W)
-  val exceptionFlags = UInt(5.W)
   val illegal = Bool()
 }
 
@@ -248,7 +247,6 @@ class PipelinedArithmeticCompletion(xlen: Int) extends Bundle {
 class OutstandingCompletionCandidate(xlen: Int) extends Bundle {
   val valid = Bool()
   val writesRd = Bool()
-  val writesFloatingRd = Bool()
   val rd = UInt(5.W)
   val data = UInt(xlen.W)
   val dataValid = Bool()
@@ -499,9 +497,6 @@ private class LegacyPipelinedMemoryStage(
     dst.csrReadData := order.csrReadData
     dst.writebackFromMemory := order.writebackFromMemory
     dst.registerWriteEnable := order.registerWriteEnable && !responseFault
-    dst.floatRegisterWriteEnable := order.floatRegisterWriteEnable && !responseFault
-    dst.floatingInstruction := order.floatingInstruction && !responseFault
-    dst.floatingExceptionFlags := order.floatingExceptionFlags
     dst.csrReadWritebackEnable := order.csrReadWritebackEnable
     dst.csrAddress := order.csrAddress
     dst.csrWriteEnable := order.csrWriteEnable
@@ -594,7 +589,6 @@ private class OutstandingPipelinedMemoryStage(
   val entryArithmetic = RegInit(VecInit(Seq.fill(outstandingDepth)(false.B)))
   val entryLoadData = Reg(Vec(outstandingDepth, UInt(cfg.xlen.W)))
   val entryResult = Reg(Vec(outstandingDepth, UInt(cfg.xlen.W)))
-  val entryExceptionFlags = Reg(Vec(outstandingDepth, UInt(5.W)))
   val entryIllegal = RegInit(VecInit(Seq.fill(outstandingDepth)(false.B)))
   val entryFault = RegInit(VecInit(Seq.fill(outstandingDepth)(false.B)))
   val entryFaultReason = Reg(Vec(outstandingDepth, UInt(3.W)))
@@ -619,12 +613,10 @@ private class OutstandingPipelinedMemoryStage(
   val faultLenReg = RegInit(0.U(4.W))
   val faultReasonReg = RegInit(0.U(3.W))
   val dropYoung = RegInit(false.B)
-  val arithmeticRoundRobin = RegInit(false.B)
   // fault 退休后完成表会清空年轻槽位，但端点中已经接受的请求仍会迟到响应。计数器
   // 在发射和响应握手的同拍同时更新，只有所有悬挂端点都被吸收后才能复用 tag。
   val arithmeticInFlightWidth = log2Ceil(outstandingDepth + 1)
   val mulDivInFlight = RegInit(0.U(arithmeticInFlightWidth.W))
-  val floatingInFlight = RegInit(0.U(arithmeticInFlightWidth.W))
 
   def accessBytes(accessType: UInt): UInt = MuxLookup(accessType(1, 0), 1.U(4.W))(Seq(
     "b00".U -> 1.U(4.W), "b01".U -> 2.U(4.W), "b10".U -> 4.U(4.W),
@@ -717,17 +709,7 @@ private class OutstandingPipelinedMemoryStage(
   val issued = issuedQueue.io.deq.bits
   // 错位 fault 需先排在全部已发请求之后，才能与正常 AXI 响应共用一次回填端口。
   val faultCompletion = pendingValid && pendingFault && !issuedQueue.io.deq.valid
-  val arithmetic0Valid = io.arithmeticCompletion(0).valid
-  val arithmetic1Valid = io.arithmeticCompletion(1).valid
-  val arithmeticSelected = WireDefault(false.B)
-  val arithmeticSelectedIndex = WireDefault(0.U(1.W))
-  when(arithmetic0Valid && (!arithmetic1Valid || !arithmeticRoundRobin)) {
-    arithmeticSelected := true.B
-    arithmeticSelectedIndex := 0.U
-  }.elsewhen(arithmetic1Valid) {
-    arithmeticSelected := true.B
-    arithmeticSelectedIndex := 1.U
-  }
+  val arithmeticSelected = io.arithmeticCompletion(0).valid
 
   val headFault = entryValid(headIndex) && entryComplete(headIndex) && entryFault(headIndex)
   val faultRetire = io.response.fire && !sameCycleRetire && headFault
@@ -735,8 +717,8 @@ private class OutstandingPipelinedMemoryStage(
   // 否则 valid/ready 会形成组合环。
   val droppingNow = dropYoung
   val arithmeticFire = arithmeticSelected && !faultCompletion && !droppingNow
-  io.arithmeticCompletion(0).ready := droppingNow || (arithmeticFire && arithmeticSelectedIndex === 0.U)
-  io.arithmeticCompletion(1).ready := droppingNow || (arithmeticFire && arithmeticSelectedIndex === 1.U)
+  io.arithmeticCompletion(0).ready := droppingNow || arithmeticFire
+  io.arithmeticCompletion(1).ready := true.B
 
   val allowBusResponse = !faultCompletion && !arithmeticSelected && !droppingNow
   io.axi.r.ready := issuedQueue.io.deq.valid && !issued.write && (allowBusResponse || dropYoung)
@@ -811,10 +793,6 @@ private class OutstandingPipelinedMemoryStage(
   io.response.bits.csrReadData := responsePayload.csrReadData
   io.response.bits.writebackFromMemory := responsePayload.writebackFromMemory
   io.response.bits.registerWriteEnable := responsePayload.registerWriteEnable && !responseFault && !responseIllegal
-  io.response.bits.floatRegisterWriteEnable := responsePayload.floatRegisterWriteEnable && !responseFault && !responseIllegal
-  io.response.bits.floatingInstruction := responsePayload.floatingInstruction && !responseFault && !responseIllegal
-  io.response.bits.floatingExceptionFlags := Mux(responseArithmetic, entryExceptionFlags(headIndex),
-    responsePayload.floatingExceptionFlags)
   io.response.bits.csrReadWritebackEnable := responsePayload.csrReadWritebackEnable
   io.response.bits.csrAddress := responsePayload.csrAddress
   io.response.bits.csrWriteEnable := responsePayload.csrWriteEnable
@@ -829,9 +807,6 @@ private class OutstandingPipelinedMemoryStage(
 
   val selectedArithmeticCompletion = Wire(new PipelinedArithmeticCompletion(cfg.xlen))
   selectedArithmeticCompletion := io.arithmeticCompletion(0).bits
-  when(arithmeticSelectedIndex === 1.U) {
-    selectedArithmeticCompletion := io.arithmeticCompletion(1).bits
-  }
 
   for (offset <- 0 until outstandingDepth) {
     val index = newestIndex(offset)
@@ -849,7 +824,6 @@ private class OutstandingPipelinedMemoryStage(
         Mux(entryArithmetic(index), entryResult(index), payload.aluResult)))
     io.completionCandidates(offset).valid := entryCount > offset.U
     io.completionCandidates(offset).writesRd := payload.registerWriteEnable && !faultOrIllegal
-    io.completionCandidates(offset).writesFloatingRd := payload.floatRegisterWriteEnable && !faultOrIllegal
     io.completionCandidates(offset).rd := payload.rd
     io.completionCandidates(offset).data := Mux(memoryCompletesThisSlot, memoryCompletionData,
       Mux(arithmeticCompletesThisSlot, selectedArithmeticCompletion.result, savedData))
@@ -864,7 +838,6 @@ private class OutstandingPipelinedMemoryStage(
     entryArithmetic(tailIndex) := arithmeticAllocate
     entryLoadData(tailIndex) := 0.U
     entryResult(tailIndex) := allocatePayload.aluResult
-    entryExceptionFlags(tailIndex) := allocatePayload.floatingExceptionFlags
     entryIllegal(tailIndex) := false.B
     entryFault(tailIndex) := false.B
     entryFaultReason(tailIndex) := 0.U
@@ -892,20 +865,13 @@ private class OutstandingPipelinedMemoryStage(
   when(arithmeticFire) {
     entryComplete(selectedArithmeticCompletion.tag) := true.B
     entryResult(selectedArithmeticCompletion.tag) := selectedArithmeticCompletion.result
-    entryExceptionFlags(selectedArithmeticCompletion.tag) := selectedArithmeticCompletion.exceptionFlags
     entryIllegal(selectedArithmeticCompletion.tag) := selectedArithmeticCompletion.illegal
-    arithmeticRoundRobin := !arithmeticSelectedIndex.asBool
   }
 
-  val mulDivAllocate = arithmeticAllocate && !io.arithmeticRequest.bits.floatingInstruction
-  val floatingAllocate = arithmeticAllocate && io.arithmeticRequest.bits.floatingInstruction
+  val mulDivAllocate = arithmeticAllocate
   val mulDivComplete = io.arithmeticCompletion(0).fire
-  val floatingComplete = io.arithmeticCompletion(1).fire
   when(mulDivAllocate =/= mulDivComplete) {
     mulDivInFlight := Mux(mulDivAllocate, mulDivInFlight + 1.U, mulDivInFlight - 1.U)
-  }
-  when(floatingAllocate =/= floatingComplete) {
-    floatingInFlight := Mux(floatingAllocate, floatingInFlight + 1.U, floatingInFlight - 1.U)
   }
 
   val tableRetire = io.response.fire && !sameCycleRetire
@@ -930,7 +896,7 @@ private class OutstandingPipelinedMemoryStage(
     }
   }
   when(dropYoung && !pendingQueue.io.deq.valid && !issuedQueue.io.deq.valid &&
-    !mulDivInFlight.orR && !floatingInFlight.orR && !writeAwSent && !writeWSent) {
+    !mulDivInFlight.orR && !writeAwSent && !writeWSent) {
     dropYoung := false.B
     headIndex := 0.U
     tailIndex := 0.U
@@ -942,12 +908,12 @@ private class OutstandingPipelinedMemoryStage(
   io.fault.len := faultLenReg
   io.fault.reason := faultReasonReg
   io.busy := entryCount =/= 0.U || pendingQueue.io.deq.valid || issuedQueue.io.deq.valid ||
-    faultPending || dropYoung || mulDivInFlight.orR || floatingInFlight.orR || writeAwSent || writeWSent
+    faultPending || dropYoung || mulDivInFlight.orR || writeAwSent || writeWSent
   io.drained := !io.busy
   // `pendingQueue` 开启 flow 后，deq.valid 可以组合地反映当前 EX/MEM 请求；该请求
   // 不是比 ID/EX 旁路候选更老的历史项，不能让其反向参与后端的 ready 判定。
   io.retirementDrained := entryCount === 0.U && !faultPending && !dropYoung &&
-    !mulDivInFlight.orR && !floatingInFlight.orR && !writeAwSent && !writeWSent
+    !mulDivInFlight.orR && !writeAwSent && !writeWSent
 }
 
 /**

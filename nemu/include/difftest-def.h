@@ -33,9 +33,6 @@ enum { DIFFTEST_TO_DUT, DIFFTEST_TO_REF };
 typedef struct {
   uint64_t gpr[32];
   uint64_t pc;
-  uint64_t fpr[32];
-  uint32_t fcsr;
-  uint32_t reserved;
   uint64_t mstatus;
 } riscv_difftest_state_t;
 #define DIFFTEST_REG_SIZE sizeof(riscv_difftest_state_t)

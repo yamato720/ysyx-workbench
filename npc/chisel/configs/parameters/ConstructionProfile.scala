@@ -63,11 +63,8 @@ object ConstructionProfile {
     val capability = host.capability
     val settings = host.nemuConfig
     val mulDiv = config.operators.mulDiv
-    val floating = config.operators.floating
     val isaExtensions = Seq(
       Option.when(config.isa.M)("m"),
-      Option.when(config.isa.F)("f"),
-      Option.when(config.isa.D)("d"),
       Option.when(config.isa.Zicsr)("_zicsr"),
       Option.when(config.isa.Zifencei)("_zifencei")
     ).flatten.mkString
@@ -99,7 +96,7 @@ object ConstructionProfile {
     require(entry.scope == "fpga" || !config.cache.usesUram,
       s"CacheStorage.Uram is only valid for an FPGA construction: ${entry.className}")
     val base = Seq(
-      "PROFILE_FORMAT" -> "24",
+      "PROFILE_FORMAT" -> "25",
       "CONFIG_SHORT_NAME" -> entry.shortName,
       "CONFIG_FQCN" -> entry.className,
       "SCOPE" -> entry.scope,
@@ -135,8 +132,6 @@ object ConstructionProfile {
       "XLEN" -> config.isa.xlen.toString,
       "ISA_STRING" -> s"rv${config.isa.xlen}i$isaExtensions",
       "M" -> bit(config.isa.M),
-      "F" -> bit(config.isa.F),
-      "D" -> bit(config.isa.D),
       "ZICSR" -> bit(config.isa.Zicsr),
       "ZIFENCEI" -> bit(config.isa.Zifencei),
       "PIPELINE" -> bit(config.pipeline.enablePipeline),
@@ -156,20 +151,6 @@ object ConstructionProfile {
       "MUL_II" -> mulDiv.multiplyTiming.initiationInterval.toString,
       "DIV_CYCLES" -> mulDiv.divideTiming.latency.toString,
       "DIV_II" -> mulDiv.divideTiming.initiationInterval.toString,
-      "FADD_CYCLES" -> floating.addSubTiming.latency.toString,
-      "FADD_II" -> floating.addSubTiming.initiationInterval.toString,
-      "FMUL_CYCLES" -> floating.multiplyTiming.latency.toString,
-      "FMUL_II" -> floating.multiplyTiming.initiationInterval.toString,
-      "FDIV_CYCLES" -> floating.divideTiming.latency.toString,
-      "FDIV_II" -> floating.divideTiming.initiationInterval.toString,
-      "FFMA_CYCLES" -> floating.fmaTiming.latency.toString,
-      "FFMA_II" -> floating.fmaTiming.initiationInterval.toString,
-      "FSQRT_CYCLES" -> floating.sqrtTiming.latency.toString,
-      "FSQRT_II" -> floating.sqrtTiming.initiationInterval.toString,
-      "FCVT_CYCLES" -> floating.convertTiming.latency.toString,
-      "FCVT_II" -> floating.convertTiming.initiationInterval.toString,
-      "FCMP_CYCLES" -> floating.compareTiming.latency.toString,
-      "FCMP_II" -> floating.compareTiming.initiationInterval.toString,
       "MEMORY_BASE" -> hex(config.memory.mainMemoryBase),
       "MEMORY_SIZE" -> hex(config.memory.mainMemorySize),
       "RESET_VECTOR" -> s"0x${config.memory.resetVector.toString(16)}",

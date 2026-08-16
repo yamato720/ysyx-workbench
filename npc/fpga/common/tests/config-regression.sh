@@ -236,8 +236,6 @@ check_terminal() {
     grep -qx 'NEMU_PIPELINE_HTML=1' "$profile" || fail "$config 应启用流水页面"
   fi
   grep -qx 'M=1' "$profile" || fail "$config 未启用 M 扩展"
-  grep -qx 'F=0' "$profile" || fail "$config 不应启用 F 扩展"
-  grep -qx 'D=0' "$profile" || fail "$config 不应启用 D 扩展"
   if [[ $config == *Cache* ]]; then
     grep -qx 'ICACHE_ENABLED=1' "$profile" || fail "$config 未启用 I$"
     grep -qx 'DCACHE_ENABLED=1' "$profile" || fail "$config 未启用 D$"

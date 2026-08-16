@@ -211,12 +211,6 @@ class NpcFrontend(config: NpcConfig) extends Module {
   io.dispatch.bits.csrOperation := decodeSignals.csrOperation
   io.dispatch.bits.csrUseImmediate := decodeSignals.csrUseImmediate
   io.dispatch.bits.csrReadWritebackEnable := decodeSignals.csrReadWritebackEnable
-  io.dispatch.bits.floatingOperation := decodeSignals.floatingOperation
-  io.dispatch.bits.floatingInstruction := decodeSignals.floatingInstruction
-  io.dispatch.bits.floatRegisterWriteEnable := decodeSignals.floatRegisterWriteEnable
-  io.dispatch.bits.usesFrs1 := decodeSignals.usesFrs1
-  io.dispatch.bits.usesFrs2 := decodeSignals.usesFrs2
-  io.dispatch.bits.usesFrs3 := decodeSignals.usesFrs3
 
   // 有在途取指并不表示前端停顿：两拍取指会持续保持请求队列。只有 IF/ID 两端
   // 都不能提供指令时，才是会阻止派发的取指缺口。

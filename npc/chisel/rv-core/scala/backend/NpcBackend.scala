@@ -26,15 +26,9 @@ class NpcBackend(
   private val directIntegerWritebackBypass = pipelineConfig.directIntegerWritebackBypass
   private val operatorConfig = config.operators
   private val localM = cfg.M
-  private val localF = cfg.F
   private val debugEnabled = config.debug.enableTopDebugIo
   private val axiConfig = config.axi
-  private val arithmeticTagWidth =
-    if (localM) operatorConfig.mulDiv.tagWidth
-    else if (localF) operatorConfig.floating.tagWidth
-    else 1
-  require(!localM || !localF || operatorConfig.mulDiv.tagWidth == operatorConfig.floating.tagWidth,
-    "Integer and floating arithmetic endpoints must use the same tagWidth")
+  private val arithmeticTagWidth = if (localM) operatorConfig.mulDiv.tagWidth else 1
 
   val io = IO(new Bundle {
     val interrupt = Input(Bool())
@@ -65,7 +59,7 @@ class NpcBackend(
   val serialExecuteResultReg = Module(new PipelineRegister(new ExecuteMemoryPayload(cfg)))
   val executeMemoryReg = Module(new PipelineRegister(new ExecuteMemoryPayload(cfg)))
   val memoryWritebackReg = Module(new PipelineRegister(new MemoryWritebackPayload(cfg)))
-  // M/F 严格只保留一条在途指令。端点响应先进入该弹性寄存器，再和普通结果一样
+  // M 扩展严格只保留一条在途指令。端点响应先进入该弹性寄存器，再和普通结果一样
   // 推入 EX/MEM；没有 tag 回填、完成 FIFO 或跨越 ID/EX 的完成状态反压。
   val arithmeticResponseReg = Module(new PipelineRegister(new ArithmeticResponse(cfg.xlen, arithmeticTagWidth)))
   // 已派发陷入或 mret 时阻止继续译码，直到该指令在提交阶段完成重定向。
@@ -86,15 +80,12 @@ class NpcBackend(
   val frontendRedirectTarget = Mux(commitRedirectValid, commitRedirectTarget, executeRedirectTarget)
 
   val registerFile = Module(new RegisterFile(width = cfg.xlen, debug = true))
-  val floatingRegisterFile = if (localF) Some(Module(new FloatingRegisterFile(cfg.xlen))) else None
   val integerAlu = Module(new IntegerAlu(cfg.xlen))
   // 可选的串行 ALU 供 CSR、异常和 mret 路径使用。三拍模式下它只消费
   // serialExecuteControlReg，避免 executeState 经共享输入 mux 重新穿过结果级 ALU。
   val serialIntegerAlu = if (separateSerialIntegerAlu) Some(Module(new IntegerAlu(cfg.xlen))) else None
   val mulDivAlu = if (localM) Some(Module(new MulDivAlu(
     cfg.xlen, operatorConfig.mulDiv, operatorConfig.routes, components.arithmeticIp))) else None
-  val floatingAlu = if (localF) Some(Module(new FloatingAlu(
-    cfg.xlen, operatorConfig.floating, operatorConfig.routes, components.arithmeticIp))) else None
   val csrExecution = Module(new CsrExecution(cfg))
   val csrFile = Module(new CsrFile(cfg))
   val machineExternalInterruptPending = csrFile.io.machineExternalInterruptPending
@@ -139,17 +130,6 @@ class NpcBackend(
   val dispatch = io.dispatch.bits
   registerFile.io.rs1 := dispatch.rs1
   registerFile.io.rs2 := dispatch.rs2
-  val floatingRs1Data = WireDefault(0.U(cfg.xlen.W))
-  val floatingRs2Data = WireDefault(0.U(cfg.xlen.W))
-  val floatingRs3Data = WireDefault(0.U(cfg.xlen.W))
-  floatingRegisterFile.foreach { fp =>
-    fp.io.rs1 := dispatch.rs1
-    fp.io.rs2 := dispatch.rs2
-    fp.io.rs3 := dispatch.rs3
-    floatingRs1Data := fp.io.rs1Data
-    floatingRs2Data := fp.io.rs2Data
-    floatingRs3Data := fp.io.rs3Data
-  }
 
   val executeIdle :: executeSerialDispatch :: executeDone :: executeArithmeticWait :: Nil = Enum(4)
   val executeState = RegInit(executeIdle)
@@ -187,16 +167,10 @@ class NpcBackend(
   serialExecuteResultReg.io.in.valid := false.B
   serialExecuteResultReg.io.in.bits := 0.U.asTypeOf(new ExecuteMemoryPayload(cfg))
   serialExecuteResultReg.io.out.ready := false.B
-  val executeInputFloatingDisabled = (executeInput.floatingInstruction ||
-    (executeInput.csrEnable && CsrAccess.isFloatingAddress(executeInput.csrAddress))) && !csrFile.io.fEnabled
-  val executeInputFloatingTrap = executeInputFloatingDisabled ||
-    CsrAccess.hasInvalidFloatingRounding(executeInput.floatingOperation, executeInput.aluCtrl,
-      executeInput.funct3, csrFile.io.frmOut)
   val executeInputIsArithmetic = executeInput.executionUnit === NpcExecutionUnit.multiply ||
-      executeInput.executionUnit === NpcExecutionUnit.divide ||
-      (executeInput.executionUnit === NpcExecutionUnit.floating && !executeInputFloatingTrap)
+      executeInput.executionUnit === NpcExecutionUnit.divide
   val executeInputIsSerial = executeInput.csrEnable || executeInput.trapEnable || executeInput.mretEnable ||
-    executeInputFloatingTrap
+    false.B
   val pipelineMode = pipelineConfig.enablePipeline.B
   val olderInstructionsDrained = (!twoStageIntegerExecute).B || !integerExecuteReg.io.out.valid
   val serialControlStagePending = threeStageSerialExecute.B && serialExecuteControlReg.io.out.valid
@@ -206,13 +180,8 @@ class NpcBackend(
     !executeMemoryReg.io.out.valid && memoryState === memoryIdle &&
     !memoryWritebackReg.io.out.valid && !memoryStageBusy
   // 关闭完成表时，算术请求仍按旧路径等待全部旧指令排空。开启后请求先分配 MEM
-  // 完成槽位，M/F 的 tag 指向该槽位，因而可与较老访存及另一类端点重叠。
-  val arithmeticUnitReady = Mux(
-    executeInput.executionUnit === NpcExecutionUnit.multiply || executeInput.executionUnit === NpcExecutionUnit.divide,
-    mulDivAlu.map(_.io.req.ready).getOrElse(false.B),
-    Mux(executeInput.executionUnit === NpcExecutionUnit.floating,
-      floatingAlu.map(_.io.req.ready).getOrElse(false.B), false.B)
-  )
+  // 完成槽位，M 扩展的 tag 指向该槽位，因而可与较老访存重叠。
+  val arithmeticUnitReady = mulDivAlu.map(_.io.req.ready).getOrElse(false.B)
   val outstandingArithmeticSlotReady = pipelinedMemoryStage.map(_.io.arithmeticSlotAvailable).getOrElse(false.B)
   val arithmeticCanAccept = executeState === executeIdle && arithmeticUnitReady && Mux(
     outstandingCompletionForwarding.B,
@@ -270,7 +239,7 @@ class NpcBackend(
   hazardUnit.io.rs2 := dispatch.rs2
 
   // 生产者从新到旧排列。完成表位于 EX/MEM 与 WB 之间；其四项候选即使未完成
-  // 也必须保留为生产者，以阻断对同 rd/FPR 的更老值的错误选择。
+  // 也必须保留为生产者，以阻断对同 rd 的更老值的错误选择。
   val completionCandidates = (0 until outstandingLoadDepth).map { index =>
     pipelinedMemoryStage.map(_.io.completionCandidates(index)).getOrElse(
       0.U.asTypeOf(new OutstandingCompletionCandidate(cfg.xlen)))
@@ -305,17 +274,6 @@ class NpcBackend(
     memoryRequestReg.rd,
     memoryWritebackReg.io.out.bits.rd
   )
-  val producerWritesFloatingRd = Seq(
-    decodeExecuteReg.io.out.bits.floatRegisterWriteEnable,
-    integerExecuteReg.io.out.bits.floatRegisterWriteEnable,
-    executeRequestReg.floatRegisterWriteEnable,
-    serialExecuteResultReg.io.out.bits.floatRegisterWriteEnable,
-    executeMemoryReg.io.out.bits.floatRegisterWriteEnable
-  ) ++ completionCandidates.map(_.writesFloatingRd) ++ Seq(
-    memoryRequestReg.floatRegisterWriteEnable,
-    memoryWritebackReg.io.out.bits.floatRegisterWriteEnable
-  )
-
   val idCandidateAvailable = Seq(
     directExecuteWillFire && executeInput.executionUnit === NpcExecutionUnit.integer && !executeInput.writebackFromMemory,
     false.B,
@@ -327,7 +285,7 @@ class NpcBackend(
     true.B
   )
   val dispatchIsArithmetic = dispatch.executionUnit === NpcExecutionUnit.multiply ||
-    dispatch.executionUnit === NpcExecutionUnit.divide || dispatch.executionUnit === NpcExecutionUnit.floating
+    dispatch.executionUnit === NpcExecutionUnit.divide
   val dispatchIsSerial = dispatchIsArithmetic ||
     dispatch.csrEnable || dispatch.trapEnable || dispatch.mretEnable
   val currentDecodeSlotCanAdvance = !decodeExecuteReg.io.out.valid ||
@@ -362,14 +320,12 @@ class NpcBackend(
     candidate: ForwardingCandidate,
     valid: Bool,
     writesRd: Bool,
-    writesFloatingRd: Bool,
     rd: UInt,
     data: UInt,
     dataValid: Bool
   ): Unit = {
     candidate.valid := valid
     candidate.writesRd := writesRd
-    candidate.writesFloatingRd := writesFloatingRd
     candidate.rd := rd
     candidate.data := data
     candidate.dataValid := dataValid
@@ -386,7 +342,6 @@ class NpcBackend(
       forwardingUnit.io.idCandidates(index),
       producerValid(index),
       producerWritesRd(index),
-      producerWritesFloatingRd(index),
       producerRd(index),
       idCandidateData(index),
       idCandidateAvailable(index)
@@ -394,37 +349,24 @@ class NpcBackend(
   }
   // 在 EX0/EX1/EX2，槽位零至三分别为当前 ID/EX、EX0、串行请求和串行结果级；它们
   // 都不能组合旁路到普通整数 ALU。更老结果保持由新到旧优先级。
-  driveCandidate(forwardingUnit.io.executeCandidates(0), false.B, false.B, false.B, 0.U,
+  driveCandidate(forwardingUnit.io.executeCandidates(0), false.B, false.B, 0.U,
     0.U(cfg.xlen.W), false.B)
-  driveCandidate(forwardingUnit.io.executeCandidates(1), false.B, false.B, false.B, 0.U,
+  driveCandidate(forwardingUnit.io.executeCandidates(1), false.B, false.B, 0.U,
     0.U(cfg.xlen.W), false.B)
-  driveCandidate(forwardingUnit.io.executeCandidates(2), false.B, false.B, false.B, 0.U,
+  driveCandidate(forwardingUnit.io.executeCandidates(2), false.B, false.B, 0.U,
     0.U(cfg.xlen.W), false.B)
-  driveCandidate(forwardingUnit.io.executeCandidates(3), false.B, false.B, false.B, 0.U,
+  driveCandidate(forwardingUnit.io.executeCandidates(3), false.B, false.B, 0.U,
     0.U(cfg.xlen.W), false.B)
   for (index <- 4 until producerCount) {
     driveCandidate(
       forwardingUnit.io.executeCandidates(index),
       producerValid(index),
       producerWritesRd(index),
-      producerWritesFloatingRd(index),
       producerRd(index),
       idCandidateData(index),
       idCandidateAvailable(index)
     )
   }
-  def floatingSourceHazard(source: UInt, used: Bool): Bool = {
-    val matches = producerValid.zip(producerWritesFloatingRd).zip(producerRd).map {
-      case ((valid, writesRd), rd) => used && source =/= 0.U && valid && writesRd && rd === source
-    }
-    val newestAvailable = idCandidateAvailable.zip(matches).foldRight(false.B) {
-      case ((available, matchesSource), older) => Mux(matchesSource, available, older)
-    }
-    matches.reduce(_ || _) && !(pipelineConfig.forwarding.enableIdForwarding.B && newestAvailable)
-  }
-  val floatingRawHazard = floatingSourceHazard(dispatch.rs1, dispatch.usesFrs1) ||
-    floatingSourceHazard(dispatch.rs2, dispatch.usesFrs2) ||
-    floatingSourceHazard(dispatch.rs3, dispatch.usesFrs3)
   val pipelinedLoadResponseReady = pipelinedMemoryStage.map(stage =>
     stage.io.response.valid && stage.io.response.bits.writebackFromMemory).getOrElse(false.B)
   val pipelinedLoadResponseRd = pipelinedMemoryStage.map(_.io.response.bits.rd).getOrElse(0.U(5.W))
@@ -456,7 +398,7 @@ class NpcBackend(
     (memoryState =/= memoryIdle && !pipelinedMemory.B) || memoryWritebackReg.io.out.valid || memoryStageBusy
   val decodeCanIssue = Mux(
     pipelineConfig.enablePipeline.B,
-    !hazardUnit.io.stall && !floatingRawHazard && !pipelinedLoadHazard &&
+    !hazardUnit.io.stall && !pipelinedLoadHazard &&
       !pipelinedMemoryWriteHazard &&
       !redirectBarrier && !machineExternalInterruptPending && !frontendRedirectValid &&
       executeState =/= executeArithmeticWait,
@@ -476,25 +418,9 @@ class NpcBackend(
   // EX 起点放在该寄存器边界之后，不能与刚完成的 ID 驻留重叠。
   decodeExecuteReg.io.in.bits.perfExecuteStartCycle := Mux(
     twoStageIntegerExecute.B, 0.U(64.W), performanceCycle + 1.U(64.W))
-  def normalizedFpr(raw: UInt): UInt =
-    if (cfg.xlen == 64) Mux(raw(63, 32) === Fill(32, 1.U(1.W)), raw, Cat(Fill(32, 1.U(1.W)), "h7fc00000".U(32.W)))
-    else raw
-  val rs1FprValue = Mux(dispatch.aluCtrl === NpcAluOp.Floating.FMV_X_W.asUInt, floatingRs1Data, normalizedFpr(floatingRs1Data))
-  val rs2FprValue = Mux(dispatch.storeEnable, floatingRs2Data, normalizedFpr(floatingRs2Data))
-  forwardingUnit.io.idFrs1 := dispatch.rs1
-  forwardingUnit.io.idFrs2 := dispatch.rs2
-  forwardingUnit.io.idFrs3 := dispatch.rs3
-  forwardingUnit.io.idUsesFrs1 := dispatch.usesFrs1
-  forwardingUnit.io.idUsesFrs2 := dispatch.usesFrs2
-  forwardingUnit.io.idUsesFrs3 := dispatch.usesFrs3
-  forwardingUnit.io.idFrs1Data := rs1FprValue
-  forwardingUnit.io.idFrs2Data := rs2FprValue
-  forwardingUnit.io.idFrs3Data := normalizedFpr(floatingRs3Data)
-  decodeExecuteReg.io.in.bits.rs1Data := Mux(dispatch.usesFrs1,
-    forwardingUnit.io.idFrs1Forwarded, forwardingUnit.io.idRs1Forwarded)
-  decodeExecuteReg.io.in.bits.storeData := Mux(dispatch.usesFrs2,
-    forwardingUnit.io.idFrs2Forwarded, forwardingUnit.io.idRs2Forwarded)
-  decodeExecuteReg.io.in.bits.operandC := forwardingUnit.io.idFrs3Forwarded
+  decodeExecuteReg.io.in.bits.rs1Data := forwardingUnit.io.idRs1Forwarded
+  decodeExecuteReg.io.in.bits.storeData := forwardingUnit.io.idRs2Forwarded
+  decodeExecuteReg.io.in.bits.operandC := 0.U
   decodeExecuteReg.io.in.bits.immediate := dispatch.immediate
   decodeExecuteReg.io.in.bits.rd := dispatch.rd
   decodeExecuteReg.io.in.bits.rs1 := dispatch.rs1
@@ -502,12 +428,6 @@ class NpcBackend(
   decodeExecuteReg.io.in.bits.rs3 := dispatch.rs3
   decodeExecuteReg.io.in.bits.usesRs1 := dispatch.usesRs1
   decodeExecuteReg.io.in.bits.usesRs2 := dispatch.usesRs2
-  decodeExecuteReg.io.in.bits.floatingOperation := dispatch.floatingOperation
-  decodeExecuteReg.io.in.bits.floatingInstruction := dispatch.floatingInstruction
-  decodeExecuteReg.io.in.bits.floatRegisterWriteEnable := dispatch.floatRegisterWriteEnable
-  decodeExecuteReg.io.in.bits.usesFrs1 := dispatch.usesFrs1
-  decodeExecuteReg.io.in.bits.usesFrs2 := dispatch.usesFrs2
-  decodeExecuteReg.io.in.bits.usesFrs3 := dispatch.usesFrs3
   decodeExecuteReg.io.in.bits.funct3 := dispatch.funct3
   decodeExecuteReg.io.in.bits.csrAddress := dispatch.csrAddress
   decodeExecuteReg.io.in.bits.branch := dispatch.branch
@@ -543,13 +463,11 @@ class NpcBackend(
   val directExecuteInput = Wire(new DecodeExecutePayload(cfg))
   directExecuteInput := executeInput
   if (twoStageIntegerExecute) {
-    // EX0 接收时完成所有普通整数操作数选择。浮点 store 的 rs2 已由 FPR 在 ID
-    // 读取，不能经过 GPR forwarding mux。
+    // EX0 接收时完成普通整数操作数选择。
     integerExecuteReg.io.in.valid := decodeExecuteFire && !executeInputIsSerial && !executeInputIsArithmetic
     integerExecuteReg.io.in.bits := executeInput
     integerExecuteReg.io.in.bits.rs1Data := forwardingUnit.io.executeRs1Forwarded
-    integerExecuteReg.io.in.bits.storeData := Mux(executeInput.usesFrs2,
-      executeInput.storeData, forwardingUnit.io.executeRs2Forwarded)
+    integerExecuteReg.io.in.bits.storeData := forwardingUnit.io.executeRs2Forwarded
     integerExecuteReg.io.in.bits.perfDecodeCycles := performanceCycle - executeInput.perfDecodeStartCycle
     integerExecuteReg.io.in.bits.perfExecuteStartCycle := performanceCycle
     // commit redirect 必须阻止已在 EX0 的错误路径进入 EX1；本拍由 EX1 自己产生的
@@ -584,60 +502,31 @@ class NpcBackend(
     alu.io.req.bits.operandB := Mux(executeInput.useImmediate, executeInput.immediate, executeInput.storeData)
     alu.io.req.bits.operandC := 0.U
     alu.io.req.bits.aluOp := executeInput.aluCtrl
-    alu.io.req.bits.roundingMode := 0.U
     alu.io.req.bits.pc := executeInput.pc
     alu.io.req.bits.instruction := executeInput.instruction
-    alu.io.req.bits.fcsr := csrFile.io.fcsrOut
-    alu.io.req.bits.tag := Mux(outstandingCompletionForwarding.B,
-      pipelinedMemoryStage.map(_.io.arithmeticAllocateTag).getOrElse(0.U), 0.U)
-  }
-  floatingAlu.foreach { alu =>
-    alu.io.req.valid := arithmeticIssue && executeInput.executionUnit === NpcExecutionUnit.floating
-    alu.io.req.bits.operandA := executeInput.rs1Data
-    alu.io.req.bits.operandB := executeInput.storeData
-    alu.io.req.bits.operandC := executeInput.operandC
-    alu.io.req.bits.aluOp := executeInput.aluCtrl
-    alu.io.req.bits.roundingMode := Mux(executeInput.funct3 === 7.U, csrFile.io.frmOut, executeInput.funct3)
-    alu.io.req.bits.pc := executeInput.pc
-    alu.io.req.bits.instruction := executeInput.instruction
-    alu.io.req.bits.fcsr := csrFile.io.fcsrOut
     alu.io.req.bits.tag := Mux(outstandingCompletionForwarding.B,
       pipelinedMemoryStage.map(_.io.arithmeticAllocateTag).getOrElse(0.U), 0.U)
   }
 
-  val arithmeticResponseFromMulDiv = executeRequestReg.executionUnit === NpcExecutionUnit.multiply ||
-    executeRequestReg.executionUnit === NpcExecutionUnit.divide
   val emptyArithmeticResponse = 0.U.asTypeOf(new ArithmeticResponse(cfg.xlen, arithmeticTagWidth))
   val mulDivResponse = mulDivAlu.map(_.io.resp.bits).getOrElse(emptyArithmeticResponse)
-  val floatingResponse = floatingAlu.map(_.io.resp.bits).getOrElse(emptyArithmeticResponse)
   val mulDivResponseValid = mulDivAlu.map(_.io.resp.valid).getOrElse(false.B)
-  val floatingResponseValid = floatingAlu.map(_.io.resp.valid).getOrElse(false.B)
   pipelinedMemoryStage.foreach { stage =>
     stage.io.arithmeticCompletion(0).valid := outstandingCompletionForwarding.B && mulDivResponseValid
     stage.io.arithmeticCompletion(0).bits.tag := mulDivResponse.tag
     stage.io.arithmeticCompletion(0).bits.result := mulDivResponse.result
-    stage.io.arithmeticCompletion(0).bits.exceptionFlags := mulDivResponse.exceptionFlags
     stage.io.arithmeticCompletion(0).bits.illegal := mulDivResponse.illegal
-    stage.io.arithmeticCompletion(1).valid := outstandingCompletionForwarding.B && floatingResponseValid
-    stage.io.arithmeticCompletion(1).bits.tag := floatingResponse.tag
-    stage.io.arithmeticCompletion(1).bits.result := floatingResponse.result
-    stage.io.arithmeticCompletion(1).bits.exceptionFlags := floatingResponse.exceptionFlags
-    stage.io.arithmeticCompletion(1).bits.illegal := floatingResponse.illegal
+    stage.io.arithmeticCompletion(1).valid := false.B
+    stage.io.arithmeticCompletion(1).bits := 0.U.asTypeOf(stage.io.arithmeticCompletion(1).bits)
   }
   val arithmeticResponseActive = executeState === executeArithmeticWait && !outstandingCompletionForwarding.B
-  val selectedArithmeticResponse = Mux(arithmeticResponseFromMulDiv, mulDivResponse, floatingResponse)
-  val selectedArithmeticResponseValid = Mux(arithmeticResponseFromMulDiv,
-    mulDivResponseValid, floatingResponseValid)
   arithmeticResponseReg.io.flush := false.B
-  arithmeticResponseReg.io.in.valid := arithmeticResponseActive && selectedArithmeticResponseValid
-  arithmeticResponseReg.io.in.bits := selectedArithmeticResponse
-  // 关闭时维持已锁存请求的单响应路径；开启时由完成表轮转选择 M/F 端点并按 tag 回填。
+  arithmeticResponseReg.io.in.valid := arithmeticResponseActive && mulDivResponseValid
+  arithmeticResponseReg.io.in.bits := mulDivResponse
+  // 关闭时维持已锁存请求的单响应路径；开启时由完成表按 tag 回填。
   val mulDivCompletionReady = pipelinedMemoryStage.map(_.io.arithmeticCompletion(0).ready).getOrElse(false.B)
-  val floatingCompletionReady = pipelinedMemoryStage.map(_.io.arithmeticCompletion(1).ready).getOrElse(false.B)
   mulDivAlu.foreach(_.io.resp.ready := Mux(outstandingCompletionForwarding.B, mulDivCompletionReady,
-    arithmeticResponseActive && arithmeticResponseFromMulDiv && arithmeticResponseReg.io.in.ready))
-  floatingAlu.foreach(_.io.resp.ready := Mux(outstandingCompletionForwarding.B, floatingCompletionReady,
-    arithmeticResponseActive && !arithmeticResponseFromMulDiv && arithmeticResponseReg.io.in.ready))
+    arithmeticResponseActive && arithmeticResponseReg.io.in.ready))
   arithmeticResponseReg.io.out.ready := executeMemoryReg.io.in.ready && !executeMemoryRedirectPending
   val serialExecuteComplete = if (pipelinedSerialExecute) serialExecuteResultReg.io.in.fire
     else executeMemoryReg.io.in.fire
@@ -681,14 +570,8 @@ class NpcBackend(
   csrExecution.io.csrRequestEnable := executeRequest.csrEnable
   csrExecution.io.csrOperation := executeRequest.csrOperation
   csrExecution.io.csrUseImmediate := executeRequest.csrUseImmediate
-  val executeRequestFloatingTrap =
-    ((executeRequest.floatingInstruction || (executeRequest.csrEnable && CsrAccess.isFloatingAddress(executeRequest.csrAddress))) &&
-      !csrFile.io.fEnabled) ||
-    CsrAccess.hasInvalidFloatingRounding(executeRequest.floatingOperation, executeRequest.aluCtrl,
-      executeRequest.funct3, csrFile.io.frmOut)
-  csrExecution.io.trapRequested := executeRequest.trapEnable || executeRequestFloatingTrap
-  csrExecution.io.requestedTrapCause := Mux(executeRequestFloatingTrap,
-    CsrCause.illegalInstruction.U(cfg.xlen.W), executeRequest.trapCause)
+  csrExecution.io.trapRequested := executeRequest.trapEnable
+  csrExecution.io.requestedTrapCause := executeRequest.trapCause
   csrExecution.io.mretRequested := executeRequest.mretEnable
   csrExecution.io.capture := serialExecuteAccept
   csrExecution.io.rs1Data := executeRequest.rs1Data
@@ -705,11 +588,7 @@ class NpcBackend(
   when(directIntegerExecuteFire) { executeOutputRequest := directExecuteInput }
   val executeBranchTarget = executeOutputRequest.pc + executeOutputRequest.immediate
   val executeOutputRs1Data = Mux(directIntegerExecuteFire, directRs1Data, executeOutputRequest.rs1Data)
-  // 浮点 store 通过 `storeData`（`usesFrs2`）携带源值；整数 store 才需要 EX
-  // 前递。若统一使用整数 mux，浮点源会丢失，并可能以陈旧值覆盖相邻内存 lane。
-  val directStoreData = Mux(executeOutputRequest.usesFrs2,
-    executeOutputRequest.storeData, directRs2Data)
-  val executeOutputStoreData = Mux(directIntegerExecuteFire, directStoreData,
+  val executeOutputStoreData = Mux(directIntegerExecuteFire, directRs2Data,
     executeOutputRequest.storeData)
   val executeJalrTargetRaw = executeOutputRs1Data + executeOutputRequest.immediate
   val serialExecuteResult = serialIntegerAlu.map(_.io.result).getOrElse(integerAlu.io.result)
@@ -762,10 +641,6 @@ class NpcBackend(
     payload.writebackFromMemory := request.writebackFromMemory
     payload.storeEnable := request.storeEnable
     payload.registerWriteEnable := request.registerWriteEnable && !arithmeticIllegal
-    payload.floatRegisterWriteEnable := request.floatRegisterWriteEnable && !arithmeticIllegal
-    payload.floatingInstruction := request.floatingInstruction && !arithmeticIllegal
-    payload.floatingExceptionFlags := Mux(arithmeticResponse,
-      arithmeticResponseReg.io.out.bits.exceptionFlags, 0.U)
     payload.csrReadWritebackEnable := request.csrReadWritebackEnable
     payload.csrAddress := Mux(controlResult, csrExecution.io.csrAddress, 0.U)
     payload.csrWriteEnable := Mux(controlResult, csrExecution.io.csrWriteEnable, false.B)
@@ -918,9 +793,6 @@ class NpcBackend(
     dst.csrReadData := src.csrReadData
     dst.writebackFromMemory := src.writebackFromMemory
     dst.registerWriteEnable := src.registerWriteEnable
-    dst.floatRegisterWriteEnable := src.floatRegisterWriteEnable
-    dst.floatingInstruction := src.floatingInstruction
-    dst.floatingExceptionFlags := src.floatingExceptionFlags
     dst.csrReadWritebackEnable := src.csrReadWritebackEnable
     dst.csrAddress := src.csrAddress
     dst.csrWriteEnable := src.csrWriteEnable
@@ -1079,13 +951,6 @@ class NpcBackend(
   registerFile.io.writeData := commitWriteData
   registerFile.io.writeEnable := memoryWritebackReg.io.out.bits.registerWriteEnable
   registerFile.io.commit := commitFire
-  floatingRegisterFile.foreach { fp =>
-    fp.io.rd := memoryWritebackReg.io.out.bits.rd
-    fp.io.writeData := Mux(memoryWritebackReg.io.out.bits.writebackFromMemory,
-      memoryWritebackReg.io.out.bits.loadData, memoryWritebackReg.io.out.bits.aluResult)
-    fp.io.writeEnable := memoryWritebackReg.io.out.bits.floatRegisterWriteEnable
-    fp.io.commit := commitFire
-  }
   csrFile.io.address := Mux(serialExecuteAccept, executeRequest.csrAddress,
     Mux(commitFire && memoryWritebackReg.io.out.bits.csrWriteEnable,
       memoryWritebackReg.io.out.bits.csrAddress, dispatch.csrAddress))
@@ -1116,8 +981,6 @@ class NpcBackend(
     Mux(commitExternalInterrupt, memoryWritebackReg.io.out.bits.nextPc, io.interruptPc),
     memoryWritebackReg.io.out.bits.trapEpc)
   csrFile.io.mret := commitFire && commitMret
-  csrFile.io.floatingCommit := commitFire && memoryWritebackReg.io.out.bits.floatingInstruction
-  csrFile.io.floatingExceptionFlags := memoryWritebackReg.io.out.bits.floatingExceptionFlags
   commitRedirectValid := takeExternalInterrupt || (commitFire && (commitSynchronousTrap || commitMret))
   commitRedirectTarget := Mux(takeExternalInterrupt, csrFile.io.externalInterruptTrapVector,
     Mux(commitSynchronousTrap, csrFile.io.trapVector, csrFile.io.machineExceptionPc))
@@ -1219,9 +1082,6 @@ class NpcBackend(
   io.branchResolutionTarget := Mux(executeBranchTaken === NpcBranchResult.rs1Immediate,
     computedExecuteMemory.jalrTarget, computedExecuteMemory.branchTarget)
   io.debug.registers := registerFile.io.registersOut.get
-  io.debug.floatingRegisters := floatingRegisterFile.map(_.io.registersOut)
-    .getOrElse(VecInit(Seq.fill(32)(0.U(cfg.xlen.W))))
-  io.debug.fcsr := csrFile.io.fcsrOut
   io.debug.mstatus := csrFile.io.mstatusOut
   io.debug.mcause := csrFile.io.mcauseOut
   io.debug.mtvec := csrFile.io.mtvecOut

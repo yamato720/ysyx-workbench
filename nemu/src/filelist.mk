@@ -42,7 +42,6 @@ NPC_VERILATED_OBJS = $(NPC_OBJ_DIR)/$(NPC_TOP)__ALL.o
 endif
 endif
 NPC_GLUE_DIR ?= $(NPC_HOME)/csrc
-NPC_SOFTFLOAT_LIB ?= $(abspath $(NPC_OBJ_DIR)/../softfloat/softfloat.a)
 
 # Find Verilator installation
 VERILATOR_ROOT ?= $(shell dirname $$(dirname $$(which verilator)))/share/verilator
@@ -52,7 +51,6 @@ VERILATOR_ROOT ?= $(shell dirname $$(dirname $$(which verilator)))/share/verilat
 # npc-lib has necessarily populated the directory, so wildcard can expand empty.
 NPC_ALL_OBJS = \
   $(NPC_OBJ_DIR)/npc_core.o \
-  $(NPC_OBJ_DIR)/fp_dpi.o \
   $(NPC_OBJ_DIR)/pmem.o \
   $(NPC_OBJ_DIR)/verilated.o \
   $(NPC_OBJ_DIR)/verilated_dpi.o \
@@ -79,7 +77,7 @@ INC_PATH += $(NPC_GLUE_DIR) $(NPC_OBJ_DIR) \
             $(VERILATOR_ROOT)/include $(VERILATOR_ROOT)/include/vltstd
 
 # Add required libraries
-LIBS += -lpthread -latomic $(NPC_SOFTFLOAT_LIB)
+LIBS += -lpthread -latomic
 endif
 
 SHARE = $(if $(CONFIG_TARGET_SHARE),1,0)

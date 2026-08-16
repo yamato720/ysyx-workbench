@@ -33,27 +33,27 @@ class PipelineSimulationCoreConfig extends ConfigBundle(
     new BaseConfig
 )
 
-/** RV64IMF_Zicsr 无流水线性能基线。 */
+/** RV64IM_Zicsr 无流水线性能基线。 */
 class FullIsa64NoPipelineSimulationCoreConfig extends ConfigBundle(
-    new Rv64IMFZicsrConfig ++
+    new Rv64IMZicsrConfig ++
     new ScalarPerformConfig ++
     new WithTopDebugConfig ++
     new WithBareMainMemoryConfig ++
     new BaseConfig
 )
 
-/** RV64IMF_Zicsr 流水线无前递核心。 */
+/** RV64IM_Zicsr 流水线无前递核心。 */
 class FullIsa64PipelineNoForwardingSimulationCoreConfig extends ConfigBundle(
-    new Rv64IMFZicsrConfig ++
+    new Rv64IMZicsrConfig ++
     new PipelinePerformConfig ++
     new WithTopDebugConfig ++
     new WithBareMainMemoryConfig ++
     new BaseConfig
 )
 
-/** RV64IMF_Zicsr 流水线双前递核心。 */
+/** RV64IM_Zicsr 流水线双前递核心。 */
 class FullIsa64PipelineDualForwardingSimulationCoreConfig extends ConfigBundle(
-    new Rv64IMFZicsrConfig ++
+    new Rv64IMZicsrConfig ++
     new PipelineDualFwdPerformConfig ++
     new WithTopDebugConfig ++
     new WithBareMainMemoryConfig ++
@@ -62,7 +62,7 @@ class FullIsa64PipelineDualForwardingSimulationCoreConfig extends ConfigBundle(
 
 /** ZCU102 RV32 算子能力的本地周期模型核心。 */
 class Zcu102Rv32OperatorSimulationCoreConfig extends ConfigBundle(
-    new Rv32IMFZicsrConfig ++
+    new Rv32IMZicsrConfig ++
     new PipelineDualFwdPerformConfig ++
     new WithTopDebugConfig ++
     new WithBareMainMemoryConfig ++
@@ -71,16 +71,16 @@ class Zcu102Rv32OperatorSimulationCoreConfig extends ConfigBundle(
 
 /** U55C RV32 算子能力的本地周期模型核心。 */
 class U55cRv32OperatorSimulationCoreConfig extends ConfigBundle(
-    new Rv32IMFZicsrConfig ++
+    new Rv32IMZicsrConfig ++
     new PipelineDualFwdPerformConfig ++
     new WithTopDebugConfig ++
     new WithBareMainMemoryConfig ++
     new BaseConfig
 )
 
-/** U55C RV64 M/F 算子能力的本地周期模型核心。 */
+/** U55C RV64 M 算子能力的本地周期模型核心。 */
 class U55cRv64OperatorSimulationCoreConfig extends ConfigBundle(
-    new Rv64IMFZicsrConfig ++
+    new Rv64IMZicsrConfig ++
     new PipelineDualFwdPerformConfig ++
     new WithTopDebugConfig ++
     new WithBareMainMemoryConfig ++

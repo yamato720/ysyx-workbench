@@ -4,8 +4,6 @@ package npc
 trait NemuSimulationIpTerminalCore extends IpComputeSelection {
   override protected final val mulDivComputeUnit: ComputeUnitConfig =
     ComputeUnitConfig(backend = ComputeBackend.Builtin)
-  override protected final val floatingComputeUnit: Option[ComputeUnitConfig] =
-    Some(ComputeUnitConfig(backend = ComputeBackend.Builtin))
 }
 
 /** FPGA 终端直接包含的整数厂商 IP 计算单元集群。 */

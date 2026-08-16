@@ -96,26 +96,6 @@ object ElaboratePipelineChecks extends App {
   println("流水线 elaboration 检查完成！")
 }
 
-/** 单精度 DPI 时序路径的结构检查。
-  *
-  * 对两个 XLEN 变体启用弹性流水线，确保 FPR、RAW 冒险检测、RV64 NaN-boxing
-  * 写回和仅供 Verilator 的 SoftFloat 外壳都被生成。
-  */
-object ElaborateFloatingChecks extends App {
-  private def check(xlen: Int): Unit = {
-    val config = (
-      new WithXlenConfig(xlen) ++
-        new FloatingCheckConfig
-    ).build
-    println(s"正在检查浮点 DPI elaboration... XLEN=$xlen")
-    _root_.circt.stage.ChiselStage.emitSystemVerilog(new NpcCore(config = config))
-  }
-
-  check(32)
-  check(64)
-  println("浮点 DPI elaboration 检查完成！")
-}
-
 /** 可配置内建 DIV/REM 时序约定的结构检查。 */
 object ElaborateMulDivAluChecks extends App {
   private def check(xlen: Int, completionCycles: Int): Unit = {

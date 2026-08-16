@@ -44,14 +44,12 @@ static CsrEntry csr_table[] = {
   { "mcause",  &cpu.mcause,            0 },
   { "mepc",    (word_t*)&cpu.mepc,     0 },
   { "mtvec",   (word_t*)&cpu.mtvec,    0 },
-  { "fcsr",    NULL,                    0 },
 #else
   { "pc",      NULL, 0 },
   { "mstatus", NULL, 0 },
   { "mcause",  NULL, 0 },
   { "mepc",    NULL, 0 },
   { "mtvec",   NULL, 0 },
-  { "fcsr",    NULL, 0 },
 #endif
 };
 #define NR_CSRS ((int)(sizeof(csr_table) / sizeof(csr_table[0])))
@@ -67,7 +65,6 @@ static word_t csr_read_cur(int i) {
 #ifdef NPC
   extern uint64_t npc_get_pc();
   extern uint64_t npc_get_mstatus(void);
-  extern uint32_t npc_get_fcsr(void);
   if (strcmp(csr_table[i].name, "pc") == 0) return (word_t)npc_get_pc();
   if (strcmp(csr_table[i].name, "mstatus") == 0) return (word_t)npc_get_mstatus();
 #ifdef NPC_FPGA_REMOTE
@@ -78,11 +75,8 @@ static word_t csr_read_cur(int i) {
   if (strcmp(csr_table[i].name, "mepc") == 0) return (word_t)npc_get_mepc();
   if (strcmp(csr_table[i].name, "mtvec") == 0) return (word_t)npc_get_mtvec();
 #endif
-  if (strcmp(csr_table[i].name, "fcsr") == 0) return (word_t)npc_get_fcsr();
   return CSR_NOT_IMPL;
 #else
-  if (strcmp(csr_table[i].name, "fcsr") == 0)
-    return (word_t)((cpu.frm << 5) | cpu.fflags);
   return csr_table[i].cur ? *csr_table[i].cur : CSR_NOT_IMPL;
 #endif
 }
@@ -174,19 +168,6 @@ void isa_reg_display() {
       printf("%s\n", slot);
   }
   if (NR_CSRS % 2 != 0) printf("\n");
-#ifdef CONFIG_RISCV_F
-  printf("floating:\n");
-  for (int i = 0; i < 32; i++) {
-#ifdef NPC
-    extern uint64_t npc_get_freg(int idx);
-    uint64_t value = npc_get_freg(i);
-#else
-    uint64_t value = cpu.fpr[i];
-#endif
-    printf("  %4s%d: 0x%016" PRIx64 "%s", "f", i, value,
-           i % 2 == 0 ? "                         " : "\n");
-  }
-#endif
 }
 
 word_t isa_reg_str2val(const char *s, bool *success, int *idx) {

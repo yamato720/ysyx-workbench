@@ -9,27 +9,14 @@ class WithMulDivComputeConfig(implementation: ComputeUnitConfig) extends ConfigF
   )
 }
 
-/** 只覆盖浮点算术域的计算实现。 */
-class WithFloatingComputeConfig(implementation: ComputeUnitConfig) extends ConfigFragment {
-  override private[npc] def applyTo(base: NpcConfig): NpcConfig = base.copy(
-    operators = base.operators.copy(floating = base.operators.floating.copy(implementation = implementation))
-  )
-}
-
-/** 对整数和浮点算术域同时应用同一计算实现。 */
-class WithComputeConfig(implementation: ComputeUnitConfig) extends ConfigBundle(
-  new WithMulDivComputeConfig(implementation) ++
-    new WithFloatingComputeConfig(implementation)
-)
-
 /** 使用周期精确的 Chisel/Verilator 模型。 */
 class WithModelComputeConfig extends ConfigBundle(
-  new WithComputeConfig(ComputeUnitConfig(backend = ComputeBackend.Builtin))
+  new WithMulDivComputeConfig(ComputeUnitConfig(backend = ComputeBackend.Builtin))
 )
 
 /** 使用 DPI 算术端点。 */
 class WithDpiComputeConfig(dpi: DpiComputeConfig = DpiComputeConfig(enable = true)) extends ConfigBundle(
-  new WithComputeConfig(ComputeUnitConfig(backend = ComputeBackend.DPI, dpi = dpi))
+  new WithMulDivComputeConfig(ComputeUnitConfig(backend = ComputeBackend.DPI, dpi = dpi))
 )
 
 /** 使用通用厂商 IP 适配器。 */
@@ -39,12 +26,8 @@ class WithGenericIpComputeConfig(ip: IpComputeConfig = IpComputeConfig()) extend
 )
 
 private class WithGenericIpComputeFragment(ip: IpComputeConfig) extends ConfigFragment {
-  override private[npc] def applyTo(base: NpcConfig): NpcConfig = {
-    require(!base.isa.F,
-      "Generic IP arithmetic cannot be used with RISC-V F: Vivado 2022.2 FPO lacks dynamic RISC-V rounding, " +
-        "NX reporting, and unsigned float-to-integer conversion. Use WithModelComputeConfig or WithFpgaComputeConfig.")
-    new WithComputeConfig(ComputeUnitConfig(backend = ComputeBackend.IP, ip = ip)).applyTo(base)
-  }
+  override private[npc] def applyTo(base: NpcConfig): NpcConfig =
+    new WithMulDivComputeConfig(ComputeUnitConfig(backend = ComputeBackend.IP, ip = ip)).applyTo(base)
 }
 
 /** 使用 FPGA 整数 IP。 */
@@ -59,7 +42,7 @@ class WithOperatorRoutesConfig(routes: OperatorRouteConfig) extends ConfigFragme
   )
 }
 
-/** 同步算术实现与全部请求响应 FIFO 的深度。 */
+/** 同步整数算术实现与全部请求响应 FIFO 的深度。 */
 class WithArithmeticOutputFifoDepthConfig(depth: Int) extends ConfigFragment {
   require(depth >= 1, s"Arithmetic output FIFO depth must be positive, got $depth")
 
@@ -70,27 +53,16 @@ class WithArithmeticOutputFifoDepthConfig(depth: Int) extends ConfigFragment {
     )
 
     val mulDiv = base.operators.mulDiv
-    val floating = base.operators.floating
     base.copy(operators = base.operators.copy(
       mulDiv = mulDiv.copy(
         implementation = withIpDepth(mulDiv.implementation),
         multiplyTiming = withFifoDepth(mulDiv.multiplyTiming)
-      ),
-      floating = floating.copy(
-        implementation = withIpDepth(floating.implementation),
-        addSubTiming = withFifoDepth(floating.addSubTiming),
-        multiplyTiming = withFifoDepth(floating.multiplyTiming),
-        divideTiming = withFifoDepth(floating.divideTiming),
-        fmaTiming = withFifoDepth(floating.fmaTiming),
-        sqrtTiming = withFifoDepth(floating.sqrtTiming),
-        convertTiming = withFifoDepth(floating.convertTiming),
-        compareTiming = withFifoDepth(floating.compareTiming)
       )
     ))
   }
 }
 
-/** 覆盖整数和浮点算术的完成时序，并保留现有计算实现。 */
+/** 覆盖整数算术的完成时序，并保留现有计算实现。 */
 class WithArithmeticTimingConfig(timing: OperatorIpTimingConfig) extends ConfigFragment {
   override private[npc] def applyTo(base: NpcConfig): NpcConfig = {
     def withFifoDepth(implementation: ComputeUnitConfig): ComputeUnitConfig = implementation.copy(
@@ -98,26 +70,14 @@ class WithArithmeticTimingConfig(timing: OperatorIpTimingConfig) extends ConfigF
     )
 
     val mulDiv = base.operators.mulDiv
-    val floating = base.operators.floating
     val configuredMulDiv = mulDiv.copy(
       implementation = withFifoDepth(mulDiv.implementation),
       completionCycles = timing.divide.latency,
       multiplyTiming = timing.timing(timing.multiply),
       dividerInitiationInterval = timing.divide.initiationInterval
     )
-    val configuredFloating = floating.copy(
-      implementation = withFifoDepth(floating.implementation),
-      addSubTiming = timing.timing(timing.floatingAddSub),
-      multiplyTiming = timing.timing(timing.floatingMultiply),
-      divideTiming = timing.timing(timing.floatingDivide),
-      fmaTiming = timing.timing(timing.floatingFma),
-      sqrtTiming = timing.timing(timing.floatingSqrt),
-      convertTiming = timing.timing(timing.floatingConvert),
-      compareTiming = timing.timing(timing.floatingCompare)
-    )
-    val modelRoutes = OperatorRouteConfig.modelM(base.isa.xlen, configuredMulDiv) ++
-      OperatorRouteConfig.modelF(base.isa.xlen, configuredFloating)
-    // M/F 扩展通常先建立 model 路由，再由终端覆写算术时序。只刷新既有的
+    val modelRoutes = OperatorRouteConfig.modelM(base.isa.xlen, configuredMulDiv)
+    // M 扩展通常先建立 model 路由，再由终端覆写算术时序。只刷新既有的
     // model 路由，保留板级 Vendor IP/DirectLogic 的独立实现合同。
     val refreshedRoutes = OperatorRouteConfig(base.operators.routes.routes.map {
       case (operation, route @ OperatorRoute(OperatorRouteTarget.Model, _, _, _, _)) =>
@@ -132,7 +92,6 @@ class WithArithmeticTimingConfig(timing: OperatorIpTimingConfig) extends ConfigF
     })
     base.copy(operators = base.operators.copy(
       mulDiv = configuredMulDiv,
-      floating = configuredFloating,
       routes = refreshedRoutes
     ))
   }

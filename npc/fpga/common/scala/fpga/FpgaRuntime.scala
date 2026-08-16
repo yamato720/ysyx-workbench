@@ -13,7 +13,6 @@ class FpgaRuntimeSdbSnapshot(width: Int) extends Bundle {
   val currentPc = UInt(width.W)
   val nextArchitecturalPc = UInt(width.W)
   val frontendInstruction = UInt(32.W)
-  val fcsr = UInt(8.W)
   val mstatus = UInt(width.W)
   val mcause = UInt(width.W)
   val mepc = UInt(width.W)

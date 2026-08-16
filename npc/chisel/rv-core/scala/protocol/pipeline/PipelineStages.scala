@@ -113,12 +113,6 @@ class DecodedDispatchPayload(cfg: ISAConfig) extends Bundle {
   val csrUseImmediate = Bool()
   val csrReadWritebackEnable = Bool()
 
-  val floatingOperation = Bool()
-  val floatingInstruction = Bool()
-  val floatRegisterWriteEnable = Bool()
-  val usesFrs1 = Bool()
-  val usesFrs2 = Bool()
-  val usesFrs3 = Bool()
 }
 
 // ID/EX payload：ID 级已经完成寄存器读、立即数生成、控制信号生成。
@@ -144,12 +138,6 @@ class DecodeExecutePayload(cfg: ISAConfig) extends Bundle {
   // x0、LUI/JAL 和 CSR 立即数形式误判为寄存器依赖。
   val usesRs1 = Bool()
   val usesRs2 = Bool()
-  val floatingOperation = Bool()
-  val floatingInstruction = Bool()
-  val floatRegisterWriteEnable = Bool()
-  val usesFrs1 = Bool()
-  val usesFrs2 = Bool()
-  val usesFrs3 = Bool()
   val funct3 = UInt(3.W)
   val csrAddress = UInt(12.W)
 
@@ -200,9 +188,6 @@ class ExecuteMemoryPayload(cfg: ISAConfig) extends Bundle {
   val writebackFromMemory = Bool()
   val storeEnable = Bool()
   val registerWriteEnable = Bool()
-  val floatRegisterWriteEnable = Bool()
-  val floatingInstruction = Bool()
-  val floatingExceptionFlags = UInt(5.W)
   val csrReadWritebackEnable = Bool()
 
   val csrAddress = UInt(12.W)
@@ -245,9 +230,6 @@ class MemoryWritebackPayload(cfg: ISAConfig) extends Bundle {
   val csrReadData = UInt(cfg.xlen.W)
   val writebackFromMemory = Bool()
   val registerWriteEnable = Bool()
-  val floatRegisterWriteEnable = Bool()
-  val floatingInstruction = Bool()
-  val floatingExceptionFlags = UInt(5.W)
   val csrReadWritebackEnable = Bool()
 
   val csrAddress = UInt(12.W)

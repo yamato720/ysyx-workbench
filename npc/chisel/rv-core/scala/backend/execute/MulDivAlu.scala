@@ -151,10 +151,8 @@ class MulDivAlu(
     endpoint.req.bits.operandB := io.req.bits.operandB
     endpoint.req.bits.operandC := io.req.bits.operandC
     endpoint.req.bits.operation := operation
-    endpoint.req.bits.roundingMode := io.req.bits.roundingMode
     endpoint.req.bits.pc := io.req.bits.pc
     endpoint.req.bits.instruction := io.req.bits.instruction
-    endpoint.req.bits.fcsr := io.req.bits.fcsr
     endpoint.req.bits.tag := io.req.bits.tag
   }
   vendorMultiplier.foreach(endpoint => forwardRequest(endpoint.io, vendorMultiplySelected, multiplyOperation))

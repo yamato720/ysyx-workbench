@@ -21,5 +21,5 @@
 include/config
 include/generated
 
-# SoftFloat and interpreter builds contain generated C headers.
+# Interpreter builds contain generated C headers.
 /build/
