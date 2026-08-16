@@ -107,6 +107,85 @@ class CacheControllerBehaviorTest extends AnyFlatSpec {
     }
   }
 
+  it should "start a queued hit while returning the preceding miss response" in {
+    val cache = CacheConfig(
+      enabled = true,
+      geometry = CacheGeometry(64, 8, CacheMapping.DirectMapped),
+      replacement = CacheReplacement.TreePLRU,
+      storage = CacheStorage.Auto
+    )
+    val base = BigInt("80000000", 16)
+    val line = BigInt("1122334455667788", 16)
+
+    simulate(new PipelinedCacheController(cache, 32, 64, 0x80000000L, 0x10000000L,
+      readOnly = true, PipelinedCacheQueueConfig.TwoCycleLocal)) { dut =>
+      var pendingRead: Option[BigInt] = None
+      var cycleCount = 0
+
+      def driveMemory(): Unit = {
+        dut.io.memory.ar.ready.poke(pendingRead.isEmpty)
+        dut.io.memory.r.valid.poke(pendingRead.nonEmpty)
+        dut.io.memory.r.bits.data.poke(pendingRead.fold(BigInt(0))(_ => line))
+        dut.io.memory.r.bits.resp.poke(0)
+        dut.io.memory.aw.ready.poke(true)
+        dut.io.memory.w.ready.poke(true)
+        dut.io.memory.b.valid.poke(false)
+        dut.io.memory.b.bits.resp.poke(0)
+      }
+
+      def cycle(): Option[BigInt] = {
+        driveMemory()
+        val arFire = dut.io.memory.ar.valid.peek().litToBoolean && pendingRead.isEmpty
+        val arAddress = dut.io.memory.ar.bits.addr.peek().litValue
+        val rFire = pendingRead.nonEmpty && dut.io.memory.r.ready.peek().litToBoolean
+        val cpuRead = Option.when(dut.io.cpu.r.valid.peek().litToBoolean &&
+          dut.io.cpu.r.ready.peek().litToBoolean)(dut.io.cpu.r.bits.data.peek().litValue)
+        dut.clock.step()
+        if (rFire) pendingRead = None
+        if (arFire) pendingRead = Some(arAddress)
+        cycleCount += 1
+        cpuRead
+      }
+
+      def submitRead(): Option[BigInt] = {
+        dut.io.cpu.ar.bits.addr.poke(base)
+        dut.io.cpu.ar.bits.size.poke(3)
+        dut.io.cpu.ar.bits.prot.poke(4)
+        dut.io.cpu.ar.valid.poke(true)
+        driveMemory()
+        dut.io.cpu.ar.ready.expect(true.B)
+        val result = cycle()
+        dut.io.cpu.ar.valid.poke(false)
+        result
+      }
+
+      dut.io.cpu.aw.valid.poke(false)
+      dut.io.cpu.w.valid.poke(false)
+      dut.io.cpu.ar.valid.poke(false)
+      dut.io.cpu.b.ready.poke(true)
+      dut.io.cpu.r.ready.poke(true)
+      dut.io.maintenanceRequest.poke(false)
+      dut.io.maintenanceInvalidate.poke(false)
+      dut.reset.poke(true)
+      dut.clock.step(2)
+      dut.reset.poke(false)
+
+      val responseCycles = mutable.ArrayBuffer.empty[Int]
+      submitRead().foreach(_ => responseCycles += cycleCount - 1)
+      submitRead().foreach(_ => responseCycles += cycleCount - 1)
+      var guard = 0
+      while (responseCycles.size < 2 && guard < 40) {
+        val observedCycle = cycleCount
+        cycle().foreach(_ => responseCycles += observedCycle)
+        guard += 1
+      }
+
+      assert(responseCycles.size == 2)
+      assert(responseCycles(1) == responseCycles.head + 1,
+        s"queued hit must follow the miss response without a recovery bubble: $responseCycles")
+    }
+  }
+
   it should "drain requests accepted before cache maintenance" in {
     val cache = CacheConfig(
       enabled = true,

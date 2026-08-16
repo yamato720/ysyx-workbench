@@ -290,10 +290,14 @@ class PipelinedCacheController(
   val s0Miss = state === sRun && s0Valid && s0ReadReady &&
     !s0HitResponse && !s0WriteThroughHit
 
+  // miss 响应进入 CPU 的同拍，下一条已排队请求可以开始同步阵列读。此时 refill
+  // 已在前一拍写入阵列，且 response FIFO 的旧响应先完成握手，因而既不读写同拍
+  // 也不改变响应顺序；这去除了每次 miss 恢复后额外的一拍入口空泡。
+  val s0CanIssue = state === sRun ||
+    (state === sRespond && responseQueue.io.enq.ready)
   // 维护请求会关闭新入口，但先前已经完成 AR/AW/W 握手的请求必须继续排空；
   // 否则维护起始条件等待 FIFO 为空，而 FIFO 又被维护请求禁止出队，形成死锁。
-  requestQueue.io.deq.ready := state === sRun &&
-    (!s0Valid || s0CanComplete)
+  requestQueue.io.deq.ready := s0CanIssue && (!s0Valid || s0CanComplete)
   val s0Issue = requestQueue.io.deq.fire
 
   val responseEmit = WireDefault(false.B)
@@ -363,7 +367,8 @@ class PipelinedCacheController(
   val refillAddress = lineBase(missRequest.addr) + refillBeat * memoryBeatBytes.U
 
   // S0 命中完成的同拍可接收下一笔请求；miss 和 write-through 则在入口关闭后
-  // 清空 S0，再把当前请求交给原有阻塞状态机。
+  // 清空 S0，再把当前请求交给原有阻塞状态机。sRespond 交付 miss 响应时也可
+  // 重新装入 S0，下一拍直接使用已经完成 refill 的同步阵列输出。
   when(s0Issue) {
     s0Valid := true.B
     s0Request := requestQueue.io.deq.bits
