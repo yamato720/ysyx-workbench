@@ -22,7 +22,24 @@ class WithDataCacheConfig(cache: CacheConfig) extends ConfigFragment {
   )
 }
 
+class WithL2CacheConfig(cache: CacheConfig) extends ConfigFragment {
+  override private[npc] def applyTo(base: NpcConfig): NpcConfig = base.copy(
+    isa = base.isa.copy(Zifencei = cache.enabled || base.isa.Zifencei),
+    cache = base.cache.copy(l2cache = cache)
+  )
+}
+
 class WithInstructionBufferConfig(buffer: InstructionBufferConfig) extends ConfigFragment {
   override private[npc] def applyTo(base: NpcConfig): NpcConfig =
     base.copy(cache = base.cache.copy(instructionBuffer = buffer))
+}
+
+class WithCacheAccessModeConfig(accessMode: CacheAccessMode) extends ConfigFragment {
+  override private[npc] def applyTo(base: NpcConfig): NpcConfig =
+    base.copy(cache = base.cache.copy(accessMode = accessMode))
+}
+
+class WithPipelinedCacheQueuesConfig(queues: PipelinedCacheQueueConfig) extends ConfigFragment {
+  override private[npc] def applyTo(base: NpcConfig): NpcConfig =
+    base.copy(cache = base.cache.copy(pipelinedQueues = queues))
 }
