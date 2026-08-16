@@ -2,7 +2,7 @@ package ysyx.fpga.u55c
 
 import org.chipsalliance.cde.config.{Config => CDEConfig}
 import _root_.fpga.u55c.U55cBoardConfig
-import _root_.npc.{BaseConfig, FpgaIpTerminal, FpgaNpcIntegrationConfig, PipelineDualFwdPerformConfig,
+import _root_.npc.{BaseConfig, BranchPredictorConfig, FpgaIpTerminal, FpgaNpcIntegrationConfig, PipelineDualFwdPerformConfig,
   Rv32IMZicsrConfig, U55cSocTerminal, WithTerminalIpCoreConfig}
 import _root_.ysyx.YsyxElaborateConfig
 
@@ -10,7 +10,8 @@ import _root_.ysyx.YsyxElaborateConfig
 class U55cYsyxSocFpgaConfig extends CDEConfig(
   new U55cBoardConfig ++
     new WithTerminalIpCoreConfig(
-      new Rv32IMZicsrConfig ++
+      new BranchPredictorConfig ++
+        new Rv32IMZicsrConfig ++
         new PipelineDualFwdPerformConfig ++
         new FpgaNpcIntegrationConfig ++
         new BaseConfig

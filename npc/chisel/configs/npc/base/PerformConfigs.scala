@@ -16,7 +16,7 @@ class BasePerformConfig extends ConfigFragment {
       separateSerialIntegerAlu = false,
       serialExecuteResultForwarding = true,
       directIntegerWritebackBypass = false,
-      branchPredictor = true
+      branchPredictor = false
     )
   )
 }

@@ -293,7 +293,7 @@ case class PipelineConfig(
   separateSerialIntegerAlu: Boolean = false,
   serialExecuteResultForwarding: Boolean = true,
   directIntegerWritebackBypass: Boolean = false,
-  branchPredictor: Boolean = true
+  branchPredictor: Boolean = false
 ) {
   require(integerExecuteStages == 1 || integerExecuteStages == 2,
     s"integerExecuteStages must be 1 or 2, got $integerExecuteStages")

@@ -210,31 +210,31 @@ class NpcConfigCompositionTest extends AnyFlatSpec {
   "NPC terminal configurations" should "compose architecture, performance, and integration cores explicitly" in {
     val terminalAndCore = Seq(
       new StandaloneConfig().config -> (
-        new Rv64IZicsrConfig ++ new ScalarPerformConfig ++
+        new BranchPredictorConfig ++ new Rv64IZicsrConfig ++ new ScalarPerformConfig ++
           new BareNpcIntegrationConfig ++ new BaseConfig).build,
       new SimulationConfig().config -> (
-        new Rv64IMZicsrConfig ++ new ScalarPerformConfig ++
+        new BranchPredictorConfig ++ new Rv64IMZicsrConfig ++ new ScalarPerformConfig ++
           new BareNpcIntegrationConfig ++ new BaseConfig).build,
       new PipelineSimulationConfig().config -> (
-        new Rv64IMZicsrConfig ++ new PipelineDualFwdPerformConfig ++
+        new BranchPredictorConfig ++ new Rv64IMZicsrConfig ++ new PipelineDualFwdPerformConfig ++
           new BareNpcIntegrationConfig ++ new BaseConfig).build,
       new FullIsa64NoPipelineSimulationConfig().config ->
-        (new Rv64IMZicsrConfig ++ new ScalarPerformConfig ++
+        (new BranchPredictorConfig ++ new Rv64IMZicsrConfig ++ new ScalarPerformConfig ++
           new BareNpcIntegrationConfig ++ new BaseConfig).build,
       new FullIsa64PipelineNoForwardingSimulationConfig().config ->
-        (new Rv64IMZicsrConfig ++ new PipelinePerformConfig ++
+        (new BranchPredictorConfig ++ new Rv64IMZicsrConfig ++ new PipelinePerformConfig ++
           new BareNpcIntegrationConfig ++ new BaseConfig).build,
       new FullIsa64PipelineDualForwardingSimulationConfig().config ->
-        (new Rv64IMZicsrConfig ++ new PipelineDualFwdPerformConfig ++
+        (new BranchPredictorConfig ++ new Rv64IMZicsrConfig ++ new PipelineDualFwdPerformConfig ++
           new BareNpcIntegrationConfig ++ new BaseConfig).build,
       new Zcu102Rv32OperatorSimulationConfig().config ->
-        (new Rv32IMZicsrConfig ++ new PipelineDualFwdPerformConfig ++
+        (new BranchPredictorConfig ++ new Rv32IMZicsrConfig ++ new PipelineDualFwdPerformConfig ++
           new BareNpcIntegrationConfig ++ new BaseConfig).build,
       new U55cRv32OperatorSimulationConfig().config ->
-        (new Rv32IMZicsrConfig ++ new PipelineDualFwdPerformConfig ++
+        (new BranchPredictorConfig ++ new Rv32IMZicsrConfig ++ new PipelineDualFwdPerformConfig ++
           new BareNpcIntegrationConfig ++ new BaseConfig).build,
       new U55cRv64OperatorSimulationConfig().config ->
-        (new Rv64IMZicsrConfig ++ new PipelineDualFwdPerformConfig ++
+        (new BranchPredictorConfig ++ new Rv64IMZicsrConfig ++ new PipelineDualFwdPerformConfig ++
           new BareNpcIntegrationConfig ++ new BaseConfig).build
     )
 

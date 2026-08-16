@@ -34,7 +34,7 @@ class PipelineUnitsTest extends AnyFlatSpec {
     assert(!pipeline.registerInitialFetchRequest)
     assert(pipeline.serialExecuteResultForwarding)
     assert(!pipeline.directIntegerWritebackBypass)
-    assert(pipeline.branchPredictor)
+    assert(!pipeline.branchPredictor)
   }
 
   it should "only accept one or two integer stages and one through three serial stages" in {
@@ -48,6 +48,7 @@ class PipelineUnitsTest extends AnyFlatSpec {
     assert(new WithDirectIntegerWritebackBypassConfig().applyTo(NpcConfig()).pipeline.directIntegerWritebackBypass)
     assert(new WithNpcBranchPredictorConfig().applyTo(NpcConfig()).pipeline.branchPredictor)
     assert(!new WithoutNpcBranchPredictorConfig().applyTo(NpcConfig()).pipeline.branchPredictor)
+    assert(new BranchPredictorConfig().build.pipeline.branchPredictor)
     assertThrows[IllegalArgumentException](PipelineConfig(integerExecuteStages = 3))
     assertThrows[IllegalArgumentException](PipelineConfig(serialExecuteStages = 4))
     assertThrows[IllegalArgumentException](new WithSerialExecuteAdditionalStagesConfig(0))

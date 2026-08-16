@@ -5,7 +5,7 @@ import org.chipsalliance.cde.config.Parameters
 import org.scalatest.flatspec.AnyFlatSpec
 import _root_.fpga._
 import _root_.fpga.u55c.U55cXilinxIpAttachment
-import npc.{ArithmeticRouteOperation, BaseConfig, ComputeBackend, ConfigCatalog, ConstructionConfig, ConstructionProfile, ExternalAxiSocIntegrationConfig, FpgaIpTerminal, FpgaNpcIntegrationConfig, FpgaToolchainConfig, NemuHostConfig, NemuSimulationIpTerminal, NpcConfig, NpcCoreComponents, NpcCoreConfigKey, OperatorIpTimingConfig, OperatorRouteTarget, PipelineDualFwdPerformConfig, Rv32IMZicsrConfig, Rv64IMZicsrConfig, WithNpcCoreConfig}
+import npc.{ArithmeticRouteOperation, BaseConfig, BranchPredictorConfig, ComputeBackend, ConfigCatalog, ConstructionConfig, ConstructionProfile, ExternalAxiSocIntegrationConfig, FpgaIpTerminal, FpgaNpcIntegrationConfig, FpgaToolchainConfig, NemuHostConfig, NemuSimulationIpTerminal, NpcConfig, NpcCoreComponents, NpcCoreConfigKey, OperatorIpTimingConfig, OperatorRouteTarget, PipelineDualFwdPerformConfig, Rv32IMZicsrConfig, Rv64IMZicsrConfig, WithNpcCoreConfig}
 import npc.fpga.u55c.{U55cNpcFpgaConfig, U55cRv64Npc300MHzPerformanceMonitorFpgaConfig, U55cRv64Npc300MHzFpgaConfig, U55cRv64NpcFpgaConfig}
 import npc.fpga.zcu102.Zcu102NpcFpgaConfig
 import ysyx.{YsyxPlatformParameters, YsyxSimulationConfig, YsyxSocConfig}
@@ -23,7 +23,8 @@ class FpgaConfigCompositionTest extends AnyFlatSpec {
 
   private class FpgaModelConstruction
     extends ConstructionConfig(
-      new Rv32IMZicsrConfig ++
+      new BranchPredictorConfig ++
+        new Rv32IMZicsrConfig ++
         new PipelineDualFwdPerformConfig ++
         new FpgaNpcIntegrationConfig ++
         new BaseConfig

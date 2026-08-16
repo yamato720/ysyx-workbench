@@ -4,6 +4,7 @@ import org.chipsalliance.cde.config.{Config => CDEConfig}
 import _root_.fpga.u55c._
 import _root_.npc.{
   BaseConfig,
+  BranchPredictorConfig,
   FpgaIpTerminal,
   FpgaNpcIntegrationConfig,
   PipelineDualFwdPerformConfig,
@@ -20,7 +21,8 @@ import _root_.npc.{U55cNpcPerformanceMonitorTerminal, U55cNpcTerminal}
 class U55cNpcFpgaConfig extends CDEConfig(
   new U55cBoardConfig ++
     new ConstructionConfig(
-      new Rv32IMZicsrConfig ++
+      new BranchPredictorConfig ++
+        new Rv32IMZicsrConfig ++
         new PipelineDualFwdPerformConfig ++
         new FpgaNpcIntegrationConfig ++
         new BaseConfig
@@ -34,7 +36,8 @@ class U55cNpcFpgaConfig extends CDEConfig(
 class U55cRv64NpcFpgaConfig extends CDEConfig(
   new U55cBoardConfig ++
     new ConstructionConfig(
-      new Rv64IMZicsrConfig ++
+      new BranchPredictorConfig ++
+        new Rv64IMZicsrConfig ++
         new PipelineDualFwdPerformConfig ++
         new FpgaNpcIntegrationConfig ++
         new BaseConfig
@@ -50,7 +53,8 @@ class U55cRv64NpcFpgaConfig extends CDEConfig(
 class U55cRv64Npc300MHzFpgaConfig extends CDEConfig(
   new U55c300MHzSdbBoardConfig ++
     new ConstructionConfig(
-      new Rv64IMZicsrConfig ++
+      new BranchPredictorConfig ++
+        new Rv64IMZicsrConfig ++
         new PipelineDualFwdTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecutePerformConfig ++
         new FpgaNpcIntegrationConfig ++
         new BaseConfig
@@ -66,7 +70,8 @@ class U55cRv64Npc300MHzFpgaConfig extends CDEConfig(
 class U55cRv64Npc300MHzPerformanceMonitorFpgaConfig extends CDEConfig(
   new U55c300MHzPerformanceMonitorBoardConfig ++
     new ConstructionConfig(
-      new Rv64IMZicsrConfig ++
+      new BranchPredictorConfig ++
+        new Rv64IMZicsrConfig ++
         new PipelineDualFwdTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecutePerformConfig ++
         new FpgaNpcIntegrationConfig ++
         new BaseConfig
@@ -81,7 +86,8 @@ class U55cRv64Npc300MHzPerformanceMonitorFpgaConfig extends CDEConfig(
 class U55cRv64Npc100MHzPerformanceMonitorFpgaConfig extends CDEConfig(
   new U55cPerformanceMonitorBoardConfig(100) ++
     new ConstructionConfig(
-      new Rv64IMZicsrConfig ++
+      new BranchPredictorConfig ++
+        new Rv64IMZicsrConfig ++
         new PipelineDualFwdTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecutePerformConfig ++
         new FpgaNpcIntegrationConfig ++
         new BaseConfig
@@ -91,7 +97,8 @@ class U55cRv64Npc100MHzPerformanceMonitorFpgaConfig extends CDEConfig(
 class U55cRv64Npc125MHzPerformanceMonitorFpgaConfig extends CDEConfig(
   new U55cPerformanceMonitorBoardConfig(125) ++
     new ConstructionConfig(
-      new Rv64IMZicsrConfig ++
+      new BranchPredictorConfig ++
+        new Rv64IMZicsrConfig ++
         new PipelineDualFwdTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecutePerformConfig ++
         new FpgaNpcIntegrationConfig ++
         new BaseConfig
@@ -101,7 +108,8 @@ class U55cRv64Npc125MHzPerformanceMonitorFpgaConfig extends CDEConfig(
 class U55cRv64Npc150MHzPerformanceMonitorFpgaConfig extends CDEConfig(
   new U55cPerformanceMonitorBoardConfig(150) ++
     new ConstructionConfig(
-      new Rv64IMZicsrConfig ++
+      new BranchPredictorConfig ++
+        new Rv64IMZicsrConfig ++
         new PipelineDualFwdTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecutePerformConfig ++
         new FpgaNpcIntegrationConfig ++
         new BaseConfig
@@ -111,7 +119,8 @@ class U55cRv64Npc150MHzPerformanceMonitorFpgaConfig extends CDEConfig(
 class U55cRv64Npc200MHzPerformanceMonitorFpgaConfig extends CDEConfig(
   new U55cPerformanceMonitorBoardConfig(200) ++
     new ConstructionConfig(
-      new Rv64IMZicsrConfig ++
+      new BranchPredictorConfig ++
+        new Rv64IMZicsrConfig ++
         new PipelineDualFwdTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecutePerformConfig ++
         new FpgaNpcIntegrationConfig ++
         new BaseConfig
@@ -121,7 +130,8 @@ class U55cRv64Npc200MHzPerformanceMonitorFpgaConfig extends CDEConfig(
 class U55cRv64Npc250MHzPerformanceMonitorFpgaConfig extends CDEConfig(
   new U55cPerformanceMonitorBoardConfig(250) ++
     new ConstructionConfig(
-      new Rv64IMZicsrConfig ++
+      new BranchPredictorConfig ++
+        new Rv64IMZicsrConfig ++
         new PipelineDualFwdTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecutePerformConfig ++
         new FpgaNpcIntegrationConfig ++
         new BaseConfig
