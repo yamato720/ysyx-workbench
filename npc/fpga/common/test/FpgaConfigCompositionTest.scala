@@ -5,8 +5,7 @@ import org.chipsalliance.cde.config.Parameters
 import org.scalatest.flatspec.AnyFlatSpec
 import _root_.fpga._
 import _root_.fpga.u55c.U55cXilinxIpAttachment
-import npc.ExternalAxiConfig
-import npc.{ArithmeticRouteOperation, ComputeBackend, ConfigCatalog, ConstructionConfig, ConstructionProfile, FpgaIpTerminal, FpgaToolchainConfig, NemuHostConfig, NemuSimulationIpTerminal, NpcConfig, NpcCoreComponents, NpcCoreConfigKey, OperatorIpTimingConfig, OperatorRouteTarget, Rv64IMZicsrConfig, WithNpcCoreConfig}
+import npc.{ArithmeticRouteOperation, BaseConfig, ComputeBackend, ConfigCatalog, ConstructionConfig, ConstructionProfile, ExternalAxiSocIntegrationConfig, FpgaIpTerminal, FpgaNpcIntegrationConfig, FpgaToolchainConfig, NemuHostConfig, NemuSimulationIpTerminal, NpcConfig, NpcCoreComponents, NpcCoreConfigKey, OperatorIpTimingConfig, OperatorRouteTarget, PipelineDualFwdPerformConfig, Rv32IMZicsrConfig, Rv64IMZicsrConfig, WithNpcCoreConfig}
 import npc.fpga.u55c.{U55cNpcFpgaConfig, U55cRv64Npc300MHzPerformanceMonitorFpgaConfig, U55cRv64Npc300MHzFpgaConfig, U55cRv64NpcFpgaConfig}
 import npc.fpga.zcu102.Zcu102NpcFpgaConfig
 import ysyx.{YsyxPlatformParameters, YsyxSimulationConfig, YsyxSocConfig}
@@ -15,7 +14,20 @@ import ysyx.fpga.zcu102.Zcu102YsyxSocFpgaConfig
 
 class FpgaConfigCompositionTest extends AnyFlatSpec {
   private class ExternalAxiModelConstruction
-    extends ConstructionConfig(new ExternalAxiConfig) with NemuSimulationIpTerminal
+    extends ConstructionConfig(
+      new Rv32IMZicsrConfig ++
+        new PipelineDualFwdPerformConfig ++
+        new ExternalAxiSocIntegrationConfig ++
+        new BaseConfig
+    ) with NemuSimulationIpTerminal
+
+  private class FpgaModelConstruction
+    extends ConstructionConfig(
+      new Rv32IMZicsrConfig ++
+        new PipelineDualFwdPerformConfig ++
+        new FpgaNpcIntegrationConfig ++
+        new BaseConfig
+    ) with FpgaIpTerminal
 
   private def withConfig[T](value: String)(body: => T): T = {
     val previous = sys.props.get("npc.config")
@@ -175,7 +187,7 @@ class FpgaConfigCompositionTest extends AnyFlatSpec {
     implicit val parameters: Parameters = new U55cYsyxSocFpgaConfig
 
     val boardConfig = FpgaConfigParameters.npcCoreConfig
-    val baseConfig = (new npc.FpgaConfig with FpgaIpTerminal).config
+    val baseConfig = (new FpgaModelConstruction).config
     assert(boardConfig.copy(operators = boardConfig.operators.copy(routes = baseConfig.operators.routes)) == baseConfig)
     assert(boardConfig.debug.enableDispatchControl)
     assert(boardConfig.operators.routes.route(ArithmeticRouteOperation.Mul).target == OperatorRouteTarget.VendorIp)

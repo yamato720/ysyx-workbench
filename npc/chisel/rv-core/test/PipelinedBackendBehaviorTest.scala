@@ -8,14 +8,14 @@ import scala.collection.mutable
 
 /** 直接驱动后端派发口，检查两拍整数 EX 与流水 MEM 重叠时仍保持 RAW 前递。 */
 class PipelinedBackendBehaviorTest extends AnyFlatSpec {
-  private val config = new PipelinedTwoCycleWideL2SimulationCoreConfig().build
+  private val config = new HbmJitterL2CacheSimulationConfig().config
   private val oneStageConfig = {
-    val hbm = new HbmJitterCacheSimulationCoreConfig().build
+    val hbm = new HbmJitterCacheSimulationConfig().config
     hbm.copy(pipeline = hbm.pipeline.copy(
       forwarding = hbm.pipeline.forwarding.copy(enableOutstandingCompletionForwarding = false)
     ))
   }
-  private val oneStageOutstandingConfig = new HbmJitterCacheSimulationCoreConfig().build
+  private val oneStageOutstandingConfig = new HbmJitterCacheSimulationConfig().config
 
   private def clearDispatch(dut: NpcBackend): Unit = {
     val bits = dut.io.dispatch.bits

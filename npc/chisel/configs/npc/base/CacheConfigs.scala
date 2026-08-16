@@ -26,38 +26,3 @@ class WithInstructionBufferConfig(buffer: InstructionBufferConfig) extends Confi
   override private[npc] def applyTo(base: NpcConfig): NpcConfig =
     base.copy(cache = base.cache.copy(instructionBuffer = buffer))
 }
-
-/** 教学预设：4 KiB/16 B/2-way I$ 与 D$，Tree-PLRU，D$ write-back/write-allocate。 */
-class WithTeachingCacheConfig extends ConfigBundle(
-  new WithCacheHierarchyConfig(CacheHierarchyConfig.Teaching)
-)
-
-/** U55C HBM 预设：64-byte line 的填充或写回各使用一个 512-bit memory beat。 */
-class WithWideHbmCacheConfig extends ConfigBundle(
-  new WithCacheHierarchyConfig(CacheHierarchyConfig.WideHbm)
-)
-
-/** U55C HBM 预设：在 64-byte I$/D$ line 之后增加共享 L2。 */
-class WithWideHbmL2CacheConfig extends ConfigBundle(
-  new WithCacheHierarchyConfig(CacheHierarchyConfig.WideHbmWithL2)
-)
-
-/** 本地两拍教学 L1：请求、响应、取指和访存队列均固定为四项。 */
-class WithPipelinedTwoCycleTeachingCacheConfig extends ConfigBundle(
-  new WithCacheHierarchyConfig(CacheHierarchyConfig.PipelinedTwoCycleTeaching)
-)
-
-/** 本地两拍宽 HBM L1：保留宽主存端口与既定 DPI 时序。 */
-class WithPipelinedTwoCycleWideHbmCacheConfig extends ConfigBundle(
-  new WithCacheHierarchyConfig(CacheHierarchyConfig.PipelinedTwoCycleWideHbm)
-)
-
-/** 本地两拍 L1/L2：请求、响应、取指和访存队列均固定为四项。 */
-class WithPipelinedTwoCycleWideHbmL2CacheConfig extends ConfigBundle(
-  new WithCacheHierarchyConfig(CacheHierarchyConfig.PipelinedTwoCycleWideHbmWithL2)
-)
-
-/** 保持历史无缓存行为的显式片段。 */
-class WithoutCacheConfig extends ConfigBundle(
-  new WithCacheHierarchyConfig(CacheHierarchyConfig.Disabled)
-)

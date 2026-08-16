@@ -2,63 +2,101 @@ package npc
 
 /** 最小独立 NPC 本地仿真终端，导出顶层调试 IO。 */
 class StandaloneConfig extends ConstructionConfig(
-  new StandaloneCoreConfig
+  new Rv64IZicsrConfig ++
+    new ScalarPerformConfig ++
+    new BareNpcIntegrationConfig ++
+    new BaseConfig
 ) with LocalNpcTerminal with NemuSimulationIpTerminal
 
-/** 默认 NPC 本地仿真终端，带 M 扩展和顶层调试 IO。 */
+/** 默认 RV64IM_Zicsr 标量本地仿真终端。 */
 class SimulationConfig extends ConstructionConfig(
-  new SimulationCoreConfig
+  new Rv64IMZicsrConfig ++
+    new ScalarPerformConfig ++
+    new BareNpcIntegrationConfig ++
+    new BaseConfig
 ) with LocalNpcTerminal with NemuSimulationIpTerminal
 
-/** 显式启用教学 I$/D$ 与四项顺序取指缓冲的本地仿真终端。 */
+/** 教学 I$/D$ 本地仿真终端：4 KiB、16-byte line、2-way Tree-PLRU。 */
 class CacheSimulationConfig extends ConstructionConfig(
-  new CacheSimulationCoreConfig
+  new Rv64IMZicsrConfig ++
+    new ScalarPerformConfig ++
+    new PipelinedTwoCycleTeachingCacheConfig ++
+    new BareNpcIntegrationConfig ++
+    new BaseConfig
 ) with LocalNpcTerminal with NemuSimulationIpTerminal
 
-/**
-  * 仅含 L1 的宽 HBM 本地时序实验。73--81 cycle 的确定性 DPI 响应区间是经过校准的
-  * 功能模型，不是逐周期精确的 HBM 控制器仿真。
-  */
+/** 仅含宽 HBM 风格 L1 的本地时序终端：64-byte line 与 73--81 cycle DPI 抖动。 */
 class HbmJitterCacheSimulationConfig extends ConstructionConfig(
-  new HbmJitterCacheSimulationCoreConfig
+  new WithNpcOutstandingCompletionForwardingConfig ++
+    new Rv64IMZicsrConfig ++
+    new PipelineDualFwdOneStageIntegerExecuteDirectWritebackRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecutePerformConfig ++
+    new PipelinedTwoCycleWideHbmCacheConfig ++
+    new LocalWideHbmJitterIntegrationConfig ++
+    new BaseConfig
 ) with LocalNpcTerminal with NemuSimulationIpTerminal
 
-/** L1+L2 宽 HBM DPI 抖动构造，用于和仅 L1 端点进行本地周期对比。 */
+/** 宽 HBM 风格 L1/L2 本地时序终端：在宽 L1 后增加共享 256 KiB、8-way L2。 */
 class HbmJitterL2CacheSimulationConfig extends ConstructionConfig(
-  new HbmJitterL2CacheSimulationCoreConfig
+  new WithNpcOutstandingCompletionForwardingConfig ++
+    new Rv64IMZicsrConfig ++
+    new PipelineDualFwdOneStageIntegerExecuteDirectWritebackRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecutePerformConfig ++
+    new PipelinedTwoCycleWideHbmL2CacheConfig ++
+    new LocalWideHbmJitterIntegrationConfig ++
+    new BaseConfig
 ) with LocalNpcTerminal with NemuSimulationIpTerminal
 
-/** 启用流水线的 NPC 本地仿真终端。 */
+/** 默认 RV64IM_Zicsr 双前递流水本地仿真终端。 */
 class PipelineSimulationConfig extends ConstructionConfig(
-  new PipelineSimulationCoreConfig
+  new Rv64IMZicsrConfig ++
+    new PipelineDualFwdPerformConfig ++
+    new BareNpcIntegrationConfig ++
+    new BaseConfig
 ) with LocalNpcTerminal with NemuSimulationIpTerminal
 
-/** RV64IM_Zicsr 对比基线：无流水线、无旁路。 */
+/** RV64IM_Zicsr 无流水线性能基线。 */
 class FullIsa64NoPipelineSimulationConfig extends ConstructionConfig(
-  new FullIsa64NoPipelineSimulationCoreConfig
+  new Rv64IMZicsrConfig ++
+    new ScalarPerformConfig ++
+    new BareNpcIntegrationConfig ++
+    new BaseConfig
 ) with LocalNpcTerminal with NemuSimulationIpTerminal
 
-/** RV64IM_Zicsr 对比构造：流水线开启，但 ID/EX 前递都关闭。 */
+/** RV64IM_Zicsr 流水线无前递对照终端。 */
 class FullIsa64PipelineNoForwardingSimulationConfig extends ConstructionConfig(
-  new FullIsa64PipelineNoForwardingSimulationCoreConfig
+  new Rv64IMZicsrConfig ++
+    new PipelinePerformConfig ++
+    new BareNpcIntegrationConfig ++
+    new BaseConfig
 ) with LocalNpcTerminal with NemuSimulationIpTerminal
 
-/** RV64IM_Zicsr 对比构造：流水线开启，并同时启用 ID 与 EX 两条前递路径。 */
+/** RV64IM_Zicsr 流水线双前递对照终端。 */
 class FullIsa64PipelineDualForwardingSimulationConfig extends ConstructionConfig(
-  new FullIsa64PipelineDualForwardingSimulationCoreConfig
+  new Rv64IMZicsrConfig ++
+    new PipelineDualFwdPerformConfig ++
+    new BareNpcIntegrationConfig ++
+    new BaseConfig
 ) with LocalNpcTerminal with NemuSimulationIpTerminal
 
-/** ZCU102 RV32 算子能力和时序的本地周期精确模拟。 */
+/** ZCU102 RV32 算子能力的本地周期模型终端。 */
 class Zcu102Rv32OperatorSimulationConfig extends ConstructionConfig(
-  new Zcu102Rv32OperatorSimulationCoreConfig
+  new Rv32IMZicsrConfig ++
+    new PipelineDualFwdPerformConfig ++
+    new BareNpcIntegrationConfig ++
+    new BaseConfig
 ) with LocalNpcTerminal with NemuSimulationIpTerminal
 
-/** U55C RV32 算子能力和时序的本地周期精确模拟。 */
+/** U55C RV32 算子能力的本地周期模型终端。 */
 class U55cRv32OperatorSimulationConfig extends ConstructionConfig(
-  new U55cRv32OperatorSimulationCoreConfig
+  new Rv32IMZicsrConfig ++
+    new PipelineDualFwdPerformConfig ++
+    new BareNpcIntegrationConfig ++
+    new BaseConfig
 ) with LocalNpcTerminal with NemuSimulationIpTerminal
 
-/** U55C RV64 M 算子时序模拟，覆盖 RV64 W 指令而不链接厂商黑盒。 */
+/** U55C RV64 M 算子能力的本地周期模型终端。 */
 class U55cRv64OperatorSimulationConfig extends ConstructionConfig(
-  new U55cRv64OperatorSimulationCoreConfig
+  new Rv64IMZicsrConfig ++
+    new PipelineDualFwdPerformConfig ++
+    new BareNpcIntegrationConfig ++
+    new BaseConfig
 ) with LocalNpcTerminal with NemuSimulationIpTerminal

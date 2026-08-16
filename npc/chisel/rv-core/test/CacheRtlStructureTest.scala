@@ -76,13 +76,15 @@ class CacheRtlStructureTest extends AnyFlatSpec {
   }
 
   it should "elaborate both local two-cycle L1 and L1/L2 hierarchies" in {
+    val hbmL1 = new HbmJitterCacheSimulationConfig().config
     val pipelined = _root_.circt.stage.ChiselStage.emitCHIRRTL(
-      new NpcCore(new PipelinedTwoCycleWideL2SimulationCoreConfig().build))
+      new NpcCore(new HbmJitterL2CacheSimulationConfig().config))
     val l1Only = _root_.circt.stage.ChiselStage.emitCHIRRTL(
-      new NpcCore(new HbmJitterCacheSimulationCoreConfig().build))
+      new NpcCore(hbmL1))
     val l1WithoutBranchPredictor = _root_.circt.stage.ChiselStage.emitCHIRRTL(
-      new NpcCore((new WithoutNpcBranchPredictorConfig ++
-        new HbmJitterCacheSimulationCoreConfig).build))
+      new NpcCore(hbmL1.copy(
+        pipeline = hbmL1.pipeline.copy(branchPredictor = false)
+      ).validated))
 
     assert(pipelined.contains("module PipelinedCacheController"))
     assert(pipelined.contains("module PipelinedIFetchAXIAdapter"))

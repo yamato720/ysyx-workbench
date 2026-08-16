@@ -4,18 +4,25 @@ import org.chipsalliance.cde.config.Parameters
 import org.scalatest.flatspec.AnyFlatSpec
 
 class NpcConfigCompositionTest extends AnyFlatSpec {
+  private class FpgaModelConstruction extends ConstructionConfig(
+    new Rv32IMZicsrConfig ++
+      new PipelineDualFwdPerformConfig ++
+      new FpgaNpcIntegrationConfig ++
+      new BaseConfig
+  )
+
   "Construction boundary" should "expose only NEMU-running terminal configurations" in {
     assert(new StandaloneConfig().capability == "run")
     assert(new PipelineCheckConfig().capability == "check-only")
     assert(new SimulationConfig().capability == "run")
     assert(new SimulationConfig().nemuConfig == NemuHostConfig.LocalPipelineTrace)
-    val fpgaCore: Any = new FpgaConfig with FpgaIpTerminal
+    val fpgaCore: Any = new FpgaModelConstruction with FpgaIpTerminal
     assert(!fpgaCore.isInstanceOf[MakeTerminal])
-    assert(!new ExternalAxiConfig().isInstanceOf[MakeTerminal])
+    assert(!new ExternalAxiSocIntegrationConfig().isInstanceOf[MakeTerminal])
   }
 
   "ConstructionConfig" should "directly provide its completed core through the CDE key" in {
-    val construction = new FpgaConfig with FpgaIpTerminal
+    val construction = new FpgaModelConstruction with FpgaIpTerminal
     implicit val parameters: Parameters = construction
 
     assert(parameters(NpcCoreConfigKey) == construction.config)
@@ -36,7 +43,7 @@ class NpcConfigCompositionTest extends AnyFlatSpec {
   }
 
   "FpgaConfig" should "compose explicit architecture, performance, memory, and compute fragments" in {
-    val config = (new FpgaConfig with FpgaIpTerminal).config
+    val config = (new FpgaModelConstruction with FpgaIpTerminal).config
 
     assert(config.isa.xlen == 32)
     assert(config.isa.M)
@@ -70,7 +77,7 @@ class NpcConfigCompositionTest extends AnyFlatSpec {
   it should "remain composable when an integration adds a later fragment" in {
     val config = (
       new ScalarPerformConfig ++
-        (new FpgaConfig with FpgaIpTerminal)
+        (new FpgaModelConstruction with FpgaIpTerminal)
     ).build
 
     assert(config.isa.xlen == 32)
@@ -200,23 +207,35 @@ class NpcConfigCompositionTest extends AnyFlatSpec {
     assert(!allTimingCuts.pipeline.serialExecuteResultForwarding)
   }
 
-  "NPC terminal configurations" should "wrap one complete core before adding the host ABI" in {
+  "NPC terminal configurations" should "compose architecture, performance, and integration cores explicitly" in {
     val terminalAndCore = Seq(
-      new StandaloneConfig().config -> new StandaloneCoreConfig().build,
-      new SimulationConfig().config -> new SimulationCoreConfig().build,
-      new PipelineSimulationConfig().config -> new PipelineSimulationCoreConfig().build,
+      new StandaloneConfig().config -> (
+        new Rv64IZicsrConfig ++ new ScalarPerformConfig ++
+          new BareNpcIntegrationConfig ++ new BaseConfig).build,
+      new SimulationConfig().config -> (
+        new Rv64IMZicsrConfig ++ new ScalarPerformConfig ++
+          new BareNpcIntegrationConfig ++ new BaseConfig).build,
+      new PipelineSimulationConfig().config -> (
+        new Rv64IMZicsrConfig ++ new PipelineDualFwdPerformConfig ++
+          new BareNpcIntegrationConfig ++ new BaseConfig).build,
       new FullIsa64NoPipelineSimulationConfig().config ->
-        new FullIsa64NoPipelineSimulationCoreConfig().build,
+        (new Rv64IMZicsrConfig ++ new ScalarPerformConfig ++
+          new BareNpcIntegrationConfig ++ new BaseConfig).build,
       new FullIsa64PipelineNoForwardingSimulationConfig().config ->
-        new FullIsa64PipelineNoForwardingSimulationCoreConfig().build,
+        (new Rv64IMZicsrConfig ++ new PipelinePerformConfig ++
+          new BareNpcIntegrationConfig ++ new BaseConfig).build,
       new FullIsa64PipelineDualForwardingSimulationConfig().config ->
-        new FullIsa64PipelineDualForwardingSimulationCoreConfig().build,
+        (new Rv64IMZicsrConfig ++ new PipelineDualFwdPerformConfig ++
+          new BareNpcIntegrationConfig ++ new BaseConfig).build,
       new Zcu102Rv32OperatorSimulationConfig().config ->
-        new Zcu102Rv32OperatorSimulationCoreConfig().build,
+        (new Rv32IMZicsrConfig ++ new PipelineDualFwdPerformConfig ++
+          new BareNpcIntegrationConfig ++ new BaseConfig).build,
       new U55cRv32OperatorSimulationConfig().config ->
-        new U55cRv32OperatorSimulationCoreConfig().build,
+        (new Rv32IMZicsrConfig ++ new PipelineDualFwdPerformConfig ++
+          new BareNpcIntegrationConfig ++ new BaseConfig).build,
       new U55cRv64OperatorSimulationConfig().config ->
-        new U55cRv64OperatorSimulationCoreConfig().build
+        (new Rv64IMZicsrConfig ++ new PipelineDualFwdPerformConfig ++
+          new BareNpcIntegrationConfig ++ new BaseConfig).build
     )
 
     terminalAndCore.foreach { case (terminal, core) =>

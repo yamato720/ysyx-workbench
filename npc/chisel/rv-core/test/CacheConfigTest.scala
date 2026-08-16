@@ -90,8 +90,24 @@ class CacheConfigTest extends AnyFlatSpec {
   }
 
   it should "freeze every public local cache profile to two-cycle access and four queue depths" in {
-    val pipelined = new PipelinedTwoCycleWideL2SimulationCoreConfig().build
-    val noCompletionForwarding = new PipelinedTwoCycleWideL2NoCompletionForwardingSimulationCoreConfig().build
+    val pipelined = (
+      new WithNpcOutstandingCompletionForwardingConfig ++
+        new Rv64IMZicsrConfig ++
+        new PipelineDualFwdTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecutePerformConfig ++
+        new PipelinedTwoCycleWideHbmL2CacheConfig ++
+        new WithLocalDpiCacheMemoryWidthConfig(512) ++
+        new LocalWideMemoryIntegrationConfig ++
+        new BaseConfig
+    ).build
+    val noCompletionForwarding = (
+      new WithoutNpcOutstandingCompletionForwardingConfig ++
+        new Rv64IMZicsrConfig ++
+        new PipelineDualFwdTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecutePerformConfig ++
+        new PipelinedTwoCycleWideHbmL2CacheConfig ++
+        new WithLocalDpiCacheMemoryWidthConfig(512) ++
+        new LocalWideMemoryIntegrationConfig ++
+        new BaseConfig
+    ).build
     val hbmL1 = new HbmJitterCacheSimulationConfig().config
     val hbmL2 = new HbmJitterL2CacheSimulationConfig().config
     assert(pipelined.cache.accessMode == CacheAccessMode.PipelinedTwoCycle)
