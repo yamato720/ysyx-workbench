@@ -53,4 +53,9 @@ void add_mmio_map(const char *name, paddr_t addr,
 word_t map_read(paddr_t addr, int len, IOMap *map);
 void map_write(paddr_t addr, int len, word_t data, IOMap *map);
 
+// NPC 自测的硬件侧 DPI 入口：硬件先真实访问设备，软件参考机随后重放同一事务，
+// 避免 RTC、键盘等非确定性输入以及串口/显存等副作用被执行两次。
+word_t npc_hardware_mmio_read(paddr_t addr, int len);
+void npc_hardware_mmio_write(paddr_t addr, int len, word_t data);
+
 #endif

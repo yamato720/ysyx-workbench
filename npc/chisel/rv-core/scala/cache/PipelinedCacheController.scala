@@ -411,8 +411,10 @@ class PipelinedCacheController(
     s0MainMemory && (cache.policy.write == CacheWritePolicy.WriteBack).B &&
     responseQueue.io.enq.ready
   startingEarlyStoreMiss := s0EarlyStoreMiss
+  // 提前 B 只适用于可缓存主存的 write-back miss。MMIO 必须走真实旁路 AW/W/B，
+  // 不能因不满足提前确认条件而停留在 S0。
   val s0WriteBackStoreNeedsEarlyAck = enableWriteMissEarlyAcknowledgement.B && s0Request.write &&
-    (cache.policy.write == CacheWritePolicy.WriteBack).B
+    s0MainMemory && (cache.policy.write == CacheWritePolicy.WriteBack).B
   val s0DemandMiss = s0Miss && !prefetchBlocksDemand &&
     (!s0WriteBackStoreNeedsEarlyAck || s0EarlyStoreMiss)
   val s0DemandLineAddress = lineBase(s0Request.addr)

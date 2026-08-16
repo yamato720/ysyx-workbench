@@ -13,16 +13,16 @@ static inline uint8_t *guest_to_host_impl(uint32_t paddr) {
     return pmem + (paddr - PMEM_BASE);
 }
 
-static inline uint64_t mmio_read(uint64_t, int) { return 0; }
-static inline void mmio_write(uint64_t, int, uint64_t) {}
+static inline uint64_t npc_hardware_mmio_read(uint64_t, int) { return 0; }
+static inline void npc_hardware_mmio_write(uint64_t, int, uint64_t) {}
 static inline void assert_fail_msg() {
     fprintf(stderr, "[NPC-PMEM] invalid memory access\n");
 }
 #else
 extern "C" {
 uint8_t *guest_to_host(uint64_t paddr);
-uint64_t mmio_read(uint64_t addr, int len);
-void mmio_write(uint64_t addr, int len, uint64_t data);
+uint64_t npc_hardware_mmio_read(uint64_t addr, int len);
+void npc_hardware_mmio_write(uint64_t addr, int len, uint64_t data);
 void assert_fail_msg();
 }
 
@@ -159,7 +159,7 @@ void mmio_read_word(int addr, int len, int word_bytes, uint64_t *word_data) {
         report_memory_fault(uaddr, false, len, 4);
         return;
     }
-    *word_data = (mmio_read(uaddr, len) & byte_mask(len)) << (lane * 8);
+    *word_data = (npc_hardware_mmio_read(uaddr, len) & byte_mask(len)) << (lane * 8);
 }
 
 void mmio_write_word(int addr, int len, int word_bytes, uint64_t word_data, uint8_t strb) {
@@ -182,7 +182,7 @@ void mmio_write_word(int addr, int len, int word_bytes, uint64_t word_data, uint
         report_memory_fault(uaddr, true, len, 4);
         return;
     }
-    mmio_write(uaddr, len, (word_data >> (lane * 8)) & byte_mask(len));
+    npc_hardware_mmio_write(uaddr, len, (word_data >> (lane * 8)) & byte_mask(len));
 }
 
 // 保留旧版字节/32 位接口，供未迁移的独立 Verilog 实验使用；当前 Chisel 仿真不再导入它们。

@@ -1611,6 +1611,68 @@ class CacheControllerBehaviorTest extends AnyFlatSpec {
     }
   }
 
+  it should "bypass an MMIO store when write-miss early acknowledgement is enabled" in {
+    val cache = CacheConfig(
+      enabled = true,
+      geometry = CacheGeometry(64, 16, CacheMapping.DirectMapped),
+      replacement = CacheReplacement.TreePLRU,
+      storage = CacheStorage.Registers
+    )
+    val mmioAddress = BigInt("a1000000", 16)
+
+    simulate(new PipelinedCacheController(cache, 32, 64, 0x80000000L, 0x10000000L,
+      readOnly = false, PipelinedCacheQueueConfig.TwoCycleLocal,
+      enableWriteMissEarlyAcknowledgement = true)) { dut =>
+      dut.io.cpu.aw.valid.poke(false)
+      dut.io.cpu.w.valid.poke(false)
+      dut.io.cpu.ar.valid.poke(false)
+      dut.io.cpu.b.ready.poke(true)
+      dut.io.cpu.r.ready.poke(true)
+      dut.io.maintenanceRequest.poke(false)
+      dut.io.maintenanceInvalidate.poke(false)
+      dut.io.memory.aw.ready.poke(true)
+      dut.io.memory.w.ready.poke(true)
+      dut.io.memory.ar.ready.poke(true)
+      dut.io.memory.b.valid.poke(false)
+      dut.io.memory.b.bits.resp.poke(0)
+      dut.io.memory.r.valid.poke(false)
+      dut.io.memory.r.bits.data.poke(0)
+      dut.io.memory.r.bits.resp.poke(0)
+      dut.reset.poke(true)
+      dut.clock.step(2)
+      dut.reset.poke(false)
+
+      dut.io.cpu.aw.bits.addr.poke(mmioAddress)
+      dut.io.cpu.aw.bits.size.poke(2)
+      dut.io.cpu.aw.bits.prot.poke(0)
+      dut.io.cpu.w.bits.data.poke("h12345678".U)
+      dut.io.cpu.w.bits.strb.poke("hf".U)
+      dut.io.cpu.aw.valid.poke(true)
+      dut.io.cpu.w.valid.poke(true)
+      dut.io.cpu.aw.ready.expect(true.B)
+      dut.io.cpu.w.ready.expect(true.B)
+      dut.clock.step()
+      dut.io.cpu.aw.valid.poke(false)
+      dut.io.cpu.w.valid.poke(false)
+
+      var bypassCycles = 0
+      while ((!dut.io.memory.aw.valid.peek().litToBoolean ||
+        !dut.io.memory.w.valid.peek().litToBoolean) && bypassCycles < 8) {
+        dut.clock.step()
+        bypassCycles += 1
+      }
+      assert(bypassCycles < 8, "MMIO write must enter the bypass transaction")
+      dut.io.memory.aw.bits.addr.expect(mmioAddress)
+      dut.clock.step()
+
+      dut.io.memory.b.valid.poke(true)
+      dut.io.memory.b.ready.expect(true.B)
+      dut.clock.step()
+      dut.io.memory.b.valid.poke(false)
+      dut.io.cpu.b.valid.expect(true.B)
+    }
+  }
+
   "CacheController" should "refill cold lines, hit locally, write back dirty victims, and bypass MMIO" in {
     val cache = CacheConfig(
       enabled = true,
