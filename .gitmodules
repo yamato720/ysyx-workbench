@@ -22,3 +22,15 @@
 	path = ResearchProject
 	url = git@github.com:yamato720/ResearchProject.git
 	branch = main
+[submodule "eda/ecc"]
+	path = eda/ecc
+	url = git@github.com:yamato720/ecc.git
+	branch = main
+[submodule "eda/icsprout55-pdk"]
+	path = eda/icsprout55-pdk
+	url = git@github.com:yamato720/icsprout55-pdk.git
+	branch = main
+[submodule "eda/oss-cad-suite-build"]
+	path = eda/oss-cad-suite-build
+	url = git@github.com:yamato720/oss-cad-suite-build.git
+	branch = main

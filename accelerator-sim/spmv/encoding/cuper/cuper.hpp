@@ -15,9 +15,10 @@ constexpr std::size_t kVectorStorageAlignmentElements = 1024;
 constexpr std::size_t kVectorReplicaCount = 4;
 constexpr std::size_t kVectorPartitionFactor = 8;
 
-/** Cuper A slot v3：`localColumn[63:51] | tag[50:48] | row[47:32] | fp32[31:0]`。
+/** Cuper A slot v4：`localColumn[63:51] | tag[50:48] | localRow[47:32] | fp32[31:0]`。
   *
-  * `row` 是直接的 CSR 行标，不再结合 HBM channel/lane 还原。预处理器把 `tag`
+  * `localRow` 是 Cuper PE 内的行标；结合 slot 所在 HBM channel/lane 可以反解全局 CSR
+  * 行标。预处理器把 `tag`
   * 编码为每个 `(batch, PE)` 时间流内的 3-bit 累加上下文：同一驻留行复用上下文，
   * tag 不是行号，而是每个物理 PE/lane 上 8 个累加上下文的编号。row 是真正身份，
   * tag 类似硬件线程槽位，目前 3 bit 凑 0~7 来用
@@ -69,7 +70,7 @@ struct CuperEncodingStats {
 struct CuperPackage {
   /** 编码时采用的静态 HBM、列窗口和同一行调度参数。 */
   CuperConfig config;
-  /** 原始 CSR 矩阵维度；row 最大只能为 65535。 */
+  /** 原始 CSR 矩阵维度；由 PE-local 16-bit 行标表达。 */
   std::size_t rows = 0;
   std::size_t columns = 0;
   /** 原始 CSR 的非零元数量，等于所有实际矩阵 slot 的总数。 */
@@ -122,14 +123,17 @@ struct DecodedCuperSlot {
   std::uint32_t localColumn = 0;
   /** 预处理器分配的累加上下文；当前乘法 RTL 只透明传递，不参与筛选。 */
   std::uint32_t tag = 0;
-  /** 直接的 16-bit CSR 行标；不再依赖 slot 所在 PE 逆映射。 */
-  std::uint32_t row = 0;
+  /** 16-bit PE-local 行标；slot 所在 PE 可将其反解为全局 CSR 行标。 */
+  std::uint32_t localRow = 0;
   float value = 0.0F;
 };
 
 std::size_t columnsPerBatch(const CuperConfig& config);
 std::size_t totalPeCount(const CuperConfig& config);
 std::size_t peForRow(std::size_t row, const CuperConfig& config);
+std::size_t localRowForRow(std::size_t row, const CuperConfig& config);
+std::size_t rowForPeLocal(std::size_t physicalPe, std::size_t localRow,
+                          const CuperConfig& config);
 DecodedCuperSlot decodeSlot(std::uint64_t slot);
 CuperPackage encode(const CsrMatrix& matrix, const CuperConfig& config = {});
 CuperVectorPackage encodeVector(const std::vector<double>& input,

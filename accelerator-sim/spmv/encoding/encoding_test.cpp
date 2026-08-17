@@ -1,6 +1,8 @@
 #include "encoder.hpp"
+#include "cuper/demand_schedule.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstring>
 #include <functional>
@@ -103,7 +105,8 @@ std::vector<RestoredElement> restore(const cuper::CuperPackage& package) {
           static_assert(sizeof(bits) == sizeof(slot.value));
           std::memcpy(&bits, &slot.value, sizeof(bits));
           restored.push_back(RestoredElement{
-              slot.row,
+              cuper::rowForPeLocal(channel * cuper::kLanesPerBeat + lane,
+                                   slot.localRow, package.config),
               batch * batchWidth + slot.localColumn,
               bits});
         }
@@ -146,6 +149,11 @@ std::vector<cuper::DecodedCuperSlot> slotsForPe(const cuper::CuperPackage& packa
   return slots;
 }
 
+std::size_t globalRowForSlot(const cuper::CuperPackage& package, std::size_t pe,
+                             const cuper::DecodedCuperSlot& slot) {
+  return cuper::rowForPeLocal(pe, slot.localRow, package.config);
+}
+
 void testRoundTripAndZeroFill() {
   const CsrMatrix matrix = makeMatrix(600, 600, {
       {0, 5, 1.5}, {0, 2, -2.25}, {1, 9, 0.0}, {255, 11, 3.125},
@@ -182,7 +190,8 @@ void testReorderWindow() {
   std::vector<std::size_t> positions;
   for (std::size_t beat = 0; beat < package.matrixChannels[channel].size(); ++beat) {
     if ((package.matrixEntryMasks[channel][beat] & (1U << lane)) != 0U &&
-        cuper::decodeSlot(package.matrixChannels[channel][beat][lane]).row == 300) {
+        globalRowForSlot(package, pe,
+                         cuper::decodeSlot(package.matrixChannels[channel][beat][lane])) == 300) {
       positions.push_back(beat);
     }
   }
@@ -207,9 +216,9 @@ void testAccumulationContextEncoding() {
   const std::vector<cuper::DecodedCuperSlot> residency =
       slotsForPe(residencyPackage, 0, pe);
   expect(residency.size() == 3 &&
-         residency[0].row == 0 && residency[0].tag == 0 &&
-         residency[1].row == 256 && residency[1].tag == 1 &&
-         residency[2].row == 0 && residency[2].tag == 0,
+         globalRowForSlot(residencyPackage, pe, residency[0]) == 0 && residency[0].tag == 0 &&
+         globalRowForSlot(residencyPackage, pe, residency[1]) == 256 && residency[1].tag == 1 &&
+         globalRowForSlot(residencyPackage, pe, residency[2]) == 0 && residency[2].tag == 0,
          "驻留行没有复用原累加上下文");
 
   // 九个不同驻留行会填满 0..7，并让第九行换出 LRU 的 context 0；随后再次
@@ -230,7 +239,8 @@ void testAccumulationContextEncoding() {
       0, 1, 2, 3, 4, 5, 6, 7, 0, 1};
   expect(lru.size() == rows.size(), "LRU 测试没有保留全部矩阵项");
   for (std::size_t index = 0; index < lru.size(); ++index) {
-    expect(lru[index].row == rows[index], "累加上下文编码改变了发射行顺序");
+    expect(globalRowForSlot(lruPackage, pe, lru[index]) == rows[index],
+           "累加上下文编码改变了发射行顺序");
     expect(lru[index].tag == expectedContexts[index], "累加上下文 LRU 次序错误");
     expect(lru[index].tag < cuper::kAccumulationContextCount,
            "累加上下文超出 3-bit tag 范围");
@@ -260,22 +270,25 @@ void testSlotV3Layout() {
   expect(package.stats.totalMatrixBeats == 1 && package.stats.zeroFillSlots == 6,
          "per-HBM 动态长度的 beat 或零填充统计错误");
   const std::uint64_t firstExpected = (1ULL << 51U) | floatBits(1.0);
-  const std::uint64_t secondExpected =
-      (2ULL << 51U) | (32ULL << 32U) | floatBits(-2.0);
+  const std::uint64_t secondExpected = (2ULL << 51U) | floatBits(-2.0);
   expect(package.matrixChannels[0][0][0] == firstExpected,
-         "Cuper lane 0 的 slot v3 位域错误");
+         "Cuper lane 0 的 slot v4 位域错误");
   expect(package.matrixChannels[0][0][1] == secondExpected,
-         "Cuper lane 1 的 slot v3 位域错误");
+         "Cuper lane 1 的 slot v4 位域错误");
   const cuper::DecodedCuperSlot first = cuper::decodeSlot(firstExpected);
-  expect(first.tag == 0 && first.row == 0 && first.localColumn == 1,
-         "Cuper slot v3 的直接行标或 tag 解码错误");
+  expect(first.tag == 0 && first.localRow == 0 && first.localColumn == 1,
+         "Cuper slot v4 的 PE-local 行标或 tag 解码错误");
+  const cuper::DecodedCuperSlot second = cuper::decodeSlot(secondExpected);
+  expect(second.localRow == 0 &&
+         cuper::rowForPeLocal(1, second.localRow, package.config) == 32,
+         "不同 PE 的相同行 localRow 没有反解为各自的全局行号");
   const std::uint64_t contextSlot = (3ULL << 48U) | (42ULL << 32U) | floatBits(0.5);
   const cuper::DecodedCuperSlot context = cuper::decodeSlot(contextSlot);
-  expect(context.tag == 3 && context.row == 42 && context.localColumn == 0,
-         "Cuper slot v3 的累加上下文位域影响了其他字段解码");
+  expect(context.tag == 3 && context.localRow == 42 && context.localColumn == 0,
+         "Cuper slot v4 的累加上下文位域影响了其他字段解码");
   const cuper::DecodedCuperSlot zeroFill = cuper::decodeSlot(cuper::kZeroFillSlot);
-  expect(zeroFill.tag == 0 && zeroFill.row == 0 && zeroFill.localColumn == 0,
-         "Cuper slot v3 的全零填充不应编码特殊 tag");
+  expect(zeroFill.tag == 0 && zeroFill.localRow == 0 && zeroFill.localColumn == 0,
+         "Cuper slot v4 的全零填充不应编码特殊 tag");
 }
 
 void testHtmlReport() {
@@ -358,9 +371,6 @@ void testEmptyAndValidation() {
   const CsrMatrix valid = makeMatrix(1, 1, {{0, 0, 1.0}});
   expectThrows([&valid, &badConfig]() { (void)cuper::encode(valid, badConfig); },
                "非法 HBM channel 配置未被拒绝");
-  const CsrMatrix excessiveRows = makeMatrix(65537, 1, {{65536, 0, 1.0}});
-  expectThrows([&excessiveRows]() { (void)cuper::encode(excessiveRows); },
-               "超过 16-bit 直接行标的矩阵未被拒绝");
   expectThrows([]() { (void)parseEncodingFormat("unknown"); },
                "未知统一编码格式未被拒绝");
 }
@@ -380,8 +390,26 @@ void testCuperPeMapping() {
     expect(cuper::peForRow(row, config) == cuper::peForRow(row % 256U, config),
            "原 Cuper PE 映射没有按 256 行重复");
   }
-  expectThrows([&config]() { (void)cuper::peForRow(65536, config); },
-               "slot v3 的 PE 映射未拒绝超过 16-bit 的直接行标");
+}
+
+void testPeLocalRowVirtualization() {
+  const cuper::CuperConfig config;
+  for (const std::size_t row : std::array<std::size_t, 7>{
+           0, 1, 255, 256, 65535, 65536, 1228044}) {
+    const std::size_t pe = cuper::peForRow(row, config);
+    const std::size_t localRow = cuper::localRowForRow(row, config);
+    expect(localRow <= ((std::size_t{1} << cuper::kRowBits) - 1U),
+           "Cuper PE-local 行标超过 slot 位域");
+    expect(cuper::rowForPeLocal(pe, localRow, config) == row,
+           "Cuper PE-local 行标无法反解全局行号");
+  }
+
+  const CsrMatrix large = makeMatrix(1228045, 4, {
+      {0, 0, 1.0}, {65535, 1, -2.0}, {65536, 2, 3.0},
+      {1228044, 3, -4.0}});
+  const cuper::CuperPackage package = cuper::encode(large, config);
+  expect(restore(package) == expectedElements(large),
+         "超过 16-bit 全局行号的 Cuper package 未能 round-trip");
 }
 
 void testVectorEncoding() {
@@ -449,6 +477,43 @@ void testVectorEncoding() {
                "Cuper X 编码未拒绝非 float_v16 对齐的 batch");
 }
 
+void testDemandSchedule() {
+  const CsrMatrix matrix = makeMatrix(256, 256, {{0, 192, 1.0}});
+  const cuper::CuperPackage package = cuper::encode(matrix);
+  const cuper::CuperDemandSchedule schedule = cuper::planXPageSchedule(package);
+  expect(schedule.config.pageElements == 64 && schedule.config.xElementsPerCycle == 8,
+         "Cuper demand schedule 没有采用当前输入顶层的 page/bandwidth 模型");
+  expect(schedule.batches.size() == 1 && schedule.batches[0].pageCount == 4,
+         "Cuper demand schedule 的 page 数量错误");
+  const cuper::CuperDemandBatchPlan& batch = schedule.batches[0];
+  expect(batch.xLoadCycles == 32 && batch.pageOrder.size() == 4 &&
+         batch.pageOrder[0] == 0 && batch.pageOrder[1] == 3,
+         "Cuper demand schedule 未优先装载可释放首个 A beat 的 page");
+  expect(batch.channels[0].aBeats == 1 &&
+         batch.channels[0].baseline.firstIssueCycle == 32 &&
+         batch.channels[0].planned.firstIssueCycle == 16 &&
+         batch.planned.issuedBeforeXComplete == 1,
+         "Cuper demand schedule 没有保序计算 A beat 的早启动周期");
+  expect(batch.planned.firstIssueCycle <= batch.baseline.firstIssueCycle,
+         "Cuper demand schedule 不应推迟最早 A beat 的启动");
+  const cuper::CuperPackage remapped =
+      cuper::remapLocalColumnsForXPageSchedule(package, schedule);
+  expect(cuper::decodeSlot(remapped.matrixChannels[0][0][0]).localColumn == 64,
+         "Cuper X page 重排没有同步改写 A slot 的 local column");
+  expect(remapped.channelBatchPointers == package.channelBatchPointers &&
+         remapped.stats.matrixSlots == package.stats.matrixSlots,
+         "Cuper X page 重排不应改变 A HBM 边界或矩阵统计");
+  std::ostringstream output;
+  cuper::writeDemandScheduleJson(output, schedule,
+      "demand\"schedule", "/tmp/</script>&matrix");
+  const std::string json = output.str();
+  expect(json.find("\"format\":\"cuper-x-page-demand-v1\"") != std::string::npos &&
+         json.find("\"pageOrder\":[0,3") != std::string::npos &&
+         json.find("</script>&matrix") == std::string::npos &&
+         json.find("\\u003c/script\\u003e\\u0026matrix") != std::string::npos,
+         "Cuper demand schedule JSON 缺少计划字段或未安全转义元数据");
+}
+
 }  // namespace
 }  // namespace accelerator_sim::spmv::encoding
 
@@ -462,7 +527,9 @@ int main() {
     accelerator_sim::spmv::encoding::testColumnBatches();
     accelerator_sim::spmv::encoding::testEmptyAndValidation();
     accelerator_sim::spmv::encoding::testCuperPeMapping();
+    accelerator_sim::spmv::encoding::testPeLocalRowVirtualization();
     accelerator_sim::spmv::encoding::testVectorEncoding();
+    accelerator_sim::spmv::encoding::testDemandSchedule();
     std::cout << "[spmv-encoding-test] Cuper A/X packages PASS\n";
     return 0;
   } catch (const std::exception& error) {

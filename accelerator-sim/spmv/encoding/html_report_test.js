@@ -48,9 +48,10 @@ if (totalBeats !== report.stats.totalBeats ||
 if (report.config.accumulationContexts !== 8 ||
     report.batchStats.length !== report.stats.batchCount ||
     report.channelStats.length !== report.config.hbmChannels ||
-    report.slots.some((slot) => slot.length !== 17 || !/^0x[0-9a-f]{16}$/.test(slot[7]) ||
+    report.slots.some((slot) => slot.length !== 18 || !/^0x[0-9a-f]{16}$/.test(slot[7]) ||
+      slot[12] < 0 || slot[12] > 0xffff ||
       (slot[8] && (slot[11] >= report.config.accumulationContexts ||
-        typeof slot[16] !== "string")))) {
+        !Number.isInteger(slot[13]) || typeof slot[17] !== "string")))) {
   throw new Error("batch、channel 或 slot 详细数据结构不完整");
 }
 for (const id of [

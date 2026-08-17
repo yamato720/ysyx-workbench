@@ -12,11 +12,14 @@ object SpmvAcceleratorHostConfig {
 
   val InputReport: AcceleratorHostConfig = AcceleratorHostConfig(
     kind = "spmv",
-    abi = "spmv-input-report-v12"
+    abi = "spmv-input-report-v13"
   )
 }
 
 /** 独立于 NEMU 的本地 SPMV 正式输入与流水报告构造。 */
 trait SpmvInputSimulationConstruction extends AcceleratorHostConstruction {
   final override protected def configuredCapability: String = "run"
+  protected def configuredSpmvInputReport: SpmvInputReportConfig
+
+  final def spmvInputReportConfig: SpmvInputReportConfig = configuredSpmvInputReport
 }

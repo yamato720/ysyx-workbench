@@ -18,10 +18,10 @@ import npc.ip.axi.Axi4ReadMasterIO
 /** SPMV 输入层顶层接口。
   *
   * 一个 A 输入封装承载全部 A HBM，每个内部 reader 连接一个消费端和一个独立的
-  * Cuper PE；一个 2-HBM X 输入封装把两个条带 beat 原子广播给全部消费端，并写入
-  * 每个 PE 自己的 local_X。
+  * Cuper PE；两路 X HBM 按偶/奇 beat 条带输入，写入每个 PE 自己的 local_X。
   * 一路控制 HBM 把 map 等侧带数据同样广播给全部消费端，供后续 JPCG 复用。
-  * Ctrl 和 X 预载完成后，`mulEnable` 放行唯一一次 A 读取。A 在同拍旁路到
+  * Ctrl map 就绪后，preload 先写满 X 再启动 A；pingpong 则在 X page 完整后以四
+  * lane 半拍提前启动 A，X 写入仍保持每拍 8 个 FP64。A 在被 PE 接受的同拍旁路到
   * 消费端校验，并进入 Mixed-V3 FP64 乘法 IP 验证引擎。
   */
 final class SpmvInputTopIO(config: SpmvInputConfig) extends Bundle {
@@ -79,6 +79,8 @@ final class SpmvInputTopIO(config: SpmvInputConfig) extends Bundle {
   val timingXReadMask = Output(UInt(SpmvCuperDecode.lanesPerBeat.W))
   val timingMulRequestMask = Output(UInt(SpmvCuperDecode.lanesPerBeat.W))
   val timingMulResponseMask = Output(UInt(SpmvCuperDecode.lanesPerBeat.W))
+  /** 当前周期写入每个 local_X 副本的 X 元素数。 */
+  val timingXWriteLanes = Output(UInt(log2Ceil(config.xElementsPerBeat + 1).W))
   val timingStreamsComplete = Output(Bool())
   /** 按 Cuper A channel 导出的计算时序；每个向量元素对应一个独立 PE。 */
   val timingBeatAcceptedByChannel = Output(Vec(config.aReaderCount, Bool()))
@@ -134,14 +136,19 @@ private[spmv] final class SpmvRequestCompletionTracker(streamCount: Int) extends
   * [[SpmvInputConsumer]] 负责输入观测；每个 [[SpmvLocalX]] 按与 Cuper A
   * 分片同宽的 8192 列窗口把广播后的 FP64 X 写入自己的 4 份片上副本。
   * 每个 [[SpmvMulEngine]] 对应一个 A HBM channel，在唯一一次 A 输入上并行验证
-  * Mixed-V3 FP64 乘法。本层连接 16 路 A、两路 X 条带广播、一路控制面广播、片上 X
+  * Mixed-V3 FP64 乘法。本层连接 16 路 A、两路 X 条带、一路控制面广播、片上 X
   * 填充和顶层状态端口。
   */
 final class SpmvInputTop(config: SpmvInputConfig) extends Module {
   require(config.xReaderCount == 2,
-    s"当前输入顶层要求两路 X 条带并行载入，实际为 ${config.xReaderCount}")
+    s"当前输入顶层要求两路 X 输入，实际为 ${config.xReaderCount}")
   require(config.ctrlReaderCount == 1,
     s"当前输入顶层要求一路控制面广播，实际为 ${config.ctrlReaderCount}")
+  require(config.xWindowSize % SpmvCuperDecode.xPageElements == 0,
+    s"Cuper X 窗口必须按 page 对齐，实际为 ${config.xWindowSize}/${SpmvCuperDecode.xPageElements}")
+  require(config.xWriteLanes <= SpmvCuperDecode.xPageElements &&
+    SpmvCuperDecode.xPageElements % config.xWriteLanes == 0,
+    s"X 广播写宽必须整除 Cuper page，实际为 ${config.xWriteLanes}/${SpmvCuperDecode.xPageElements}")
   val io = IO(new SpmvInputTopIO(config))
 
   private val aInput = Module(new SpmvAInput(config, config.aReaderCount))
@@ -195,81 +202,114 @@ final class SpmvInputTop(config: SpmvInputConfig) extends Module {
     }
   }
 
+  private val pingPongSchedule = config.xPortSchedule == SpmvXPortSchedule.PingPong
   private val xGroupActive = RegInit(false.B)
-  private val xFinished = RegInit(VecInit(Seq.fill(config.xReaderCount)(false.B)))
+  private val xFinished = RegInit(false.B)
+  private val x0Seen = RegInit(false.B)
+  private val x1Seen = RegInit(false.B)
+  private val xHoldValid = RegInit(false.B)
+  private val xHoldData = Reg(UInt(config.axiDataWidth.W))
+  private val xHoldLast = RegInit(false.B)
+  private val xWindowReady = RegInit(false.B)
   private val xColumn = RegInit(0.U(log2Ceil(config.xWindowSize).W))
-  private val xRequestGroupValid = io.xRequest.map(_.valid).reduce(_ && _)
-  private val xRequestGroupReady = xInput.io.request.map(_.ready).reduce(_ && _)
-  private val xRequestGroupFire = xRequestGroupValid && xRequestGroupReady
-  for (index <- 0 until config.xReaderCount) {
-    xInput.io.request(index).valid := xRequestGroupValid && xRequestGroupReady
-    xInput.io.request(index).bits := io.xRequest(index).bits
-    io.xRequest(index).ready := xRequestGroupReady && xRequestGroupValid
-    io.xHbm(index) <> xInput.io.axi(index)
-    io.xIdle(index) := xInput.io.idle(index)
-    io.xBusy(index) := xInput.io.busy(index)
-    io.xDone(index) := xInput.io.done(index)
-    io.xError(index) := xInput.io.error(index)
-    when(xRequestGroupFire) {
-      xGroupActive := true.B
-      xFinished(index) := false.B
-      xColumn := 0.U
-    }
+  private val xPageCount = config.xWindowSize / SpmvCuperDecode.xPageElements
+  private val xPageReady = RegInit(VecInit(Seq.fill(xPageCount)(false.B)))
+  for (lane <- 0 until config.xReaderCount) {
+    io.xRequest(lane) <> xInput.io.request(lane)
+    io.xHbm(lane) <> xInput.io.axi(lane)
+    io.xIdle(lane) := xInput.io.idle(lane)
+    io.xBusy(lane) := xInput.io.busy(lane)
+    io.xDone(lane) := xInput.io.done(lane)
+    io.xError(lane) := xInput.io.error(lane)
   }
+  private val xRequestFire = io.xRequest.map(_.fire).reduce(_ || _)
 
-  // 偶/奇全局 X beat 分别来自 X0/X1。两路均未结束时成组广播；若总 beat
-  // 数为奇数，X1 完成后允许 X0 单独交付最后一个尾 beat。
-  private val xPending = VecInit((0 until config.xReaderCount).map { index =>
-    xGroupActive && !xFinished(index)
-  })
-  private val hasPendingX = xPending.asUInt.orR
-  private val allPendingValid = (0 until config.xReaderCount).map { index =>
-    !xPending(index) || xInput.io.output(index).valid
+  // 双路 X 同拍捕获：X0 当拍写入 8 个 FP64，X1 寄存在下一拍写入。这样两路 HBM
+  // 都能按真实 512-bit PC 供数，而每个 URAM bank 仍保持 1W。
+  private val xPending = xGroupActive && !xFinished
+  private val x0Available = xPending && xInput.io.output(0).valid
+  private val x1Available = xPending && xInput.io.output(1).valid
+  private val x1Complete = x1Seen &&
+    xInput.io.idle(1) && !xInput.io.output(1).valid && !xHoldValid
+  private val x0OnlyWindow = x0Seen && !x1Seen &&
+    xInput.io.idle(1) && !io.xRequest(1).valid
+  private val consumerXReady = consumers.map { consumer =>
+    consumer.io.x.map(_.ready).reduce(_ && _)
   }.reduce(_ && _)
-  private val allPendingConsumersReady = (0 until config.xReaderCount).map { index =>
-    !xPending(index) || consumers.map(_.io.x(index).ready).reduce(_ && _)
-  }.reduce(_ && _)
-  private val broadcastX = hasPendingX &&
-    allPendingValid && allPendingConsumersReady
-  private val xFinishing = Wire(Vec(config.xReaderCount, Bool()))
+  private val takePair = x0Available && !xHoldValid && consumerXReady &&
+    (x1Available || x1Complete || x0OnlyWindow)
+  private val writeHeld = xHoldValid
+  private val writeX = takePair || writeHeld
+  private val writeLast = Mux(writeHeld, xHoldLast,
+    xInput.io.output(0).bits.last && !x1Available)
+  private val writeData = Mux(writeHeld, xHoldData, xInput.io.output(0).bits.data)
+  consumers.foreach { consumer =>
+    consumer.io.x(0).valid := takePair
+    consumer.io.x(0).bits := xInput.io.output(0).bits
+    consumer.io.x(1).valid := takePair && x1Available
+    consumer.io.x(1).bits := xInput.io.output(1).bits
+  }
+  xInput.io.output(0).ready := takePair
+  xInput.io.output(1).ready := takePair && x1Available
+  private val xWriteElements = config.xWriteLanes.U
+  private val xWriteEnd = xColumn +& xWriteElements
+  private val xElements = writeData.asTypeOf(
+    Vec(config.xElementsPerBeat, UInt(config.xElementWidth.W)))
 
-  for (index <- 0 until config.xReaderCount) {
-    consumers.foreach { consumer =>
-      consumer.io.x(index).valid := broadcastX && xPending(index)
-      consumer.io.x(index).bits := xInput.io.output(index).bits
+  when(xRequestFire) {
+    xGroupActive := true.B
+    xFinished := false.B
+    x0Seen := io.xRequest(0).fire
+    x1Seen := io.xRequest(1).fire
+    xHoldValid := false.B
+    xHoldLast := false.B
+    xWindowReady := false.B
+    xColumn := 0.U
+    xPageReady.foreach(_ := false.B)
+  }.otherwise {
+    when(io.xRequest(0).fire) {
+      x0Seen := true.B
     }
-    xInput.io.output(index).ready := broadcastX && xPending(index)
-    xFinishing(index) := xInput.io.output(index).fire && xInput.io.output(index).bits.last
-    when(xFinishing(index)) {
-      xFinished(index) := true.B
+    when(io.xRequest(1).fire) {
+      x1Seen := true.B
+    }
+    when(takePair && x1Available) {
+      xHoldValid := true.B
+      xHoldData := xInput.io.output(1).bits.data
+      xHoldLast := xInput.io.output(1).bits.last
+    }
+    when(writeHeld) {
+      xHoldValid := false.B
+    }
+    when(writeX) {
+      xColumn := xColumn + xWriteElements
+      for (page <- 0 until xPageCount) {
+        val pageEnd = ((page + 1) * SpmvCuperDecode.xPageElements).U
+        when(xColumn < pageEnd && xWriteEnd >= pageEnd) {
+          xPageReady(page) := true.B
+        }
+      }
+    }
+    when(writeX && writeLast) {
+      xFinished := true.B
+      xGroupActive := false.B
+      xHoldValid := false.B
+      xWindowReady := true.B
     }
   }
-  when(xGroupActive && (0 until config.xReaderCount).map { index =>
-    xFinished(index) || xFinishing(index)
-  }.reduce(_ && _)) {
-    xGroupActive := false.B
-  }
-
-  // 广播后的 X 按列序写入每个 Cuper PE 的 local_X。X0/X1 同拍时写 16 个 FP64；
-  // 仅 X0 尾拍时写前 8 个。窗口写满后继续覆盖，供后续窗口复用同一块 BRAM。
-  private val x0Fire = broadcastX && xPending(0)
-  private val x1Fire = broadcastX && xPending(1)
-  private val x0Elements = xInput.io.output(0).bits.data.asTypeOf(
-    Vec(config.xElementsPerBeat, UInt(config.xElementWidth.W)))
-  private val x1Elements = xInput.io.output(1).bits.data.asTypeOf(
-    Vec(config.xElementsPerBeat, UInt(config.xElementWidth.W)))
   localXs.zip(mulEngines).zipWithIndex.foreach { case ((localX, mulEngine), index) =>
-    localX.io.writeValid := x0Fire || x1Fire
+    localX.io.writeValid := writeX
     localX.io.writeColumn := xColumn
-    for (lane <- 0 until config.xElementsPerBeat) {
-      localX.io.writeElements(lane) := x0Elements(lane)
-      localX.io.writeMask(lane) := x0Fire
-      localX.io.writeElements(lane + config.xElementsPerBeat) := x1Elements(lane)
-      localX.io.writeMask(lane + config.xElementsPerBeat) := x1Fire
+    for (bank <- 0 until config.xBankCount) {
+      localX.io.writeElements(bank) := Mux(writeX, xElements(bank), 0.U)
+      localX.io.writeMask(bank) := writeX
     }
     mulEngine.io.enable := io.mulEnable
     mulEngine.io.batch := io.mulBatch
     mulEngine.io.workExpected := ctrlMap.io.batchActive(index)
+    mulEngine.io.pageReady := xPageReady
+    mulEngine.io.xWindowReady := xWindowReady
+    mulEngine.io.portSafeOverlap := (if (pingPongSchedule) writeX && !xWindowReady else false.B)
     mulEngine.io.xReadData := localX.io.readData
     // idle 无法区分“已完成”和“从未请求”；必须先看见全部 A 请求，再允许完成。
     mulEngine.io.streamsComplete := aCompletion.io.complete
@@ -302,6 +342,7 @@ final class SpmvInputTop(config: SpmvInputConfig) extends Module {
   io.timingXReadMask := timingXReadMaskByChannel.reduce(_ | _)
   io.timingMulRequestMask := timingMulRequestMaskByChannel.reduce(_ | _)
   io.timingMulResponseMask := timingMulResponseMaskByChannel.reduce(_ | _)
+  io.timingXWriteLanes := Mux(writeX, xWriteElements, 0.U)
   io.timingStreamsComplete := aCompletion.io.complete
   io.timingBeatAcceptedByChannel := timingBeatAcceptedByChannel
   io.timingValidSlotMaskByChannel := timingValidSlotMaskByChannel
@@ -310,9 +351,6 @@ final class SpmvInputTop(config: SpmvInputConfig) extends Module {
   io.timingMulResponseMaskByChannel := timingMulResponseMaskByChannel
   io.timingComputeDoneByChannel := timingComputeDoneByChannel
   io.mulProductChecksum := mulEngines.map(_.io.productChecksum).reduce(_ ^ _)
-  when(x0Fire || x1Fire) {
-    xColumn := xColumn + Mux(x0Fire && x1Fire, config.xWriteLanes.U, config.xElementsPerBeat.U)
-  }
 
   // 一路控制 HBM 原子广播到全部消费端，并在同一握手周期解析 Cuper map；之后同一条
   // 通道可以改成读写其它 JPCG 侧带数据。

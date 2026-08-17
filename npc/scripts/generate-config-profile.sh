@@ -97,7 +97,7 @@ awk -F= '
     if (scope == "spmv") {
       if (capability != "run" || target != "SPMV" || host_abi != "none" ||
           !seen["ACCELERATOR_HOST_KIND"] || !seen["ACCELERATOR_HOST_ABI"] ||
-          accelerator_host_kind != "spmv" || accelerator_host_abi != "spmv-input-report-v12" ||
+          accelerator_host_kind != "spmv" || accelerator_host_abi != "spmv-input-report-v13" ||
           spmv_input_x_reader_count != "2" ||
           !seen["SPMV_INPUT_A_READER_COUNT"] || !seen["SPMV_INPUT_X_READER_COUNT"] ||
           !seen["SPMV_INPUT_CTRL_READER_COUNT"] ||
@@ -109,9 +109,11 @@ awk -F= '
           !seen["SPMV_INPUT_X_BROADCAST"] || !seen["SPMV_INPUT_CTRL_BROADCAST"] ||
           !seen["SPMV_INPUT_X_WINDOW_SIZE"] || !seen["SPMV_INPUT_X_REPLICA_COUNT"] ||
           !seen["SPMV_INPUT_X_BANK_COUNT"] || !seen["SPMV_INPUT_X_ELEMENT_WIDTH"] ||
+          !seen["SPMV_INPUT_X_PORT_SCHEDULE"] || !seen["SPMV_INPUT_X_WRITE_LANES"] ||
+          !seen["SPMV_INPUT_X_OVERLAP_LANES"] ||
           !seen["SPMV_CUPER_SLOT_ABI"] || !seen["SPMV_CUPER_SLOT_COLUMN_BITS"] ||
           !seen["SPMV_CUPER_SLOT_TAG_BITS"] || !seen["SPMV_CUPER_SLOT_ROW_BITS"] ||
-          spmv_cuper_slot_abi != "cuper-a-slot-v3" ||
+          spmv_cuper_slot_abi != "cuper-a-slot-v4" ||
           spmv_cuper_slot_column_bits != "13" || spmv_cuper_slot_tag_bits != "3" ||
           spmv_cuper_slot_row_bits != "16" ||
           !seen["SPMV_FP64_MUL_INTERFACE"] || !seen["SPMV_FP64_MUL_LATENCY"] ||
@@ -150,6 +152,9 @@ awk -F= '
       asset_only=1
     }
     if (!asset_only && !accelerator_only && (!seen["XLEN"] || !seen["NEMU_PRESET"] || !seen["NEMU_CACHE_HTML"] ||
+        !seen["NPC_TRACE"] || !seen["NPC_SDB_DEBUG"] || !seen["NPC_FINAL_LOG"] ||
+        !seen["NPC_INSTRUCTION_LOG"] || !seen["NPC_PIPELINE_LOG"] ||
+        !seen["NPC_CACHE_LOG"] || !seen["NPC_BP_LOG"] ||
         !seen["INTEGER_EXECUTE_STAGES"] || !seen["SERIAL_EXECUTE_STAGES"] || !seen["REGISTER_INITIAL_FETCH_REQUEST"] ||
         !seen["SEPARATE_SERIAL_INTEGER_ALU"] || !seen["SERIAL_EXECUTE_RESULT_FORWARDING"] || !seen["BRANCH_PREDICTOR"] ||
         !seen["DPI_MEMORY_TIMING_ENABLED"] || !seen["DPI_MEMORY_READ_RESPONSE_MIN_CYCLES"] ||

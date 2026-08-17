@@ -12,6 +12,11 @@
 
 namespace accelerator_sim::spmv {
 
+enum class InputXPortSchedule {
+  Preload,
+  PingPong,
+};
+
 /** 一次 Cuper 列窗口的 X 装载与 A 回放范围。
   *
   * `aChannels` 是由 Ctrl map 相邻 pointer 截出的每通道子区间；`xChannels` 则只含本
@@ -40,6 +45,7 @@ struct InputSimulationData {
   /** Ctrl map 驱动的按列窗口执行顺序，至少包含一个 batch。 */
   std::vector<InputSimulationBatch> batches;
   std::size_t maxOutstandingBursts = 2;
+  InputXPortSchedule xPortSchedule = InputXPortSchedule::Preload;
   bool performanceHtml = true;
   bool pipelineHtml = true;
   bool multiplyExpected = false;
@@ -50,6 +56,17 @@ struct InputSimulationData {
 struct InputSimulationResult {
   std::uint64_t cycles = 0;
   std::uint64_t mulCycles = 0;
+  /** 首个原始 A beat 被 PE 接受及首个 FMUL request 的全局周期。 */
+  std::uint64_t firstABeatCycle = 0;
+  std::uint64_t firstMulRequestCycle = 0;
+  bool startedA = false;
+  bool startedMul = false;
+  /** local_X 端口调度的负载、重叠和排空周期。 */
+  std::uint64_t xLoadCycles = 0;
+  std::uint64_t xOverlapCycles = 0;
+  std::uint64_t xDrainCycles = 0;
+  /** X 未完全写满前已经接受 A beat 的 batch 数。 */
+  std::size_t xAEarlyStartBatches = 0;
   bool multiplyCompared = false;
   std::filesystem::path performanceReport;
   std::filesystem::path inputPipelineReport;

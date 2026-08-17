@@ -73,7 +73,7 @@ std::uint32_t floatBits(float value) {
 
 struct ContextHistory {
   bool occupied = false;
-  std::uint32_t row = 0;
+  std::size_t row = 0;
 };
 
 void validatePackage(const CuperPackage& package) {
@@ -211,7 +211,7 @@ void writeHtmlReport(std::ostream& output, const CuperPackage& package,
   std::uint64_t sequence = 0;
   bool firstSlot = true;
   for (std::size_t batch = 0; batch < package.stats.batchCount; ++batch) {
-    std::vector<std::unordered_map<std::uint32_t, std::size_t>> lastRows(
+    std::vector<std::unordered_map<std::size_t, std::size_t>> lastRows(
         totalPeCount(package.config));
     std::vector<std::array<ContextHistory, kAccumulationContextCount>> contextHistory(
         totalPeCount(package.config));
@@ -232,37 +232,38 @@ void writeHtmlReport(std::ostream& output, const CuperPackage& package,
           writeJsonString(output, hexadecimal(word, 16));
           output << ',' << (matrixEntry ? "true" : "false") << ',' << slot.localColumn << ',';
           if (!matrixEntry) {
-            output << "null," << slot.tag << ',' << slot.row << ",null,";
+            output << "null," << slot.tag << ',' << slot.localRow << ",null,null,";
             writeJsonString(output, hexadecimal(floatBits(slot.value), 8));
             output << ",null,null";
           } else {
             if (slot.tag >= kAccumulationContextCount) {
               throw std::invalid_argument("Cuper HTML 报告收到越界的累加上下文");
             }
+            const std::size_t globalRow = rowForPeLocal(pe, slot.localRow, package.config);
             output << batch * columnsPerBatch(package.config) + slot.localColumn << ','
-                   << slot.tag << ',' << slot.row << ',';
+                   << slot.tag << ',' << slot.localRow << ',' << globalRow << ',';
             writeJsonString(output, formatFloat(slot.value));
             output << ',';
             writeJsonString(output, hexadecimal(floatBits(slot.value), 8));
             output << ',';
-            const auto previous = lastRows[pe].find(slot.row);
+            const auto previous = lastRows[pe].find(globalRow);
             if (previous == lastRows[pe].end()) {
               output << "null";
             } else {
               output << beat - previous->second;
             }
-            lastRows[pe][slot.row] = beat;
+            lastRows[pe][globalRow] = beat;
             const ContextHistory& previousContext = contextHistory[pe][slot.tag];
             output << ',';
             if (!previousContext.occupied) {
               writeJsonString(output, "首次装入");
-            } else if (previousContext.row == slot.row) {
+            } else if (previousContext.row == globalRow) {
               writeJsonString(output, "驻留命中");
             } else {
               writeJsonString(output, "换出 R" + std::to_string(previousContext.row) +
-                  "，装入 R" + std::to_string(slot.row));
+                  "，装入 R" + std::to_string(globalRow));
             }
-            contextHistory[pe][slot.tag] = ContextHistory{true, slot.row};
+            contextHistory[pe][slot.tag] = ContextHistory{true, globalRow};
           }
           output << ']';
         }

@@ -113,10 +113,13 @@ struct CycleRecord {
   std::uint32_t minimumABeats = 0;
   std::uint32_t maximumABeats = 0;
   std::uint32_t xBeats = 0;
+  std::uint8_t xWriteLanes = 0;
+  std::uint8_t xReadMask = 0;
 };
 
 struct MulTimingRecord {
   std::uint64_t cycle = 0;
+  std::uint64_t globalCycle = 0;
   std::size_t batch = 0;
   std::uint16_t beatAcceptedMask = 0;
   std::array<std::uint8_t, kAReaderCount> validSlotMasks{};
@@ -124,6 +127,7 @@ struct MulTimingRecord {
   std::array<std::uint8_t, kAReaderCount> mulRequestMasks{};
   std::array<std::uint8_t, kAReaderCount> mulResponseMasks{};
   std::uint16_t computeDoneMask = 0;
+  std::uint8_t xWriteLanes = 0;
   bool mulReady = false;
   bool streamsComplete = false;
   bool computeDone = false;
@@ -334,9 +338,11 @@ bool streamsComplete(const std::array<HbmModel, kAReaderCount>& models,
 }
 
 void validateContinuousStream(const std::vector<CycleRecord>& cycles, std::size_t inputKind,
-                              std::size_t lane, std::size_t expectedBeats) {
+                              std::size_t lane, std::size_t expectedBeats,
+                              std::uint64_t expectedCycleStride = 1U) {
   std::size_t observed = 0;
   bool started = false;
+  std::uint64_t previousCycle = 0;
   for (const CycleRecord& cycle : cycles) {
     bool fire = false;
     switch (inputKind) {
@@ -347,9 +353,14 @@ void validateContinuousStream(const std::vector<CycleRecord>& cycles, std::size_
     }
     if (fire) {
       if (observed == expectedBeats) throw std::runtime_error("满带宽输入在完成后又出现 R beat");
+      if (started && cycle.cycle != previousCycle + expectedCycleStride) {
+        throw std::runtime_error("输入 HBM R 节拍不符合冻结端口调度，lane=" +
+            std::to_string(lane));
+      }
       started = true;
+      previousCycle = cycle.cycle;
       ++observed;
-    } else if (started && observed < expectedBeats) {
+    } else if (expectedCycleStride == 1U && started && observed < expectedBeats) {
       throw std::runtime_error("满带宽输入的连续 R 区间出现空拍，lane=" +
           std::to_string(lane));
     }
@@ -502,18 +513,41 @@ void writePerformanceReport(const fs::path& path, const InputSimulationData& inp
   writeMetric(output, "Ctrl 输入", std::to_string(ctrlBeats), "512-bit beats");
   writeMetric(output, "Cuper 窗口", std::to_string(input.batches.size()), "X 载入 / A 回放");
   if (result.multiplyCompared) {
+    writeMetric(output, "端口调度", input.xPortSchedule == InputXPortSchedule::PingPong ?
+        "pingpong" : "preload", "local_X 8-bank 物理访问策略");
+    writeMetric(output, "X 装载", std::to_string(result.xLoadCycles),
+        "仅写 local_X 的周期");
+    writeMetric(output, "X/A 重叠", std::to_string(result.xOverlapCycles),
+        "8W 写入且副本 1R 的周期");
+    writeMetric(output, "A 排空", std::to_string(result.xDrainCycles),
+        "仅读 local_X 的周期");
+    writeMetric(output, "A 提前启动",
+        std::to_string(result.xAEarlyStartBatches) + "/" +
+            std::to_string(input.batches.size()),
+        "X 未写满时已有 A beat 进入 PE");
+    writeMetric(output, "首 A / 首 FMUL",
+        "c" + std::to_string(result.firstABeatCycle) + " / c" +
+            std::to_string(result.firstMulRequestCycle),
+        "全局周期");
+  }
+  if (result.multiplyCompared) {
     writeMetric(output, "FP64 乘法", std::to_string(result.mulCycles),
         "Cuper 分窗口乘法 IP 验证周期");
   }
   output << "</div></section><section><h2>输入配置</h2><div class=\"pipeline-meta\">"
-      "<span class=\"badge\">16 路 A reader</span><span class=\"badge\">2 路 X reader</span>"
+      "<span class=\"badge\">16 路 A reader</span><span class=\"badge\">"
+      << input.xChannels.size() << " 路 X reader</span>"
       "<span class=\"badge\">1 路 Ctrl reader</span>"
-      "<span class=\"badge\">16 个消费端</span><span class=\"badge\">X 双 beat 原子广播</span>"
+      "<span class=\"badge\">16 个消费端</span><span class=\"badge\">X 广播</span>"
       "<span class=\"badge\">Ctrl 广播</span>"
       << (result.multiplyCompared
           ? "<span class=\"badge\">Mixed-V3 Cuper 分窗口 FP64 乘法</span>"
           : "<span class=\"badge\">仅输入校验</span>")
-      << "<span class=\"badge\">Ctrl → X → A 阶段顺序</span><span class=\"badge\">2 outstanding bursts</span>"
+      << "<span class=\"badge\">"
+      << (input.xPortSchedule == InputXPortSchedule::PingPong ?
+          "8W+4R pingpong" : "8W 后 8R preload")
+      << "</span>"
+      "<span class=\"badge\">2 outstanding bursts</span>"
       "<span class=\"badge\">AR burst "
       << addressCount << " 次</span></div><div class=\"table-wrap\"><table><thead><tr>"
       "<th>地址窗口</th><th>A 最小..最大</th><th>A 通道差</th><th>X / Ctrl 地址</th>"
@@ -569,7 +603,8 @@ void writePerformanceReport(const fs::path& path, const InputSimulationData& inp
   }
   output << "</section></main><footer>"
       << (result.multiplyCompared
-          ? "Ctrl map 只载入一次；每个 Cuper 窗口依次载入 X、回放 map 对应的 A 区间，并完成 Mixed-V3 FP64 乘法验证。"
+          ? "Ctrl map 只载入一次；每个 Cuper 窗口按冻结端口调度装载 X，并验收每个物理 "
+            "slot 的 Mixed-V3 FP64 乘法流。"
           : "Ctrl map 和 X 载入完成后执行 A 输入校验。")
       << "</footer></body></html>";
 }
@@ -592,7 +627,9 @@ void writeInputPipelineReport(const fs::path& path, const InputSimulationData& i
     output << input.xChannels[channel].size();
   }
   output << "],\"ctrlExpected\":" << input.ctrlChannel.size()
-      << ",\"batchCount\":" << input.batches.size() << ",\"records\":[";
+      << ",\"batchCount\":" << input.batches.size() << ",\"xSchedule\":";
+  writeJsonString(output, input.xPortSchedule == InputXPortSchedule::PingPong ? "pingpong" : "preload");
+  output << ",\"records\":[";
   for (std::size_t index = 0; index < cycles.size(); ++index) {
     if (index != 0) output << ',';
     const CycleRecord& cycle = cycles[index];
@@ -813,7 +850,7 @@ void validateSinglePassFlow(const std::vector<CycleRecord>& cycles,
     }
   }
   for (std::size_t lane = 0; lane < kXReaderCount; ++lane) {
-    validateContinuousStream(cycles, 1, lane, input.xChannels[lane].size());
+    validateContinuousStream(cycles, 1, lane, input.xChannels[lane].size(), 2U);
   }
   validateContinuousStream(cycles, 2, 0, input.ctrlChannel.size());
 }
@@ -844,17 +881,24 @@ void initializeModels(std::array<HbmModel, Count>& models,
 template <typename Mask>
 void validateContinuousWindowData(const std::vector<CycleRecord>& cycles, std::size_t begin,
                                   std::size_t end, std::size_t expectedBeats,
+                                  std::uint64_t expectedCycleStride,
                                   Mask&& selected, const std::string& name) {
   std::vector<std::uint64_t> observed;
   for (std::size_t index = begin; index < end; ++index) {
     if (selected(cycles[index])) observed.push_back(cycles[index].cycle);
   }
-  if (observed.size() != expectedBeats || observed.empty() ||
+  if (expectedBeats == 0) {
+    if (!observed.empty()) {
+      throw std::runtime_error(name + " 的空 X 通道出现了多余 HBM R");
+    }
+    return;
+  }
+  if (observed.size() != expectedBeats ||
       std::adjacent_find(observed.begin(), observed.end(),
-          [](std::uint64_t previous, std::uint64_t current) {
-            return current != previous + 1U;
+          [expectedCycleStride](std::uint64_t previous, std::uint64_t current) {
+            return current != previous + expectedCycleStride;
           }) != observed.end()) {
-    throw std::runtime_error(name + " 没有保持逐拍连续的 HBM R 返回");
+    throw std::runtime_error(name + " 的 HBM R 节拍不符合冻结端口调度");
   }
 }
 
@@ -879,26 +923,42 @@ void validateBatchMultiplyTiming(const InputSimulationBatch& batch,
     std::uint64_t responses = 0;
     std::uint64_t computeDone = 0;
     std::uint8_t stagedMask = 0;
+    bool secondHalfPending = false;
     std::array<std::deque<std::uint64_t>, kSlotsPerABeat> pendingRequests;
     std::vector<std::uint64_t> acceptedCycles;
     for (const MulTimingRecord& timing : records) {
       const std::uint8_t validMask = timing.validSlotMasks[core];
       const std::uint8_t requestMask = timing.mulRequestMasks[core];
       const std::uint8_t responseMask = timing.mulResponseMasks[core];
+      const std::uint8_t xReadMask = timing.xReadMasks[core];
       const bool acceptedNow = (timing.beatAcceptedMask & coreBit) != 0;
-      if (requestMask != stagedMask ||
-          timing.xReadMasks[core] != (acceptedNow ? validMask : 0U) ||
-          (acceptedNow && validMask != 0xffU) ||
-          (!acceptedNow && validMask != 0U)) {
+      if (requestMask != stagedMask || xReadMask != validMask) {
         throw std::runtime_error("Cuper batch " + std::to_string(batchIndex) +
             " 的 A -> local_X -> FMUL 掩码流水错位，PE=" + std::to_string(core));
       }
+      if (secondHalfPending) {
+        if (acceptedNow || validMask != 0xaaU) {
+          throw std::runtime_error("Cuper batch " + std::to_string(batchIndex) +
+              " 的 pingpong 奇 lane 没有紧随偶 lane 发射，PE=" + std::to_string(core));
+        }
+        secondHalfPending = false;
+      } else if (acceptedNow) {
+        if (validMask == 0x55U) {
+          secondHalfPending = true;
+        } else if (validMask != 0xffU) {
+          throw std::runtime_error("Cuper batch " + std::to_string(batchIndex) +
+              " 的 A beat 首拍不是 8R 或偶 lane 半拍，PE=" + std::to_string(core));
+        }
+      } else if (validMask != 0U) {
+        throw std::runtime_error("Cuper batch " + std::to_string(batchIndex) +
+            " 的 local_X 读没有对应 A beat，PE=" + std::to_string(core));
+      }
+      valid += bitCount(validMask);
       if (acceptedNow) {
         ++accepted;
         acceptedCycles.push_back(timing.cycle);
-        valid += bitCount(validMask);
       }
-      xReads += bitCount(timing.xReadMasks[core]);
+      xReads += bitCount(xReadMask);
       requests += bitCount(requestMask);
       responses += bitCount(responseMask);
       for (std::size_t lane = 0; lane < kSlotsPerABeat; ++lane) {
@@ -914,19 +974,15 @@ void validateBatchMultiplyTiming(const InputSimulationBatch& batch,
         }
       }
       computeDone += (timing.computeDoneMask & coreBit) != 0;
-      stagedMask = acceptedNow ? validMask : 0U;
+      stagedMask = validMask;
     }
     if (accepted != expectedBeats || valid != expectedSlots ||
         xReads != expectedSlots || requests != expectedSlots || responses != expectedSlots ||
-        computeDone != 1 ||
-        std::adjacent_find(acceptedCycles.begin(), acceptedCycles.end(),
-            [](std::uint64_t previous, std::uint64_t current) {
-              return current != previous + 1U;
-            }) != acceptedCycles.end() ||
+        computeDone != 1 || secondHalfPending ||
         std::any_of(pendingRequests.begin(), pendingRequests.end(),
             [](const std::deque<std::uint64_t>& pending) { return !pending.empty(); })) {
       throw std::runtime_error("Cuper batch " + std::to_string(batchIndex) +
-          " 没有保持每 PE A beat II=1 或未完整排空 FMUL，PE=" + std::to_string(core));
+          " 没有完整排空 FMUL 或出现事件计数不一致，PE=" + std::to_string(core));
     }
   }
 }
@@ -949,7 +1005,7 @@ InputSimulationResult runWindowedInputSimulation(const InputSimulationData& inpu
         batch.xAddresses.size() != kXReaderCount || batch.xChannels.size() != kXReaderCount ||
         std::any_of(batch.xChannels.begin(), batch.xChannels.end(),
                     [](const auto& channel) { return channel.empty(); })) {
-      throw std::invalid_argument("Cuper batch 缺少完整的 A 子区间或双路 X 条带");
+      throw std::invalid_argument("Cuper batch 缺少完整的 A 子区间或 X 广播流");
     }
   }
 
@@ -996,8 +1052,10 @@ InputSimulationResult runWindowedInputSimulation(const InputSimulationData& inpu
     if (batch.has_value()) {
       timing.emplace();
       timing->cycle = timingRecords.size();
+      timing->globalCycle = record.cycle;
       timing->batch = *batch;
       timing->mulReady = dut.io_mulReady != 0;
+      timing->xWriteLanes = static_cast<std::uint8_t>(dut.io_timingXWriteLanes);
       for (std::size_t lane = 0; lane < ports.size(); ++lane) {
         if (*mulTiming[lane].beatAccepted) {
           timing->beatAcceptedMask |= static_cast<std::uint16_t>(1U << lane);
@@ -1078,6 +1136,8 @@ InputSimulationResult runWindowedInputSimulation(const InputSimulationData& inpu
       timingRecords.push_back(*timing);
     }
     record.xBeats = *status.front().xBeats;
+    record.xWriteLanes = static_cast<std::uint8_t>(dut.io_timingXWriteLanes);
+    record.xReadMask = static_cast<std::uint8_t>(dut.io_timingXReadMask);
     addressCount += bitCount(record.addressMask) + bitCount(record.xAddressMask) +
         bitCount(record.ctrlAddressMask);
     cycles.push_back(record);
@@ -1113,7 +1173,7 @@ InputSimulationResult runWindowedInputSimulation(const InputSimulationData& inpu
   if (!ctrlComplete || dut.io_mulError != 0) {
     throw std::runtime_error("Cuper Ctrl map 载入或硬件解释失败");
   }
-  validateContinuousWindowData(cycles, ctrlBegin, cycles.size(), input.ctrlChannel.size(),
+  validateContinuousWindowData(cycles, ctrlBegin, cycles.size(), input.ctrlChannel.size(), 1U,
       [](const CycleRecord& record) { return (record.ctrlDataMask & 1U) != 0; }, "Ctrl map");
 
   InputSimulationResult result;
@@ -1121,38 +1181,45 @@ InputSimulationResult runWindowedInputSimulation(const InputSimulationData& inpu
   std::size_t multiplyCount = 0;
   for (std::size_t batchIndex = 0; batchIndex < input.batches.size(); ++batchIndex) {
     const InputSimulationBatch& batch = input.batches[batchIndex];
+
+    // 让上一 batch 的 PE 和 X-page 状态在一个完整时钟周期内复位。
     dut.io_mulEnable = 0;
     dut.io_mulBatch = batchIndex;
+    for (DutPort& port : ports) idlePort(port);
+    for (DutPort& port : x) idlePort(port);
+    for (DutPort& port : ctrl) idlePort(port);
+    sampleCycle(std::nullopt, nullptr);
+
     initializeModels(xModels, batch.xAddresses, batch.xChannels,
         input.maxOutstandingBursts, "X");
-    const std::size_t xBegin = cycles.size();
-    bool xComplete = false;
-    for (std::uint64_t cycle = 0; cycle < kMaximumCycles; ++cycle) {
-      for (DutPort& port : ports) idlePort(port);
-      for (DutPort& port : ctrl) idlePort(port);
-      for (std::size_t lane = 0; lane < x.size(); ++lane) drivePort(x[lane], xModels[lane]);
-      sampleCycle(std::nullopt, nullptr);
-      const bool hbmComplete = std::all_of(xModels.begin(), xModels.end(),
-          [](const HbmModel& model) { return model.nextDataBeat == model.beats.size() && model.burstBeats.empty(); }) &&
-          std::all_of(x.begin(), x.end(), [](const DutPort& port) { return *port.idle != 0; });
-      if (hbmComplete) {
-        xComplete = true;
-        break;
-      }
-    }
-    if (!xComplete || std::any_of(x.begin(), x.end(), [](const DutPort& port) {
-      return *port.error != 0;
-    })) {
-      throw std::runtime_error("Cuper batch " + std::to_string(batchIndex) + " 的 X 窗口载入失败");
-    }
-    for (std::size_t lane = 0; lane < kXReaderCount; ++lane) {
-      validateContinuousWindowData(cycles, xBegin, cycles.size(), batch.xChannels[lane].size(),
-          [lane](const CycleRecord& record) { return (record.xDataMask & (1U << lane)) != 0; },
-          "Cuper batch " + std::to_string(batchIndex) + " X" + std::to_string(lane));
-    }
-
     initializeModels(aModels, batch.aAddresses, batch.aChannels,
         input.maxOutstandingBursts, "A");
+    const std::size_t batchBegin = cycles.size();
+    const auto xStreamsComplete = [&xModels, &x] {
+      return std::all_of(xModels.begin(), xModels.end(), [](const HbmModel& model) {
+        return model.nextDataBeat == model.beats.size() && model.burstBeats.empty();
+      }) && std::all_of(x.begin(), x.end(), [](const DutPort& port) { return *port.idle != 0; });
+    };
+    bool xComplete = false;
+    if (input.xPortSchedule == InputXPortSchedule::Preload) {
+      for (std::uint64_t cycle = 0; cycle < kMaximumCycles; ++cycle) {
+        for (DutPort& port : ports) idlePort(port);
+        for (std::size_t lane = 0; lane < x.size(); ++lane) drivePort(x[lane], xModels[lane]);
+        for (DutPort& port : ctrl) idlePort(port);
+        sampleCycle(std::nullopt, nullptr);
+        if (xStreamsComplete()) {
+          xComplete = true;
+          break;
+        }
+      }
+      if (!xComplete || std::any_of(x.begin(), x.end(), [](const DutPort& port) {
+            return *port.error != 0;
+          })) {
+        throw std::runtime_error("Cuper batch " + std::to_string(batchIndex) +
+            " 的 preload X 窗口载入失败");
+      }
+    }
+
     dut.io_mulEnable = 1;
     dut.io_mulBatch = batchIndex;
     dut.eval();
@@ -1165,10 +1232,15 @@ InputSimulationResult runWindowedInputSimulation(const InputSimulationData& inpu
       } else {
         for (DutPort& port : ports) idlePort(port);
       }
-      for (DutPort& port : x) idlePort(port);
+      if (input.xPortSchedule == InputXPortSchedule::PingPong) {
+        for (std::size_t lane = 0; lane < x.size(); ++lane) drivePort(x[lane], xModels[lane]);
+      } else {
+        for (DutPort& port : x) idlePort(port);
+      }
       for (DutPort& port : ctrl) idlePort(port);
       sampleCycle(batchIndex, &previousComputeDoneMask);
-      if (streamsComplete(aModels, ports) && dut.io_computeDone != 0) {
+      if (input.xPortSchedule == InputXPortSchedule::PingPong) xComplete = xStreamsComplete();
+      if (xComplete && streamsComplete(aModels, ports) && dut.io_computeDone != 0) {
         computeComplete = true;
         break;
       }
@@ -1179,6 +1251,25 @@ InputSimulationResult runWindowedInputSimulation(const InputSimulationData& inpu
     if (!computeComplete || dut.io_mulError != 0) {
       throw std::runtime_error("Cuper batch " + std::to_string(batchIndex) +
           " 的 Mixed-V3 FP64 乘法未完成或报告错误");
+    }
+    if (std::any_of(x.begin(), x.end(), [](const DutPort& port) { return *port.error != 0; })) {
+      throw std::runtime_error("Cuper batch " + std::to_string(batchIndex) + " 的 X 窗口载入失败");
+    }
+    for (std::size_t lane = 0; lane < kXReaderCount; ++lane) {
+      validateContinuousWindowData(cycles, batchBegin, cycles.size(), batch.xChannels[lane].size(),
+          2U,
+          [lane](const CycleRecord& record) { return (record.xDataMask & (1U << lane)) != 0; },
+          "Cuper batch " + std::to_string(batchIndex) + " X" + std::to_string(lane));
+    }
+    const auto firstABeat = std::find_if(batchTiming.begin(), batchTiming.end(),
+        [](const MulTimingRecord& timing) { return timing.beatAcceptedMask != 0; });
+    const auto lastXWrite = std::find_if(cycles.rbegin(), cycles.rend(),
+        [batchBegin](const CycleRecord& record) {
+          return record.cycle >= batchBegin && record.xWriteLanes != 0;
+        });
+    if (firstABeat != batchTiming.end() && lastXWrite != cycles.rend() &&
+        firstABeat->globalCycle < lastXWrite->cycle) {
+      ++result.xAEarlyStartBatches;
     }
     const std::uint64_t batchChecksum = dut.io_mulProductChecksum;
     if (batchChecksum != batch.expectedProductChecksum) {
@@ -1196,6 +1287,42 @@ InputSimulationResult runWindowedInputSimulation(const InputSimulationData& inpu
       multiplyCount != input.expectedMultiplyCount) {
     throw std::runtime_error("Cuper 分窗口乘法聚合 checksum 或有效 slot 数与完整 golden 不一致");
   }
+  for (const MulTimingRecord& timing : timingRecords) {
+    if (timing.xWriteLanes == 0) continue;
+    if (timing.xWriteLanes != 8U) {
+      throw std::runtime_error("local_X 写入必须保持 8 个 FP64，以匹配每 bank 一写");
+    }
+    if (input.xPortSchedule != InputXPortSchedule::PingPong) continue;
+    for (std::size_t core = 0; core < kAReaderCount; ++core) {
+      for (std::size_t replica = 0; replica < kSlotsPerABeat / 2U; ++replica) {
+        const std::uint8_t replicaMask = static_cast<std::uint8_t>(0x3U << (replica * 2U));
+        if (bitCount(static_cast<std::uint16_t>(timing.xReadMasks[core] & replicaMask)) > 1U) {
+          throw std::runtime_error("local_X 重叠期出现同一副本双读，违反 1R+1W 端口预算");
+        }
+      }
+    }
+  }
+  for (const CycleRecord& record : cycles) {
+    const bool writingX = record.xWriteLanes != 0;
+    const bool readingX = record.xReadMask != 0;
+    if (writingX && readingX) ++result.xOverlapCycles;
+    else if (writingX) ++result.xLoadCycles;
+    else if (readingX) ++result.xDrainCycles;
+  }
+  const auto firstABeat = std::find_if(timingRecords.begin(), timingRecords.end(),
+      [](const MulTimingRecord& timing) { return timing.beatAcceptedMask != 0; });
+  const auto firstMulRequest = std::find_if(timingRecords.begin(), timingRecords.end(),
+      [](const MulTimingRecord& timing) {
+        return std::any_of(timing.mulRequestMasks.begin(), timing.mulRequestMasks.end(),
+            [](std::uint8_t mask) { return mask != 0; });
+      });
+  if (firstABeat == timingRecords.end() || firstMulRequest == timingRecords.end()) {
+    throw std::runtime_error("Cuper 乘法没有记录首个 A beat 或 FMUL 请求");
+  }
+  result.firstABeatCycle = firstABeat->globalCycle;
+  result.firstMulRequestCycle = firstMulRequest->globalCycle;
+  result.startedA = true;
+  result.startedMul = true;
   result.cycles = cycles.size();
   result.mulCycles = timingRecords.size();
   result.multiplyCompared = true;

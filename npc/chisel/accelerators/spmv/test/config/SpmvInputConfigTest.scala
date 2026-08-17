@@ -24,9 +24,12 @@ class SpmvInputConfigTest extends AnyFlatSpec {
     assert(config.xReplicaCount == 4)
     assert(config.xElementWidth == 64)
     assert(config.xElementsPerBeat == 8)
-    assert(config.xWriteLanes == 16)
-    assert(config.xBankCount == 16)
-    assert(config.xBankDepth == 512)
+    assert(config.xWriteLanes == 8)
+    assert(config.xOverlapLanes == 4)
+    assert(config.xBankCount == 8)
+    assert(config.xBankDepth == 1024)
+    assert(config.xPortSchedule == SpmvXPortSchedule.Preload)
+    assert(SpmvInputConfig.Cuper16HbmPingPong.xPortSchedule == SpmvXPortSchedule.PingPong)
     assert(config.fp64MultiplyLaneCount == 8)
     assert(config.fp64MultiplyCoreCount == 16)
     assert(config.fp64MultiplyTotalLaneCount == 128)
@@ -60,11 +63,11 @@ class SpmvInputConfigTest extends AnyFlatSpec {
     val construction = new SpmvInputSimulationConfig
     implicit val parameters: Parameters = construction
     val input = parameters(SpmvInputConfigKey).get
-    val report = parameters(SpmvInputReportConfigKey)
+    val report = construction.spmvInputReportConfig
     val values = SpmvInputSimulationProfile.values(entry, construction, input, report).toMap
 
-    assert(values("ACCELERATOR_HOST_ABI") == "spmv-input-report-v12")
-    assert(values("PROTOCOL_ABI") == "spmv-input-windowed-v11")
+    assert(values("ACCELERATOR_HOST_ABI") == "spmv-input-report-v13")
+    assert(values("PROTOCOL_ABI") == "spmv-input-windowed-v12")
     assert(values("SPMV_INPUT_A_READER_COUNT") == "16")
     assert(values("SPMV_INPUT_X_READER_COUNT") == "2")
     assert(values("SPMV_INPUT_CTRL_READER_COUNT") == "1")
@@ -81,9 +84,12 @@ class SpmvInputConfigTest extends AnyFlatSpec {
     assert(values("SPMV_INPUT_CTRL_BROADCAST") == "1")
     assert(values("SPMV_INPUT_X_WINDOW_SIZE") == "8192")
     assert(values("SPMV_INPUT_X_REPLICA_COUNT") == "4")
-    assert(values("SPMV_INPUT_X_BANK_COUNT") == "16")
+    assert(values("SPMV_INPUT_X_BANK_COUNT") == "8")
     assert(values("SPMV_INPUT_X_ELEMENT_WIDTH") == "64")
-    assert(values("SPMV_CUPER_SLOT_ABI") == "cuper-a-slot-v3")
+    assert(values("SPMV_INPUT_X_PORT_SCHEDULE") == "preload")
+    assert(values("SPMV_INPUT_X_WRITE_LANES") == "8")
+    assert(values("SPMV_INPUT_X_OVERLAP_LANES") == "4")
+    assert(values("SPMV_CUPER_SLOT_ABI") == "cuper-a-slot-v4")
     assert(values("SPMV_CUPER_SLOT_COLUMN_BITS") == "13")
     assert(values("SPMV_CUPER_SLOT_TAG_BITS") == "3")
     assert(values("SPMV_CUPER_SLOT_ROW_BITS") == "16")

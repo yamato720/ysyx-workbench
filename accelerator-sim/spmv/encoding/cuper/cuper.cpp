@@ -58,7 +58,23 @@ void validateConfig(const CuperConfig& config) {
   }
 }
 
-void validateMatrix(const CsrMatrix& matrix) {
+std::size_t rowGroupSpan(const CuperConfig& config) {
+  const std::size_t totalPes = totalPeCount(config);
+  if (totalPes > std::numeric_limits<std::size_t>::max() / 2U) {
+    throw std::overflow_error("Cuper row group 跨度溢出");
+  }
+  return 2U * totalPes;
+}
+
+std::size_t localRowForRowUnchecked(std::size_t row, const CuperConfig& config) {
+  const std::size_t rowGroup = row / rowGroupSpan(config);
+  if (rowGroup > std::numeric_limits<std::size_t>::max() / 2U) {
+    throw std::overflow_error("Cuper PE-local 行标溢出");
+  }
+  return 2U * rowGroup + row % 2U;
+}
+
+void validateMatrix(const CsrMatrix& matrix, const CuperConfig& config) {
   if (matrix.rows == std::numeric_limits<std::size_t>::max() ||
       matrix.rowPointers.size() != matrix.rows + 1U) {
     throw std::invalid_argument("CSR row pointer 数量必须等于 rows + 1");
@@ -72,8 +88,8 @@ void validateMatrix(const CsrMatrix& matrix) {
   if (matrix.rowPointers.back() != matrix.columnIndices.size()) {
     throw std::invalid_argument("CSR 最后一个 row pointer 必须等于 nnz");
   }
-  if (matrix.rows > (std::size_t{1} << kRowBits)) {
-    throw std::invalid_argument("Cuper slot v3 的直接 16-bit 行标不能表示该矩阵行数");
+  if (matrix.rows != 0 && localRowForRowUnchecked(matrix.rows - 1U, config) > kRowMask) {
+    throw std::invalid_argument("Cuper slot v4 的 16-bit PE-local 行标不能表示该矩阵行数");
   }
   for (std::size_t row = 0; row < matrix.rows; ++row) {
     if (matrix.rowPointers[row] > matrix.rowPointers[row + 1U]) {
@@ -129,8 +145,9 @@ void assignAccumulationContexts(std::vector<ScheduledSlot>& scheduled) {
 
 std::uint64_t packSlot(const RawElement& element, std::uint32_t accumulationContext,
                        std::size_t batch, const CuperConfig& config) {
-  if (element.row > kRowMask) {
-    throw std::overflow_error("Cuper slot v3 的行标超过 16 bit");
+  const std::size_t localRow = localRowForRowUnchecked(element.row, config);
+  if (localRow > kRowMask) {
+    throw std::overflow_error("Cuper slot v4 的 PE-local 行标超过 16 bit");
   }
   if (accumulationContext >= kAccumulationContextCount) {
     throw std::overflow_error("Cuper 累加上下文超过 3 bit");
@@ -147,7 +164,7 @@ std::uint64_t packSlot(const RawElement& element, std::uint32_t accumulationCont
   std::memcpy(&valueBits, &element.value, sizeof(valueBits));
   return (static_cast<std::uint64_t>(localColumn) << 51U) |
       (static_cast<std::uint64_t>(accumulationContext) << 48U) |
-      (static_cast<std::uint64_t>(element.row) << 32U) | valueBits;
+      (static_cast<std::uint64_t>(localRow) << 32U) | valueBits;
 }
 
 std::size_t peForRowUnchecked(std::size_t row, const CuperConfig& config) {
@@ -177,17 +194,52 @@ std::size_t totalPeCount(const CuperConfig& config) {
 
 std::size_t peForRow(std::size_t row, const CuperConfig& config) {
   validateConfig(config);
-  if (row > kRowMask) {
-    throw std::out_of_range("Cuper slot v3 的直接行标超过 16 bit");
-  }
   return peForRowUnchecked(row, config);
+}
+
+std::size_t localRowForRow(std::size_t row, const CuperConfig& config) {
+  validateConfig(config);
+  const std::size_t localRow = localRowForRowUnchecked(row, config);
+  if (localRow > kRowMask) {
+    throw std::out_of_range("Cuper slot v4 的 PE-local 行标超过 16 bit");
+  }
+  return localRow;
+}
+
+std::size_t rowForPeLocal(std::size_t physicalPe, std::size_t localRow,
+                          const CuperConfig& config) {
+  validateConfig(config);
+  const std::size_t totalPes = totalPeCount(config);
+  if (physicalPe >= totalPes) {
+    throw std::out_of_range("Cuper 物理 PE 超出配置范围");
+  }
+  if (localRow > kRowMask) {
+    throw std::out_of_range("Cuper PE-local 行标超过 16 bit");
+  }
+
+  const std::size_t accumulatorGroupSize = config.hbmChannelCount / kCheckerCount;
+  const std::size_t block = physicalPe / kLanesPerBeat;
+  const std::size_t checker = block / accumulatorGroupSize;
+  const std::size_t accumulatorOffset = block % accumulatorGroupSize;
+  const std::size_t peInAccumulator = physicalPe % kLanesPerBeat;
+  const std::size_t logicalPacket = checker + kCheckerCount * accumulatorOffset +
+      config.hbmChannelCount * peInAccumulator;
+  const std::size_t rowGroup = localRow / 2U;
+  if (rowGroup > (std::numeric_limits<std::size_t>::max() - logicalPacket) / totalPes) {
+    throw std::overflow_error("Cuper 全局行标反解溢出");
+  }
+  const std::size_t packet = rowGroup * totalPes + logicalPacket;
+  if (packet > (std::numeric_limits<std::size_t>::max() - localRow % 2U) / 2U) {
+    throw std::overflow_error("Cuper 全局行标反解溢出");
+  }
+  return 2U * packet + localRow % 2U;
 }
 
 DecodedCuperSlot decodeSlot(std::uint64_t slot) {
   DecodedCuperSlot decoded;
   decoded.localColumn = static_cast<std::uint32_t>((slot >> 51U) & kColumnMask);
   decoded.tag = static_cast<std::uint32_t>((slot >> 48U) & kTagMask);
-  decoded.row = static_cast<std::uint32_t>((slot >> 32U) & kRowMask);
+  decoded.localRow = static_cast<std::uint32_t>((slot >> 32U) & kRowMask);
   const std::uint32_t valueBits = static_cast<std::uint32_t>(slot);
   static_assert(sizeof(valueBits) == sizeof(decoded.value));
   std::memcpy(&decoded.value, &valueBits, sizeof(valueBits));
@@ -196,16 +248,12 @@ DecodedCuperSlot decodeSlot(std::uint64_t slot) {
 
 CuperPackage encode(const CsrMatrix& matrix, const CuperConfig& config) {
   validateConfig(config);
-  validateMatrix(matrix);
+  validateMatrix(matrix, config);
 
   const std::size_t batchWidth = columnsPerBatch(config);
   const std::size_t batchCount = divideRoundedUp(matrix.columns, batchWidth);
   const std::size_t totalPes = totalPeCount(config);
-  if (totalPes > std::numeric_limits<std::size_t>::max() / 2U) {
-    throw std::overflow_error("Cuper row group 跨度溢出");
-  }
-  const std::size_t rowGroupSpan = 2U * totalPes;
-  const std::size_t rowGroupCount = divideRoundedUp(matrix.rows, rowGroupSpan);
+  const std::size_t rowGroupCount = divideRoundedUp(matrix.rows, rowGroupSpan(config));
 
   using PeElements = std::vector<std::vector<RawElement>>;
   std::vector<PeElements> batches;
@@ -246,7 +294,7 @@ CuperPackage encode(const CsrMatrix& matrix, const CuperConfig& config) {
       // 保持原 Cuper ping/pong 排程；L1 的目标映射以后单独定义。
       std::vector<std::size_t> nextPosition(rowGroupCount * 2U, 0);
       for (const RawElement& element : elements) {
-        const std::size_t rowGroup = element.row / rowGroupSpan;
+        const std::size_t rowGroup = element.row / rowGroupSpan(config);
         const std::size_t accumulatorTarget = rowGroup * 2U + element.row % 2U;
         std::size_t position = nextPosition[accumulatorTarget];
         while (position < scheduled.size() && scheduled[position].occupied) {

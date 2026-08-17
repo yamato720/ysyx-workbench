@@ -31,8 +31,8 @@ for (const sibling of ["performance.html", "input-pipeline.html"]) {
 
 for (const marker of [
   "SPMV 输入性能报告", "执行总览", "输入配置", "A 通道负载分布", "消费端校验",
-  "16 路 A reader", "2 路 X reader", "1 路 Ctrl reader", "16 个消费端",
-  "X 双 beat 原子广播", "Ctrl 广播",
+  "16 路 A reader", "1 路 X reader", "1 路 Ctrl reader", "16 个消费端",
+  "X 广播", "Ctrl 广播", "端口调度",
 ]) {
   if (!performanceHtml.includes(marker)) {
     throw new Error(`性能主页缺少 ${marker}`);
@@ -59,11 +59,12 @@ if (trace.aExpected.length !== 16 || trace.xExpected.length !== 2 ||
     trace.xExpected.some((beats) => beats <= 0) ||
     !Number.isInteger(trace.ctrlExpected) || trace.ctrlExpected <= 0 ||
     !Number.isInteger(trace.batchCount) || trace.batchCount <= 0 ||
+    !["preload", "pingpong"].includes(trace.xSchedule) ||
     trace.cycles <= 0 || trace.records.length !== trace.cycles) {
-  throw new Error("输入流水 trace 没有完整表示 16 路 A、双路 X、Ctrl 与 Cuper 窗口");
+  throw new Error("输入流水 trace 没有完整表示 16 路 A、两路 X、Ctrl 与 Cuper 窗口");
 }
 if (!inputPipelineHtml.includes("const streams=[{name:'Ctrl'")) {
-  throw new Error("输入流水泳道没有按 Ctrl、X0/X1、A0..A15 排列");
+  throw new Error("输入流水泳道没有按 Ctrl、X0、A0..A15 排列");
 }
 
 const allAMask = 0xffff;
@@ -86,18 +87,18 @@ function firstCycle(predicate) {
   return record.c;
 }
 
-function continuousRuns(name, expectedBeats, expectedRunCount, predicate) {
+function continuousRuns(name, expectedBeats, expectedRunCount, cycleStride, predicate) {
   const cycles = trace.records.filter(predicate).map((record) => record.c);
   const runs = [];
   for (const cycle of cycles) {
     const current = runs.at(-1);
-    if (current !== undefined && cycle === current.at(-1) + 1) current.push(cycle);
+    if (current !== undefined && cycle === current.at(-1) + cycleStride) current.push(cycle);
     else runs.push([cycle]);
   }
   if (cycles.length !== expectedBeats || runs.length !== expectedRunCount ||
       runs.some((run) => run.length === 0 || run.some((cycle, index) =>
-        index > 0 && cycle !== run[index - 1] + 1))) {
-    throw new Error(`${name} 没有按 Cuper 窗口逐拍连续返回 R`);
+        index > 0 && cycle !== run[index - 1] + cycleStride))) {
+    throw new Error(`${name} 的 HBM R 节拍不符合冻结端口调度`);
   }
   return runs;
 }
@@ -108,24 +109,25 @@ const ctrlRCycle = firstCycle((record) => record.cr !== 0);
 if (ctrlQCycle !== 0 || ctrlArCycle !== 1 || ctrlRCycle !== 2) {
   throw new Error("Ctrl map 没有按 cycle 0/1/2 连续启动和返回");
 }
-continuousRuns("Ctrl", trace.ctrlExpected, 1, (record) => (record.cr & 1) !== 0);
+continuousRuns("Ctrl", trace.ctrlExpected, 1, 1, (record) => (record.cr & 1) !== 0);
 
 trace.aExpected.forEach((beats, lane) => {
   const observed = trace.records.filter((record) => (record.r & (1 << lane)) !== 0).length;
   if (observed !== beats) throw new Error(`A${lane} 的 Cuper 多窗口 R beat 数不完整`);
 });
+const xBeatStride = 2;
+const xFirstDataLatency = 2;
 const xRuns = trace.xExpected.map((beats, lane) => continuousRuns(
-    `X${lane}`, beats, trace.batchCount, (record) => (record.xr & (1 << lane)) !== 0));
-if (xRuns[0].some((run, index) => run[0] !== xRuns[1][index][0] ||
-    run.at(-1) !== xRuns[1][index].at(-1))) {
-  throw new Error("X0/X1 没有按每个 Cuper 窗口原子广播");
-}
+    `X${lane}`, beats, trace.batchCount, xBeatStride,
+    (record) => (record.xr & (1 << lane)) !== 0));
 const xRequestCycles = trace.records.filter((record) => record.xq === 0x3).map((record) => record.c);
 const aRequestCycles = trace.records.filter((record) => record.q !== 0).map((record) => record.c);
 if (xRequestCycles.length !== trace.batchCount || aRequestCycles.length !== trace.batchCount ||
-    xRequestCycles.some((cycle, index) => cycle !== xRuns[0][index][0] - 2) ||
-    aRequestCycles.some((cycle, index) => cycle <= xRuns[0][index].at(-1))) {
-  throw new Error("输入流水没有按 Ctrl -> (X0/X1 -> A0..A15)* 的 Cuper 窗口顺序执行");
+    xRequestCycles.some((cycle, index) => cycle !== xRuns[0][index][0] - xFirstDataLatency) ||
+    (trace.xSchedule === "pingpong"
+        ? aRequestCycles.some((cycle, index) => cycle !== xRequestCycles[index])
+        : aRequestCycles.some((cycle, index) => cycle <= xRequestCycles[index]))) {
+  throw new Error("输入流水没有按冻结调度为每个 Cuper 窗口发起 X 和 A 请求");
 }
 
 for (const id of ["search", "zoom", "rows", "hscroll", "hscrollThumb"]) {
@@ -228,6 +230,7 @@ for (const batch of timingTrace.batches) {
     const pendingByLane = Array.from({length: timingTrace.lanesPerCore}, () => []);
     const acceptedCycles = [];
     let stagedMask = 0;
+    let secondHalfPending = false;
     let accepted = 0;
     let slots = 0;
     let xReads = 0;
@@ -242,16 +245,27 @@ for (const batch of timingTrace.batches) {
       const xReadMask = record.x[core];
       const requestMask = record.q[core];
       const responseMask = record.r[core];
-      if (requestMask !== stagedMask || xReadMask !== (acceptedNow ? slotMaskForCycle : 0) ||
-          (acceptedNow && slotMaskForCycle !== slotMask) ||
-          (!acceptedNow && slotMaskForCycle !== 0)) {
+      if (requestMask !== stagedMask || xReadMask !== slotMaskForCycle) {
         throw new Error(`Cuper batch ${batch.index} PE${core} 的 A -> local_X -> FMUL 掩码流水错位`);
+      }
+      if (secondHalfPending) {
+        if (acceptedNow || slotMaskForCycle !== 0xaa) {
+          throw new Error(`Cuper batch ${batch.index} PE${core} 的 pingpong 奇 lane 没有紧随偶 lane 发射`);
+        }
+        secondHalfPending = false;
+      } else if (acceptedNow) {
+        if (slotMaskForCycle === 0x55) secondHalfPending = true;
+        else if (slotMaskForCycle !== slotMask) {
+          throw new Error(`Cuper batch ${batch.index} PE${core} 的 A beat 首拍掩码非法`);
+        }
+      } else if (slotMaskForCycle !== 0) {
+        throw new Error(`Cuper batch ${batch.index} PE${core} 的 local_X 读没有对应 A beat`);
       }
       if (acceptedNow) {
         ++accepted;
         acceptedCycles.push(record.c);
-        slots += popcount(slotMaskForCycle);
       }
+      slots += popcount(slotMaskForCycle);
       xReads += popcount(xReadMask);
       requests += popcount(requestMask);
       responses += popcount(responseMask);
@@ -268,17 +282,16 @@ for (const batch of timingTrace.batches) {
         }
       }
       done += (record.d & bit) !== 0;
-      stagedMask = acceptedNow ? slotMaskForCycle : 0;
+      stagedMask = slotMaskForCycle;
     }
     const expectedInFlightDepth = timingTrace.lanesPerCore * Math.ceil(
         timingTrace.mulLatency / timingTrace.mulII);
     if (accepted !== batch.expectedBeats[core] || slots !== batch.expectedSlots[core] ||
         xReads !== batch.expectedSlots[core] || requests !== batch.expectedSlots[core] ||
         responses !== batch.expectedSlots[core] || done !== 1 || inFlight !== 0 ||
-        peakInFlight > expectedInFlightDepth ||
-        pendingByLane.some((pending) => pending.length !== 0) ||
-        acceptedCycles.some((cycle, index) => index > 0 && cycle !== acceptedCycles[index - 1] + 1)) {
-      throw new Error(`Cuper batch ${batch.index} PE${core} 没有保持 A beat II=1 或未完整排空 FMUL`);
+        peakInFlight > expectedInFlightDepth || secondHalfPending ||
+        pendingByLane.some((pending) => pending.length !== 0)) {
+      throw new Error(`Cuper batch ${batch.index} PE${core} 的 A -> FMUL 乘法路径未完整排空`);
     }
   }
   totalExpectedMultiply += batch.expectedMultiply;

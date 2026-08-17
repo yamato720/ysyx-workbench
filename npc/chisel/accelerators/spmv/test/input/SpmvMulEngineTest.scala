@@ -15,7 +15,7 @@ class SpmvMulEngineTest extends AnyFlatSpec {
     assert(chirrtl.contains("started"))
     assert(chirrtl.contains("product :"))
     assert(chirrtl.contains("productChecksum"))
-    assert(chirrtl.contains("stageRow"))
+    assert(chirrtl.contains("stageLocalRow"))
     assert(chirrtl.contains("stageTag"))
     assert(chirrtl.contains("stageBatch"))
     assert(chirrtl.contains("xReadColumn"))

@@ -35,7 +35,7 @@ class SpmvInputTopTest extends AnyFlatSpec {
     assert(chirrtl.contains("mulEnable"))
     assert(chirrtl.contains("mulBatch"))
     assert(chirrtl.contains("product"))
-    assert(chirrtl.contains("stageRow"))
+    assert(chirrtl.contains("stageLocalRow"))
     assert(chirrtl.contains("stageTag"))
     assert(chirrtl.contains("ctrlMapReady"))
     assert(chirrtl.contains("module SpmvCuperMap"))

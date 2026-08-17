@@ -11,12 +11,13 @@ import chisel3.util._
   * Core 以相邻 pointer 的差值限制每个 batch 的 Matrix_A_Stream，本模块保留同一语义：
   * 每轮 `mulBatch` 只允许对应范围的 A 请求进入 PE。
   *
-  * 上游 Cuper 的 batch 主循环标注最大 49；这里留出 64 个窗口，能覆盖当前的 n65536
-  * 八窗口仿真，同时把超出静态 map RAM 的作业明确标为协议错误而不是静默错算。
+  * 控制面为每个 A HBM 保存一个 batch 边界。完整 thermal2 按 8192 列分窗需要约 150
+  * 个窗口，因此保留 256 项容量；超过静态 map RAM 的作业仍明确报为协议错误而不是静默
+  * 错算。
   */
 object SpmvCuperMap {
   val mapKind = 1
-  val maxBatchCount = 64
+  val maxBatchCount = 256
   val batchIndexWidth = log2Ceil(maxBatchCount)
 }
 

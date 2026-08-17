@@ -29,9 +29,8 @@ object DescribeSpmvInputSimulationConfig extends App {
   val input = parameters(SpmvInputConfigKey).getOrElse(
     throw new IllegalArgumentException(s"${entry.className} 缺少 SpmvInputConfigKey")
   )
-  val report = parameters(SpmvInputReportConfigKey)
   ConstructionProfile.write(
     Path.of(args(0)),
-    SpmvInputSimulationProfile.values(entry, simulation, input, report)
+    SpmvInputSimulationProfile.values(entry, simulation, input, simulation.spmvInputReportConfig)
   )
 }

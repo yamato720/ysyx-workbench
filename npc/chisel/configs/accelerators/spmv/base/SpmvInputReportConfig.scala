@@ -1,7 +1,5 @@
 package accelerators.spmv
 
-import org.chipsalliance.cde.config.{Config => CDEConfig, Field}
-
 /** SPMV 输入仿真的 HTML 报告开关。
   *
   * 性能页是一次运行的报告主页；流水页是性能页下的逐周期子报告，因此不能单独启用。
@@ -28,11 +26,3 @@ object SpmvInputReportConfig {
     pipelineHtml = true
   )
 }
-
-case object SpmvInputReportConfigKey
-    extends Field[SpmvInputReportConfig](SpmvInputReportConfig.Disabled)
-
-class WithSpmvInputReportConfig(config: SpmvInputReportConfig)
-    extends CDEConfig((_, _, _) => {
-  case SpmvInputReportConfigKey => config
-})

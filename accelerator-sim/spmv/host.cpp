@@ -1,5 +1,6 @@
 #include "golden.hpp"
 #include "encoding/encoder.hpp"
+#include "encoding/cuper/demand_schedule.hpp"
 #include "input/input_simulation.hpp"
 
 #include <algorithm>
@@ -213,6 +214,7 @@ struct CuperAConfig {
   std::size_t axiIdWidth = 4;
   std::size_t maxOutstandingBursts = 2;
   std::size_t xWindowSize = 8192;
+  std::string xPortSchedule = "preload";
 };
 
 #ifndef SPMV_INPUT_PROFILE_FROZEN
@@ -233,6 +235,11 @@ std::uint64_t readUnsignedEnv(const char* name, std::uint64_t fallback) {
     throw std::invalid_argument(std::string(name) + " must be an unsigned integer");
   }
 }
+
+std::string readStringEnv(const char* name, const std::string& fallback) {
+  const char* configured = std::getenv(name);
+  return configured == nullptr || *configured == '\0' ? fallback : std::string(configured);
+}
 #endif
 
 CuperAConfig readCuperAConfig() {
@@ -241,7 +248,7 @@ CuperAConfig readCuperAConfig() {
   static_assert(SPMV_CUPER_SLOT_COLUMN_BITS_FROZEN == encoding::cuper::kColumnBits &&
       SPMV_CUPER_SLOT_TAG_BITS_FROZEN == encoding::cuper::kTagBits &&
       SPMV_CUPER_SLOT_ROW_BITS_FROZEN == encoding::cuper::kRowBits,
-      "冻结 profile 的 Cuper slot v3 位域与 host encoder 不一致");
+      "冻结 profile 的 Cuper slot v4 位域与 host encoder 不一致");
   config.aReaderCount = SPMV_INPUT_A_READER_COUNT_FROZEN;
   config.xReaderCount = SPMV_INPUT_X_READER_COUNT_FROZEN;
   config.ctrlReaderCount = SPMV_INPUT_CTRL_READER_COUNT_FROZEN;
@@ -254,6 +261,7 @@ CuperAConfig readCuperAConfig() {
   config.axiIdWidth = SPMV_INPUT_AXI_ID_WIDTH_FROZEN;
   config.maxOutstandingBursts = SPMV_INPUT_MAX_OUTSTANDING_BURSTS_FROZEN;
   config.xWindowSize = SPMV_INPUT_X_WINDOW_SIZE_DEFAULT;
+  config.xPortSchedule = SPMV_INPUT_X_PORT_SCHEDULE_FROZEN;
 #else
   config.aReaderCount = static_cast<std::size_t>(readUnsignedEnv(
       "SPMV_INPUT_A_READER_COUNT", config.aReaderCount));
@@ -281,6 +289,7 @@ CuperAConfig readCuperAConfig() {
 #endif
   config.xWindowSize = static_cast<std::size_t>(readUnsignedEnv(
       "SPMV_INPUT_X_WINDOW_SIZE", SPMV_INPUT_X_WINDOW_SIZE_DEFAULT));
+  config.xPortSchedule = readStringEnv("SPMV_INPUT_X_PORT_SCHEDULE", config.xPortSchedule);
 #endif
   if (config.aReaderCount == 0 || config.xReaderCount != 2 ||
       config.ctrlReaderCount != 1 ||
@@ -291,7 +300,8 @@ CuperAConfig readCuperAConfig() {
       config.maxOutstandingBursts < 2 ||
       (config.hbmBase & (config.channelAlignment - 1)) != 0 ||
       config.hbmBytes % config.channelAlignment != 0 ||
-      config.xWindowSize == 0 || (config.xWindowSize & (config.xWindowSize - 1)) != 0) {
+      config.xWindowSize == 0 || (config.xWindowSize & (config.xWindowSize - 1)) != 0 ||
+      (config.xPortSchedule != "preload" && config.xPortSchedule != "pingpong")) {
     throw std::invalid_argument("SPMV_INPUT profile contains an invalid Cuper input layout");
   }
   return config;
@@ -496,6 +506,8 @@ int runEncoding(const std::string& formatName, const std::string& requested) {
       std::string(encoding::encodingFormatName(encoded.format)) / (choice.name + ".html");
   const fs::path vectorReportPath = resolveEncodingReportDirectory() /
       std::string(encoding::encodingFormatName(encoded.format)) / (choice.name + "-x.html");
+  const fs::path demandSchedulePath = resolveEncodingReportDirectory() /
+      std::string(encoding::encodingFormatName(encoded.format)) / (choice.name + "-demand.json");
   encoding::writeVectorHtmlReport(vectorReportPath, encodedVector,
       encoding::EncodingReportMetadata{choice.name, (choice.path / "b.txt").string()});
   encoding::writeHtmlReport(reportPath, encoded,
@@ -505,6 +517,34 @@ int runEncoding(const std::string& formatName, const std::string& requested) {
     const auto& package = std::get<encoding::cuper::CuperPackage>(encoded.package);
     const auto& vectorPackage =
         std::get<encoding::cuper::CuperVectorPackage>(encodedVector.package);
+    const encoding::cuper::CuperDemandSchedule demandSchedule =
+        encoding::cuper::planXPageSchedule(package);
+    {
+      std::error_code error;
+      fs::create_directories(demandSchedulePath.parent_path(), error);
+      if (error) {
+        throw std::runtime_error("无法创建 Cuper X demand schedule 目录 " +
+            demandSchedulePath.parent_path().string() + ": " + error.message());
+      }
+      const fs::path temporary = demandSchedulePath.string() + ".tmp";
+      std::ofstream demandOutput(temporary);
+      if (!demandOutput) {
+        throw std::runtime_error("无法打开 Cuper X demand schedule: " + temporary.string());
+      }
+      encoding::cuper::writeDemandScheduleJson(demandOutput, demandSchedule,
+          choice.name, choice.path.string());
+      demandOutput.close();
+      if (!demandOutput) {
+        fs::remove(temporary);
+        throw std::runtime_error("无法写入 Cuper X demand schedule: " + temporary.string());
+      }
+      fs::rename(temporary, demandSchedulePath, error);
+      if (error) {
+        fs::remove(temporary);
+        throw std::runtime_error("无法发布 Cuper X demand schedule " +
+            demandSchedulePath.string() + ": " + error.message());
+      }
+    }
     const double milliseconds = std::chrono::duration<double, std::milli>(end - start).count();
     std::cout << "[spmv-encoding] format=" << encoding::encodingFormatName(encoded.format)
               << " scale=" << choice.name << " dataset=" << choice.path << '\n';
@@ -531,9 +571,20 @@ int runEncoding(const std::string& formatName, const std::string& requested) {
               << " allocated_beats=" << vectorPackage.stats.allocatedBeats
               << " replicas_per_core=" << encoding::cuper::kVectorReplicaCount
               << " cyclic_banks=" << encoding::cuper::kVectorPartitionFactor << '\n';
+    for (const encoding::cuper::CuperDemandBatchPlan& batch : demandSchedule.batches) {
+      std::cout << "[spmv-demand] batch=" << batch.batch
+                << " pages=" << batch.pageCount
+                << " x_load_cycles=" << batch.xLoadCycles
+                << " first_a_baseline=" << batch.baseline.firstIssueCycle
+                << " first_a_planned=" << batch.planned.firstIssueCycle
+                << " a_beats_before_x_complete=" << batch.planned.issuedBeforeXComplete
+                << " channels_started_before_x_complete="
+                << batch.planned.channelsStartedBeforeXComplete << '\n';
+    }
   }
   std::cout << "[spmv-encoding] html=" << reportPath << '\n';
   std::cout << "[spmv-encoding-x] html=" << vectorReportPath << '\n';
+  std::cout << "[spmv-demand] json=" << demandSchedulePath << '\n';
   return 0;
 }
 
@@ -555,8 +606,8 @@ void validateCuperBatchMap(const encoding::cuper::CuperPackage& package,
       package.matrixChannels.size() != inputConfig.aReaderCount) {
     throw std::runtime_error("Cuper map 与 local_X 窗口或 A HBM 布局不一致");
   }
-  if (package.stats.batchCount == 0 || package.stats.batchCount > 64U) {
-    throw std::runtime_error("Cuper map batch 数超出当前 64-entry 硬件控制 RAM");
+  if (package.stats.batchCount == 0 || package.stats.batchCount > 256U) {
+    throw std::runtime_error("Cuper map batch 数超出当前 256-entry 硬件控制 RAM");
   }
   for (std::size_t channel = 0; channel < package.matrixChannels.size(); ++channel) {
     const auto& pointers = package.channelBatchPointers[channel];
@@ -620,18 +671,36 @@ encoding::cuper::CuperBeat packXBeat(const std::vector<double>& input, std::size
 
 std::vector<std::vector<encoding::cuper::CuperBeat>> packXWindow(
     const std::vector<double>& input, std::size_t firstColumn, std::size_t lastColumn,
-    std::size_t xReaderCount) {
+    std::size_t xReaderCount, const encoding::cuper::CuperDemandBatchPlan& pagePlan,
+    std::size_t pageElements) {
   if (firstColumn >= lastColumn || lastColumn > input.size() || xReaderCount != 2U) {
     throw std::invalid_argument("Cuper X 窗口范围或双路条带配置非法");
   }
-  const std::size_t payloadBeats = (lastColumn - firstColumn +
-      encoding::cuper::kLanesPerBeat - 1U) / encoding::cuper::kLanesPerBeat;
-  // X0/X1 的请求必须原子发起；尾窗口不足两个 512-bit beat 时补一个零 beat 给 X1。
-  const std::size_t stripedBeats = std::max<std::size_t>(2U, (payloadBeats + 1U) & ~1U);
+  if (pageElements == 0 || pageElements % (xReaderCount * encoding::cuper::kLanesPerBeat) != 0U ||
+      pagePlan.columns != lastColumn - firstColumn || pagePlan.pageOrder.size() != pagePlan.pageCount) {
+    throw std::invalid_argument("Cuper X page 重排与物理 X 条带布局不兼容");
+  }
+  std::vector<bool> seen(pagePlan.pageCount, false);
+  std::vector<double> physicalWindow;
+  physicalWindow.reserve(pagePlan.pageCount * pageElements);
+  for (std::size_t logicalPage : pagePlan.pageOrder) {
+    if (logicalPage >= pagePlan.pageCount || seen[logicalPage]) {
+      throw std::invalid_argument("Cuper X page 重排不是一个 page 排列");
+    }
+    seen[logicalPage] = true;
+    for (std::size_t offset = 0; offset < pageElements; ++offset) {
+      const std::size_t sourceColumn = firstColumn + logicalPage * pageElements + offset;
+      physicalWindow.push_back(sourceColumn < lastColumn ? input[sourceColumn] : 0.0);
+    }
+  }
+  const std::size_t payloadBeats = physicalWindow.size() / encoding::cuper::kLanesPerBeat;
+  if (payloadBeats == 0 || payloadBeats % xReaderCount != 0U) {
+    throw std::logic_error("Cuper X page 打包没有形成等长单路广播流");
+  }
   std::vector<std::vector<encoding::cuper::CuperBeat>> channels(xReaderCount);
-  for (std::size_t beat = 0; beat < stripedBeats; ++beat) {
-    const std::size_t begin = firstColumn + beat * encoding::cuper::kLanesPerBeat;
-    channels[beat % xReaderCount].push_back(packXBeat(input, begin));
+  for (std::size_t beat = 0; beat < payloadBeats; ++beat) {
+    channels[beat % xReaderCount].push_back(
+        packXBeat(physicalWindow, beat * encoding::cuper::kLanesPerBeat));
   }
   return channels;
 }
@@ -703,8 +772,14 @@ int runInputTransactions(const std::string& requested) {
   encoding::EncodingOptions options;
   options.format = encoding::EncodingFormat::Cuper;
   const encoding::EncodedMatrix encoded = encoding::encodeMatrix(matrix, options);
-  const auto& package = std::get<encoding::cuper::CuperPackage>(encoded.package);
+  const auto& sourcePackage = std::get<encoding::cuper::CuperPackage>(encoded.package);
   const CuperAConfig config = readCuperAConfig();
+  const encoding::cuper::CuperDemandScheduleConfig demandConfig{
+      sourcePackage.config.sliceSize, 8U};
+  const encoding::cuper::CuperDemandSchedule demandSchedule =
+      encoding::cuper::planXPageSchedule(sourcePackage, demandConfig);
+  const encoding::cuper::CuperPackage package =
+      encoding::cuper::remapLocalColumnsForXPageSchedule(sourcePackage, demandSchedule);
   const CuperAInstances instances = instantiateCuperA(package, config);
   validateCuperAInstances(package, instances, config);
   validateCuperBatchMap(package, config);
@@ -721,6 +796,8 @@ int runInputTransactions(const std::string& requested) {
   simulation.xAddresses.resize(config.xReaderCount);
   simulation.xChannels.resize(config.xReaderCount);
   simulation.maxOutstandingBursts = config.maxOutstandingBursts;
+  simulation.xPortSchedule = config.xPortSchedule == "pingpong"
+      ? InputXPortSchedule::PingPong : InputXPortSchedule::Preload;
   std::vector<std::vector<std::size_t>> xBatchOffsets(
       package.stats.batchCount, std::vector<std::size_t>(config.xReaderCount));
   const std::size_t batchWidth = encoding::cuper::columnsPerBatch(package.config);
@@ -740,24 +817,25 @@ int runInputTransactions(const std::string& requested) {
     }
     const std::size_t firstColumn = batch * batchWidth;
     const std::size_t lastColumn = std::min(firstColumn + batchWidth, x.size());
-    window.xChannels = packXWindow(x, firstColumn, lastColumn, config.xReaderCount);
+    window.xChannels = packXWindow(x, firstColumn, lastColumn, config.xReaderCount,
+        demandSchedule.batches[batch], demandSchedule.config.pageElements);
     window.xAddresses.resize(config.xReaderCount);
     for (std::size_t channel = 0; channel < config.xReaderCount; ++channel) {
       xBatchOffsets[batch][channel] = simulation.xChannels[channel].size();
       simulation.xChannels[channel].insert(simulation.xChannels[channel].end(),
           window.xChannels[channel].begin(), window.xChannels[channel].end());
     }
-    window.expectedProductChecksum = computeMixedProductChecksum(package, x, batch);
+    window.expectedProductChecksum = computeMixedProductChecksum(sourcePackage, x, batch);
     simulation.expectedProductChecksum ^= window.expectedProductChecksum;
     simulation.expectedMultiplyCount += window.expectedMultiplyCount;
     simulation.batches.push_back(std::move(window));
   }
-  // slot v3 不再在带内编码 padding；每个物理 lane 都会读 X 并进入 FMUL。
+  // slot v4 不再在带内编码 padding；每个物理 lane 都会读 X 并进入 FMUL。
   // CSR nnz 只用于编码密度统计，不能作为实际 FMUL 数的验收基准。
   const std::uint64_t expectedPhysicalMultiplyCount =
       package.stats.totalMatrixBeats * encoding::cuper::kLanesPerBeat;
   if (simulation.expectedMultiplyCount != expectedPhysicalMultiplyCount ||
-      simulation.expectedProductChecksum != computeMixedProductChecksum(package, x)) {
+      simulation.expectedProductChecksum != computeMixedProductChecksum(sourcePackage, x)) {
     throw std::runtime_error("Cuper 分窗口 Mixed-V3 golden 与完整物理 slot 流不一致");
   }
   simulation.multiplyExpected = true;
@@ -813,6 +891,14 @@ int runInputTransactions(const std::string& requested) {
     std::cout << "[spmv-input] mixed-v3 fp64_mul=" << simulation.expectedMultiplyCount
               << " product_checksum=0x" << std::hex << simulation.expectedProductChecksum << std::dec
               << " mul_cycles=" << result.mulCycles << " PASS\n";
+    std::cout << "[spmv-input] schedule=" << config.xPortSchedule
+              << " x_load_cycles=" << result.xLoadCycles
+              << " x_overlap_cycles=" << result.xOverlapCycles
+              << " x_drain_cycles=" << result.xDrainCycles
+              << " first_a_cycle=" << result.firstABeatCycle
+              << " first_fmul_cycle=" << result.firstMulRequestCycle
+              << " early_a_batches=" << result.xAEarlyStartBatches << '/'
+              << simulation.batches.size() << " PASS\n";
   }
   if (!result.performanceReport.empty()) {
     std::cout << "[spmv-input] performance=" << result.performanceReport << '\n';
