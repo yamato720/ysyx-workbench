@@ -133,6 +133,26 @@ else ifneq ($(strip $(NPC_CONSTRUCTION_DIR)),)
 	if test "$(SCOPE)" = fpga; then \
 		artifacts="$(FPGA_ARTIFACT_DIR)"; \
 		if test "$(FPGA_BOARD)" = u55c; then \
+			reset_u55c() { \
+				reset_label="$$1"; \
+				xbutil="$${NEMU_FPGA_XBUTIL:-$${XRT_ROOT:+$$XRT_ROOT/bin/}xbutil}"; \
+				command -v "$$xbutil" >/dev/null 2>&1 || { echo "U55C $$reset_label 需要 xbutil；请设置 XRT_ROOT 或 NEMU_FPGA_XBUTIL" >&2; return 1; }; \
+				bdf="$${NEMU_FPGA_XRT_BDF:-}"; \
+				if test -z "$$bdf"; then \
+					device_index="$${NEMU_FPGA_DEVICE_INDEX:-0}"; \
+					test "$$device_index" = 0 || { echo "NEMU_FPGA_DEVICE_INDEX=$$device_index 需要同时设置 NEMU_FPGA_XRT_BDF" >&2; return 1; }; \
+					bdf="$$($$xbutil --batch examine 2>/dev/null | sed -n 's/^[[:space:]]*\[\([[:xdigit:]:.]*\)\][[:space:]]*:.*/\1/p' | head -n 1)"; \
+				fi; \
+				printf '%s\n' "$$bdf" | grep -Eq '^[[:xdigit:]]{4}:[[:xdigit:]]{2}:[[:xdigit:]]{2}\.[[:xdigit:]]$$' || { echo "无效的 U55C BDF：$$bdf" >&2; return 1; }; \
+				printf '%s：重置 U55C %s，清理整卡 AXI/HBM 状态...\n' "$$reset_label" "$$bdf"; \
+				"$$xbutil" --batch --force reset --device "$$bdf" --type user || return 1; \
+				ready=0; \
+				while :; do \
+					if "$$xbutil" --batch examine 2>/dev/null | awk -v bdf="$$bdf" 'index($$0, "[" bdf "]") && /Yes/ { found=1 } END { exit !found }' && \
+						find /dev/dri -maxdepth 1 -name 'renderD*' -print -quit 2>/dev/null | grep -q .; then ready=1; break; fi; \
+					sleep 1; \
+					done; \
+			}; \
 			if test "$(reset)" = 1; then \
 				xbutil="$${NEMU_FPGA_XBUTIL:-$${XRT_ROOT:+$$XRT_ROOT/bin/}xbutil}"; \
 				command -v "$$xbutil" >/dev/null 2>&1 || { echo "U55C reset=1 需要 xbutil；请设置 XRT_ROOT 或 NEMU_FPGA_XBUTIL" >&2; exit 1; }; \
@@ -145,12 +165,12 @@ else ifneq ($(strip $(NPC_CONSTRUCTION_DIR)),)
 				printf '%s\n' "$$bdf" | grep -Eq '^[[:xdigit:]]{4}:[[:xdigit:]]{2}:[[:xdigit:]]{2}\.[[:xdigit:]]$$' || { echo "无效的 U55C BDF：$$bdf" >&2; exit 1; }; \
 				printf 'reset=1：重置 U55C %s，再装载 xclbin...\n' "$$bdf"; \
 				"$$xbutil" --batch --force reset --device "$$bdf" --type user; \
-				ready=0; attempt=0; \
-				while test "$$attempt" -lt 30; do \
-					if "$$xbutil" --batch examine 2>/dev/null | awk -v bdf="$$bdf" 'index($$0, "[" bdf "]") && /Yes/ { found=1 } END { exit !found }'; then ready=1; break; fi; \
-					attempt=$$((attempt + 1)); sleep 1; \
+				ready=0; \
+				while :; do \
+					if "$$xbutil" --batch examine 2>/dev/null | awk -v bdf="$$bdf" 'index($$0, "[" bdf "]") && /Yes/ { found=1 } END { exit !found }' && \
+						find /dev/dri -maxdepth 1 -name 'renderD*' -print -quit 2>/dev/null | grep -q .; then ready=1; break; fi; \
+					sleep 1; \
 					done; \
-					test "$$ready" = 1 || { echo "U55C reset 后未在 30 秒内恢复就绪：$$bdf" >&2; exit 1; }; \
 			fi; \
 			xclbin="$$artifacts/npc-$(FPGA_PLATFORM).xclbin"; \
 			xclbinutil="$${XCLBINUTIL:-xclbinutil}"; \
@@ -163,6 +183,11 @@ else ifneq ($(strip $(NPC_CONSTRUCTION_DIR)),)
 		else echo "未知 FPGA 板卡：$(FPGA_BOARD)" >&2; exit 1; fi; \
 	fi; \
 	status=0; "$(NEMU_CONSTRUCTION_EXEC)" $(NEMUFLAGS) $(1) -e "$(IMAGE).elf" "$(IMAGE).bin" || status=$$?; \
+	if test "$(SCOPE)" = fpga && test "$(FPGA_BOARD)" = u55c && test "$$status" -ne 0; then \
+		if ! reset_u55c "异常退出恢复"; then \
+			echo 'U55C 异常退出后的整卡复位失败；板卡状态仍需人工检查。' >&2; \
+		fi; \
+	fi; \
 	temporary_link="$$runtime_root/.latest-$$run_id"; \
 	ln -s "$$run_id" "$$temporary_link"; mv -Tf "$$temporary_link" "$$runtime_root/latest"; \
 	if find "$$run_dir" -maxdepth 1 -type f \( -name 'performance.html' -o -name 'instructions.html' -o -name 'pipeline.html' -o -name 'wave-*.vcd' \) -print -quit | grep -q .; then \

@@ -26,6 +26,7 @@ class NpcMemoryFabric(config: NpcConfig) extends Module {
     val l2FlushDone = Output(Bool())
     val l2Drained = Output(Bool())
     val l2Statistics = Output(new CacheStatistics)
+    val drained = Output(Bool())
   })
 
   if (axiConfig.useExternalMaster) {
@@ -65,6 +66,7 @@ class NpcMemoryFabric(config: NpcConfig) extends Module {
       io.l2Drained := true.B
       io.l2Statistics := 0.U.asTypeOf(new CacheStatistics)
     }
+    io.drained := liteArbiter.io.drained && axiBridge.io.drained
     io.master <> axiBridge.io.axi
   } else {
     // 本地主存 timing 只属于 DPI RAM；MMIO 保持即时路径，不能被误当成 HBM 延迟。
@@ -166,6 +168,8 @@ class NpcMemoryFabric(config: NpcConfig) extends Module {
       io.l2Drained := true.B
       io.l2Statistics := 0.U.asTypeOf(new CacheStatistics)
     }
+    // 本地 DPI 路径不连接 FPGA 外部 AXI；其维护状态由各自的 cache 信号负责。
+    io.drained := true.B
 
     io.master.aw.valid := false.B
     io.master.aw.bits.id := 0.U

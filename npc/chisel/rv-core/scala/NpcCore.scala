@@ -41,6 +41,7 @@ class NpcCore(
     val interrupt = Input(Bool())
     val master = new Axi4ReadWriteMasterIO(axiConfig.addrWidth, memoryDataWidth, axiConfig.idWidth)
     val memoryFault = Output(new MemoryFault(axiConfig.addrWidth))
+    val memoryDrained = Output(Bool())
     val putch = if (axiConfig.useExternalMaster) Some(Decoupled(UInt(8.W))) else None
     val debug = if (debugEnabled) {
       Some(Output(new NpcCoreDebugBundle(cfg, axiConfig.addrWidth, axiConfig.dataWidth)))
@@ -150,6 +151,7 @@ class NpcCore(
     io.cacheMaintenance.foreach(_.drained := true.B)
   }
   io.master <> memoryFabric.io.master
+  io.memoryDrained := memoryFabric.io.drained
 
   // 后端故障优先，因为它携带了已提交到 MEM 阶段的指令访问。
   io.memoryFault.valid := backend.io.memoryFault.valid || frontend.io.memoryFault.valid

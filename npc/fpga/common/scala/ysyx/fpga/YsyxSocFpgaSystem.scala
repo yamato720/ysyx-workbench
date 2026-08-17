@@ -26,6 +26,8 @@ class YsyxSocFpgaSystem(implicit val parameters: Parameters) extends Module {
   if (msoc.cacheMaintenance.isEmpty) {
     mailbox.io.cacheDrained := true.B
   }
+  // SoC 外部内存的事务由系统互联负责收敛；当前 mailbox 只需等待 cache 维护。
+  mailbox.io.memoryDrained := true.B
   val memory = soc.fpgaMemory.head
 
   msoc.intr_from_chipSlave := io.interrupt || mailbox.io.guestExternalInterrupt

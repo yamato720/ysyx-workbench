@@ -44,6 +44,34 @@ class U55cRv64NpcFpgaConfig extends CDEConfig(
     )
 ) with U55cNpcTerminal with FpgaIpTerminal
 
+/** U55C RV64IM 的 100 MHz 高性能上板终端。
+  *
+  * 与 300 MHz 时序实验使用相同的核心、前端和整数 IP 配方，但关闭性能监测与 FPGA
+  * 运行时 SDB；NEMU 只保留普通 U55C host，不生成调试或性能报告数据。
+  */
+class U55cRv64Npc100MHzFpgaConfig extends CDEConfig(
+  new U55c100MHzBoardConfig ++
+    new ConstructionConfig(
+      new BranchPredictorConfig ++
+        new Rv64IMZicsrConfig ++
+        new PipelineDualFwdTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecutePerformConfig ++
+        new FpgaNpcIntegrationConfig ++
+        new BaseConfig
+    )
+) with U55cNpcTerminal with FpgaIpTerminal
+
+/** U55C RV64IM 的 225 MHz 高性能上板终端，关闭性能监测与运行时 SDB。 */
+class U55cRv64Npc225MHzFpgaConfig extends CDEConfig(
+  new U55c225MHzBoardConfig ++
+    new ConstructionConfig(
+      new BranchPredictorConfig ++
+        new Rv64IMZicsrConfig ++
+        new PipelineDualFwdTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecutePerformConfig ++
+        new FpgaNpcIntegrationConfig ++
+        new BaseConfig
+    )
+) with U55cNpcTerminal with FpgaIpTerminal
+
 /** U55C RV64IM 裸 NPC 的 300 MHz 时序实验终端。
   *
   * 保持完整运行 ABI 与单实现策略，便于将结果和默认 U55C 终端逐项比较；频率仅属于

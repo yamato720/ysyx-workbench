@@ -24,6 +24,7 @@ class NpcFpgaSystem(implicit parameters: Parameters) extends Module {
   val core = withReset(reset.asBool || mailbox.io.coreReset) {
     Module(new NpcCore(config, FpgaCoreComponents.forAttachment(FpgaConfigParameters.ipAttachment)))
   }
+  mailbox.io.memoryDrained := core.io.memoryDrained
   core.io.cacheMaintenance.foreach { maintenance =>
     maintenance.drainRequest := mailbox.io.cacheDrainRequest
     mailbox.io.cacheDrained := maintenance.drained

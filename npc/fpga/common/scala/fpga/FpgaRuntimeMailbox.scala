@@ -31,6 +31,7 @@ class FpgaRuntimeMailbox(width: Int, sdbEnabled: Boolean = true, cacheEnabled: B
     val mailboxInterrupt = Output(Bool())
     val cacheDrainRequest = Output(Bool())
     val cacheDrained = Input(Bool())
+    val memoryDrained = Input(Bool())
   })
 
   val coreReset = RegInit(true.B)
@@ -42,8 +43,7 @@ class FpgaRuntimeMailbox(width: Int, sdbEnabled: Boolean = true, cacheEnabled: B
   val completionPc = RegInit(0.U(width.W))
   val completionNextPc = RegInit(0.U(width.W))
   val completionDraining = RegInit(false.B)
-  // The core that owns these counters is reset at mtestexit. Keep a mailbox
-  // copy so the host can read the completed run after that reset.
+  // mtestexit 后 core 会复位；缓存统计先复制到 mailbox，避免复位丢失。
   val completionCache = RegInit(0.U.asTypeOf(new FpgaRuntimeCacheStatus))
   val completionCacheValid = RegInit(false.B)
   val completionCacheSnapshotPending = RegInit(false.B)
@@ -199,27 +199,27 @@ class FpgaRuntimeMailbox(width: Int, sdbEnabled: Boolean = true, cacheEnabled: B
     bValid := true.B
   }
 
-  // A committed write to custom machine CSR mtestexit (0x7c0) is the FPGA
-  // completion boundary. It is a host notification, not a debug halt or a
-  // RISC-V external interrupt; EBREAK remains a normal breakpoint trap.
+  // mtestexit 提交后先停止新的 dispatch，等待外部 AXI 与 cache 维护完成，
+  // 再产生 completion 并复位 core，避免把尚未返回的 HBM 事务留在卡上。
   val completionCommit = io.runtime.completionCommitValid
   when(completionCommit && !coreReset && !completionPending && !completionDraining) {
     completionCode := io.runtime.completionCode
     completionPc := io.runtime.completionCommitPc
     completionNextPc := io.runtime.completionCommitNextPc
     if (sdbEnabled) { completionGprs.get := io.runtime.sdb.get.gprs }
+    completionDraining := true.B
+  }
+
+  when(completionDraining && io.memoryDrained &&
+      (!cacheEnabled.B || io.cacheDrained) && !completionCacheSnapshotPending) {
     if (cacheEnabled) {
-      completionDraining := true.B
+      // 延迟一拍再采样，确保 drain 应答边沿产生的最后一次 writeback 计数已可见。
+      completionCacheSnapshotPending := true.B
     } else {
+      completionDraining := false.B
       completionPending := true.B
       coreReset := true.B
     }
-  }
-
-  when(cacheEnabled.B && completionDraining && io.cacheDrained && !completionCacheSnapshotPending) {
-    // Delay the snapshot by one clock after drain acknowledgement. A dirty
-    // writeback can update its counter on the acknowledgement edge.
-    completionCacheSnapshotPending := true.B
   }
 
   when(cacheEnabled.B && completionCacheSnapshotPending) {

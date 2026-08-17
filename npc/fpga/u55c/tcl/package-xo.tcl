@@ -8,8 +8,8 @@ if {$axi_data_width < $xlen || ($axi_data_width & ($axi_data_width - 1)) != 0} {
   error "U55C AXI data width must be a power of two no narrower than XLEN, got $axi_data_width"
 }
 if {$platform_clock_mhz != 300} { error "U55C platform DATA_CLK must be 300 MHz, got $platform_clock_mhz" }
-if {$core_clock_mhz ni {100 125 150 200 250 300}} {
-  error "U55C core clock must be one of 100, 125, 150, 200, 250, 300 MHz, got $core_clock_mhz"
+if {$core_clock_mhz ni {100 125 150 200 225 250 300}} {
+  error "U55C core clock must be one of 100, 125, 150, 200, 225, 250, 300 MHz, got $core_clock_mhz"
 }
 if {$core_clock_mhz > $platform_clock_mhz} {
   error "U55C core clock $core_clock_mhz MHz exceeds platform DATA_CLK $platform_clock_mhz MHz"

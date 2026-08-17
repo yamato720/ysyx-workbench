@@ -182,6 +182,7 @@ class AxiLiteToAxi4Full(
   val io = IO(new Bundle {
     val lite = Flipped(new AxiLiteMasterIO(addrWidth, dataWidth))
     val axi  = new Axi4ReadWriteMasterIO(addrWidth, dataWidth, idWidth)
+    val drained = Output(Bool())
   })
 
   private val axiId    = transactionId.U(idWidth.W)
@@ -253,6 +254,9 @@ class AxiLiteToAxi4Full(
     wSent                := false.B
     writeResponsePending := false.B
   }
+
+  // 只有读响应和写响应都已返回，下一拍才允许上层复位 core。
+  io.drained := !readOutstanding && !awSent && !wSent && !writeResponsePending
 }
 
 /** 两个 AXI4-Lite 主设备到一个 AXI4-Lite 主设备的仲裁器。
@@ -265,6 +269,7 @@ class AxiLiteArbiter2(addrWidth: Int = 32, dataWidth: Int = 64) extends Module {
   val io = IO(new Bundle {
     val clients = Vec(2, Flipped(new AxiLiteMasterIO(addrWidth, dataWidth)))
     val master  = new AxiLiteMasterIO(addrWidth, dataWidth)
+    val drained = Output(Bool())
   })
 
   // 所有未被选中的客户端保持反压；响应仅送回发起请求的客户端。
@@ -371,6 +376,9 @@ class AxiLiteArbiter2(addrWidth: Int = 32, dataWidth: Int = 64) extends Module {
       }
     }
   }
+
+  // Arbiter 仍持有请求或等待响应时，外部内存事务尚未完全收敛。
+  io.drained := !readBusy && !writeBusy
 }
 
 

@@ -55,6 +55,40 @@ class U55cBoardConfig(
     new WithFpgaBoardConfig(FpgaBoard.U55c)
 )
 
+/** U55C 100 MHz 的高性能整数板卡策略。
+  *
+  * 核心保留分段乘法器和无回压除法器；本次上板只保留普通运行时 ABI，关闭性能监测
+  * trace 与 SDB halt/step 调试面，避免额外的观测通路参与实现压力评估。
+  */
+class U55c100MHzBoardConfig extends CDEConfig(
+  new WithFpgaPerformanceMonitorConfig(FpgaPerformanceMonitorConfig.Disabled) ++
+    new WithFpgaRuntimeSdbConfig(FpgaRuntimeSdbConfig.Disabled) ++
+    new U55cBoardConfig(
+      coreClockMHz = 100,
+      ipAttachment = U55cXilinxIpAttachment(
+        OperatorIpTimingConfig.Default.copy(
+          multiply = OperatorIpTimingConfig.Default.multiply.copy(latency = 6)
+        ),
+        dividerNonBlocking = true
+      )
+    )
+)
+
+/** U55C 225 MHz 的高性能整数板卡策略，关闭性能监测与 FPGA 运行时调试。 */
+class U55c225MHzBoardConfig extends CDEConfig(
+  new WithFpgaPerformanceMonitorConfig(FpgaPerformanceMonitorConfig.Disabled) ++
+    new WithFpgaRuntimeSdbConfig(FpgaRuntimeSdbConfig.Disabled) ++
+    new U55cBoardConfig(
+      coreClockMHz = 225,
+      ipAttachment = U55cXilinxIpAttachment(
+        OperatorIpTimingConfig.Default.copy(
+          multiply = OperatorIpTimingConfig.Default.multiply.copy(latency = 6)
+        ),
+        dividerNonBlocking = true
+      )
+    )
+)
+
 /** U55C 的 300 MHz 板卡策略。
   *
   * RV64 乘法器改用六级流水切分 DSP 组合链；除法器改为无输出回压的 fixed-latency
