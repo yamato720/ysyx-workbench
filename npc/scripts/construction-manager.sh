@@ -50,7 +50,7 @@ matching_mark() {
 valid_protocol_abi() {
   local scope=$1 board=${2:-} abi=$3
   case "$scope:$board:$abi" in
-    fpga:u55c:npc-fpga-runtime-v11|fpga:u55c:npc-fpga-runtime-v13-performance-monitor|fpga:u55c:spmv-resource-probe-v1|fpga:u55c:spmv-resource-probe-v2|fpga:zcu102:npc-fpga-runtime-v7|npc::npc-dpi-v1|soc::ysyx-dpi-v1|spmv::spmv-input-windowed-v12) return 0 ;;
+    fpga:u55c:npc-fpga-runtime-v11|fpga:u55c:npc-fpga-runtime-v13-performance-monitor|fpga:u55c:spmv-resource-probe-v1|fpga:u55c:spmv-resource-probe-v2|fpga:u55c:spmv-input-u55c-windowed-v1|fpga:zcu102:npc-fpga-runtime-v7|npc::npc-dpi-v1|soc::ysyx-dpi-v1|spmv::spmv-input-windowed-v12) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -721,8 +721,22 @@ construction_is_complete() {
   profile="$directory/profile.env"
   host_abi=$(value "$profile" HOST_ABI)
   scope=$(value "$profile" SCOPE)
+  # U55C SPMV input 的 dry-run 只验证构造分层，写出的 xclbin 是文本占位，
+  # 绝不能作为可由 XRT 启动的 FPGA 资产发布。
+  if [[ $scope == fpga && $(value "$profile" ACCELERATOR_HOST_ABI) == spmv-input-u55c-runtime-v1 &&
+    $(value "$directory/construction.env" CONSTRUCTION_DRY_RUN) == 1 ]]; then
+    return 1
+  fi
   if [[ $scope == spmv ]]; then
     verify_host_assets "$directory" >/dev/null 2>&1
+    return
+  fi
+  if [[ $scope == fpga && $(value "$profile" ACCELERATOR_HOST_ABI) == spmv-input-u55c-runtime-v1 ]]; then
+    [[ -s $directory/fpga/artifacts/spmv-input.xclbin &&
+      -s $directory/fpga/artifacts/spmv-input.xo &&
+      -s $directory/fpga/artifacts/SpmvFp64MulXilinxCore.xci ]] || return 1
+    verify_host_assets "$directory" >/dev/null 2>&1 &&
+      verify_fpga_artifacts "$directory" "$profile" >/dev/null 2>&1
     return
   fi
   [[ $host_abi == none || -x $directory/abi/nemu/nemu-exec ]] || return 1
@@ -824,13 +838,17 @@ mark_construction_complete() {
     board=$(value "$profile" FPGA_BOARD)
     platform=$(value "$profile" FPGA_PLATFORM)
     capability=$(value "$profile" CAPABILITY)
-    case "$board:$capability" in
-      u55c:synthesize-only) artifact='fpga/artifacts/spmv-resource-probe.xo' ;;
-      u55c:bitstream-only) artifact='fpga/artifacts/spmv-resource-probe.xclbin' ;;
-      u55c:*) artifact="fpga/artifacts/npc-$platform.xclbin" ;;
-      zcu102:*) artifact='fpga/artifacts/npc.bit' ;;
-      *) echo "无法标记未知 FPGA 板卡构造完成：$board" >&2; return 1 ;;
-    esac
+    if [[ $board == u55c && $(value "$profile" ACCELERATOR_HOST_ABI) == spmv-input-u55c-runtime-v1 ]]; then
+      artifact='fpga/artifacts/spmv-input.xclbin'
+    else
+      case "$board:$capability" in
+        u55c:synthesize-only) artifact='fpga/artifacts/spmv-resource-probe.xo' ;;
+        u55c:bitstream-only) artifact='fpga/artifacts/spmv-resource-probe.xclbin' ;;
+        u55c:*) artifact="fpga/artifacts/npc-$platform.xclbin" ;;
+        zcu102:*) artifact='fpga/artifacts/npc.bit' ;;
+        *) echo "无法标记未知 FPGA 板卡构造完成：$board" >&2; return 1 ;;
+      esac
+    fi
     [[ -s $directory/$artifact ]] || {
       echo "FPGA 构造缺少最终比特流：$directory/$artifact" >&2
       return 1
@@ -904,7 +922,13 @@ write_version_info() {
     *) echo "构造 TARGET 非法：$profile（$target）" >&2; exit 1 ;;
   esac
   case "$scope:$target" in
-    fpga:SPMV) running_time=SYNTH ;;
+    fpga:SPMV)
+      if [[ $(value "$profile" ACCELERATOR_HOST_ABI) == spmv-input-u55c-runtime-v1 ]]; then
+        running_time=FPGA
+      else
+        running_time=SYNTH
+      fi
+      ;;
     fpga:*) running_time=FPGA ;;
     npc:*|soc:*|spmv:SPMV) running_time=SIM ;;
     *) echo "构造 SCOPE 非法：$profile（$scope）" >&2; exit 1 ;;
@@ -1336,6 +1360,26 @@ profile_cache_valid() {
       -z $(value "$file" XLEN) && -z $(value "$file" FPGA_BOARD) ]] || return 1
     return 0
   fi
+  if [[ $scope == fpga && $(value "$file" ACCELERATOR_HOST_ABI) == spmv-input-u55c-runtime-v1 ]]; then
+    [[ $capability == run && $target == SPMV && $board == u55c &&
+      $(value "$file" HOST_ABI) == none && $(value "$file" ACCELERATOR_HOST_KIND) == spmv &&
+      $(value "$file" PROTOCOL_ABI) == spmv-input-u55c-windowed-v1 &&
+      $(value "$file" SPMV_XRT_KERNEL) == SpmvInputKernel &&
+      $(value "$file" SPMV_INPUT_HBM_MASTER_COUNT) == 19 &&
+      $(value "$file" SPMV_INPUT_A_READER_COUNT) == 16 &&
+      $(value "$file" SPMV_INPUT_X_READER_COUNT) == 2 &&
+      $(value "$file" SPMV_INPUT_CTRL_READER_COUNT) == 1 &&
+      $(value "$file" SPMV_INPUT_HBM_CHANNEL_COUNT) == 16 &&
+      $(value "$file" SPMV_INPUT_AXI_ADDR_WIDTH) == 64 &&
+      $(value "$file" SPMV_INPUT_AXI_DATA_WIDTH) == 512 &&
+      $(value "$file" SPMV_INPUT_X_WINDOW_SIZE) == 8192 &&
+      $(value "$file" SPMV_INPUT_X_PORT_SCHEDULE) == pingpong &&
+      $(value "$file" SPMV_FP64_MUL_PROVIDER) == xilinx-floating-point-v7.1 &&
+      $(value "$file" SPMV_FP64_MUL_LATENCY) == 12 && $(value "$file" SPMV_FP64_MUL_II) == 1 &&
+      -z $(value "$file" XLEN) && -z $(value "$file" NEMU_PRESET) &&
+      -n $(value "$file" FPGA_PART) && -n $(value "$file" FPGA_PLATFORM) ]] || return 1
+    return 0
+  fi
   case "$capability" in
     run|batch)
       [[ -n $(value "$file" XLEN) && -n $(value "$file" NEMU_PRESET) ]] || return 1
@@ -1462,6 +1506,37 @@ verify_spmv_host_assets() {
   done
 }
 
+verify_spmv_input_xrt_host_assets() {
+  local directory=$1 profile="$1/profile.env" host="$1/abi/spmv/host.env" key
+  [[ -f $profile && $(value "$profile" SCOPE) == fpga &&
+    $(value "$profile" TARGET) == SPMV && $(value "$profile" HOST_ABI) == none &&
+    $(value "$profile" ACCELERATOR_HOST_KIND) == spmv &&
+    $(value "$profile" ACCELERATOR_HOST_ABI) == spmv-input-u55c-runtime-v1 &&
+    $(value "$profile" PROTOCOL_ABI) == spmv-input-u55c-windowed-v1 ]] || {
+    echo "构造不是 U55C SPMV 输入 XRT ABI：$directory" >&2; return 1;
+  }
+  [[ -x $directory/abi/spmv/spmv-host && -f $host && $(value "$host" HOST_FORMAT) == 14 ]] || {
+    echo "U55C SPMV 输入构造缺少可执行 XRT host 或 host.env：$directory/abi/spmv" >&2; return 1;
+  }
+  for key in CONFIG_FQCN ACCELERATOR_HOST_KIND ACCELERATOR_HOST_ABI PROTOCOL_ABI SPMV_XRT_KERNEL \
+    SPMV_INPUT_HBM_MASTER_COUNT SPMV_INPUT_A_READER_COUNT SPMV_INPUT_X_READER_COUNT \
+    SPMV_INPUT_CTRL_READER_COUNT SPMV_INPUT_HBM_CHANNEL_COUNT SPMV_INPUT_HBM_BASE \
+    SPMV_INPUT_HBM_BYTES SPMV_INPUT_HBM_CHANNEL_ALIGNMENT_BYTES SPMV_INPUT_AXI_ADDR_WIDTH \
+    SPMV_INPUT_AXI_DATA_WIDTH SPMV_INPUT_AXI_ID_WIDTH SPMV_INPUT_MAX_OUTSTANDING_BURSTS \
+    SPMV_INPUT_CONSUMER_COUNT SPMV_INPUT_X_BROADCAST SPMV_INPUT_CTRL_BROADCAST \
+    SPMV_INPUT_X_WINDOW_SIZE SPMV_INPUT_X_REPLICA_COUNT SPMV_INPUT_X_BANK_COUNT \
+    SPMV_INPUT_X_ELEMENT_WIDTH SPMV_INPUT_X_PORT_SCHEDULE SPMV_INPUT_X_WRITE_LANES \
+    SPMV_INPUT_X_OVERLAP_LANES SPMV_CUPER_SLOT_ABI SPMV_CUPER_SLOT_COLUMN_BITS \
+    SPMV_CUPER_SLOT_TAG_BITS SPMV_CUPER_SLOT_ROW_BITS SPMV_FP64_MUL_INTERFACE \
+    SPMV_FP64_MUL_PROVIDER SPMV_FP64_MUL_LATENCY SPMV_FP64_MUL_II \
+    SPMV_FP64_MUL_RESPONSE_FIFO_DEPTH SPMV_FP64_MUL_LANES SPMV_FP64_MUL_CORE_COUNT \
+    SPMV_FP64_MUL_TOTAL_LANES FPGA_BOARD FPGA_PLATFORM FPGA_CLOCK_MHZ; do
+    [[ $(value "$host" "$key") == $(value "$profile" "$key") ]] || {
+      echo "U55C SPMV XRT host 元数据与 profile 不匹配：$directory（$key）" >&2; return 1;
+    }
+  done
+}
+
 verify_host_assets() {
   local directory=$1 profile construction scope host_abi host core_clock expected_core_clock
   profile="$directory/profile.env"
@@ -1477,6 +1552,10 @@ verify_host_assets() {
   if [[ $scope == spmv ]]; then
     verify_spmv_model_assets "$directory" || return 1
     verify_spmv_host_assets "$directory" || return 1
+    return 0
+  fi
+  if [[ $scope == fpga && $(value "$profile" ACCELERATOR_HOST_ABI) == spmv-input-u55c-runtime-v1 ]]; then
+    verify_spmv_input_xrt_host_assets "$directory" || return 1
     return 0
   fi
   if [[ $host_abi != none ]]; then
@@ -1621,6 +1700,10 @@ write_formal_construction() {
     if [[ $scope == fpga ]]; then
       echo "FPGA_BOARD=$(value "$profile" FPGA_BOARD)"
       echo "FPGA_PLATFORM=$(value "$profile" FPGA_PLATFORM)"
+    fi
+    if [[ $scope == fpga && $(value "$profile" ACCELERATOR_HOST_ABI) == spmv-input-u55c-runtime-v1 &&
+      ${CONSTRUCTION_DRY_RUN:-0} == 1 ]]; then
+      echo 'CONSTRUCTION_DRY_RUN=1'
     fi
     echo "CREATED_AT=$created"
     echo "UPDATED_AT=$now"
@@ -2294,6 +2377,87 @@ do_spmv_simulation_host_build_directory() {
   echo "已更新独立 SPMV host：$fqcn"
 }
 
+do_spmv_input_xrt_host_build_directory() {
+  local directory=$1 profile="$1/profile.env" fqcn host_root host_stage log_stage failed_dir
+  local previous_host previous_logs host_lock_fd key
+  [[ -f $directory/construction.env && -f $(version_tag_file "$directory") ]] || {
+    echo "U55C SPMV XRT build-host 需要已保存构造：$directory" >&2; return 1;
+  }
+  [[ $(value "$profile" ACCELERATOR_HOST_ABI) == spmv-input-u55c-runtime-v1 ]] || {
+    echo "保存构造不是 U55C SPMV 输入 XRT ABI，不能只刷新 host" >&2; return 1;
+  }
+  verify_fpga_artifacts "$directory" "$profile" || return 1
+  fqcn=$(value "$profile" CONFIG_FQCN)
+  host_root="$workspace/accelerator-sim/spmv"
+  [[ -f $host_root/Makefile && -f $host_root/host.cpp && -f $host_root/input/input_xrt.cpp ]] || {
+    echo "U55C SPMV XRT host 源码不完整：$host_root" >&2; return 1;
+  }
+
+  exec {host_lock_fd}>"$directory/abi/.host-refresh.lock"
+  flock "$host_lock_fd"
+  host_stage="$directory/abi/.spmv-xrt-host-staging.$$"
+  log_stage="$directory/logs/.xrt-host-staging.$$"
+  previous_host="$directory/abi/.spmv-xrt-host-previous.$$"
+  previous_logs="$directory/logs/.xrt-host-previous.$$"
+  rm -rf "$host_stage" "$log_stage" "$previous_host" "$previous_logs"
+  mkdir -p "$host_stage" "$log_stage"
+  if ! "$phase_log_tool" run "$log_stage" accelerator-host 1 1 -- \
+    make --no-print-directory -C "$host_root" build-input-fpga-host \
+      CONSTRUCTION_DIR="$directory" CONSTRUCTION_PROFILE="$profile" BUILD_DIR="$host_stage"; then
+    failed_dir="$root/.failed/$fqcn/xrt-host"
+    rm -rf "$failed_dir"
+    mkdir -p "$failed_dir"
+    cp -a "$log_stage/." "$failed_dir/" 2>/dev/null || true
+    rm -rf "$host_stage" "$log_stage"
+    echo "U55C SPMV XRT host 重新生成失败：$fqcn" >&2
+    failure_excerpt "$failed_dir/all.log"
+    echo "完整日志目录：$failed_dir" >&2
+    return 1
+  fi
+  [[ -x $host_stage/spmv-host && $(value "$host_stage/host.env" HOST_FORMAT) == 14 ]] || {
+    rm -rf "$host_stage" "$log_stage"
+    echo "新 U55C SPMV XRT host 资产不完整：$fqcn" >&2
+    return 1
+  }
+  for key in CONFIG_FQCN ACCELERATOR_HOST_KIND ACCELERATOR_HOST_ABI PROTOCOL_ABI SPMV_XRT_KERNEL \
+    SPMV_INPUT_HBM_MASTER_COUNT SPMV_INPUT_A_READER_COUNT SPMV_INPUT_X_READER_COUNT \
+    SPMV_INPUT_CTRL_READER_COUNT SPMV_INPUT_HBM_CHANNEL_COUNT SPMV_INPUT_HBM_BASE \
+    SPMV_INPUT_HBM_BYTES SPMV_INPUT_HBM_CHANNEL_ALIGNMENT_BYTES SPMV_INPUT_AXI_ADDR_WIDTH \
+    SPMV_INPUT_AXI_DATA_WIDTH SPMV_INPUT_AXI_ID_WIDTH SPMV_INPUT_MAX_OUTSTANDING_BURSTS \
+    SPMV_INPUT_CONSUMER_COUNT SPMV_INPUT_X_BROADCAST SPMV_INPUT_CTRL_BROADCAST \
+    SPMV_INPUT_X_WINDOW_SIZE SPMV_INPUT_X_REPLICA_COUNT SPMV_INPUT_X_BANK_COUNT \
+    SPMV_INPUT_X_ELEMENT_WIDTH SPMV_INPUT_X_PORT_SCHEDULE SPMV_INPUT_X_WRITE_LANES \
+    SPMV_INPUT_X_OVERLAP_LANES SPMV_CUPER_SLOT_ABI SPMV_CUPER_SLOT_COLUMN_BITS \
+    SPMV_CUPER_SLOT_TAG_BITS SPMV_CUPER_SLOT_ROW_BITS SPMV_FP64_MUL_INTERFACE \
+    SPMV_FP64_MUL_PROVIDER SPMV_FP64_MUL_LATENCY SPMV_FP64_MUL_II \
+    SPMV_FP64_MUL_RESPONSE_FIFO_DEPTH SPMV_FP64_MUL_LANES SPMV_FP64_MUL_CORE_COUNT \
+    SPMV_FP64_MUL_TOTAL_LANES FPGA_BOARD FPGA_PLATFORM FPGA_CLOCK_MHZ; do
+    [[ $(value "$host_stage/host.env" "$key") == $(value "$profile" "$key") ]] || {
+      rm -rf "$host_stage" "$log_stage"
+      echo "新 U55C SPMV XRT host 元数据与保存 profile 不匹配：$fqcn（$key）" >&2
+      return 1
+    }
+  done
+  [[ ! -e $directory/abi/spmv ]] || mv "$directory/abi/spmv" "$previous_host"
+  if ! mv "$host_stage" "$directory/abi/spmv"; then
+    [[ ! -e $previous_host ]] || mv "$previous_host" "$directory/abi/spmv"
+    rm -rf "$log_stage"
+    echo "发布 U55C SPMV XRT host 失败，已恢复原构造：$fqcn" >&2
+    return 1
+  fi
+  [[ ! -d $directory/logs/host ]] || mv "$directory/logs/host" "$previous_logs"
+  if ! mv "$log_stage" "$directory/logs/host"; then
+    rm -rf "$directory/abi/spmv"
+    [[ ! -e $previous_host ]] || mv "$previous_host" "$directory/abi/spmv"
+    [[ ! -e $previous_logs ]] || mv "$previous_logs" "$directory/logs/host"
+    echo "发布 U55C SPMV XRT host 日志失败，已恢复原构造：$fqcn" >&2
+    return 1
+  fi
+  rm -rf "$previous_host" "$previous_logs"
+  verify_host_assets "$directory"
+  echo "已更新 U55C SPMV XRT host：$fqcn"
+}
+
 do_accelerator_host_build() {
   local profile=$1 directory=${2:-} kind abi host_root
   kind=$(value "$profile" ACCELERATOR_HOST_KIND)
@@ -2313,6 +2477,13 @@ do_accelerator_host_build() {
         return 1
       }
       do_spmv_simulation_host_build_directory "$directory"
+      ;;
+    spmv:spmv-input-u55c-runtime-v1)
+      [[ -n $directory ]] || {
+        echo "U55C SPMV XRT host 必须绑定已保存 FPGA 构造" >&2
+        return 1
+      }
+      do_spmv_input_xrt_host_build_directory "$directory"
       ;;
     :)
       echo "$(value "$profile" CONFIG_FQCN) 未挂载 accelerator host" >&2
@@ -2337,7 +2508,8 @@ do_accelerator_run() {
     resolved=$(resolve_catalog "$request")
     IFS='|' read -r fqcn _ <<< "$resolved"
     profile=$(profile_for "$fqcn")
-    if [[ $(value "$profile" ACCELERATOR_HOST_ABI) == spmv-input-report-v13 ]]; then
+    if [[ $(value "$profile" ACCELERATOR_HOST_ABI) == spmv-input-report-v13 ||
+          $(value "$profile" ACCELERATOR_HOST_ABI) == spmv-input-u55c-runtime-v1 ]]; then
       directory="$root/$fqcn"
       if [[ ! -d $directory ]] || ! version_directory_is_valid "$directory"; then
         do_build "$fqcn" 0
@@ -2357,6 +2529,15 @@ do_accelerator_run() {
       verify_assets "$directory"
       host="$directory/abi/spmv/spmv-host"
       "$host" "$mainargs"
+      ;;
+    spmv:spmv-input-u55c-runtime-v1)
+      verify_assets "$directory"
+      host="$directory/abi/spmv/spmv-host"
+      if [[ -n $mainargs ]]; then
+        "$host" "$mainargs" --xclbin "$directory/fpga/artifacts/spmv-input.xclbin"
+      else
+        "$host" --xclbin "$directory/fpga/artifacts/spmv-input.xclbin"
+      fi
       ;;
     *)
       echo "$fqcn 不能通过 accelerator run 入口执行" >&2
@@ -2388,6 +2569,14 @@ do_host_build() {
       spmv-input-report-v13)
         [[ -d $directory ]] || {
           echo "独立 SPMV build-host 找不到保存构造：$fqcn；请先执行 make -C $npc_root build config=$(config_short_name "$fqcn")" >&2
+          return 1
+        }
+        do_accelerator_host_build "$selected_profile" "$directory"
+        return
+        ;;
+      spmv-input-u55c-runtime-v1)
+        [[ -d $directory ]] || {
+          echo "U55C SPMV XRT build-host 找不到保存构造：$fqcn；请先执行 make -C $npc_root build config=$(config_short_name "$fqcn")" >&2
           return 1
         }
         do_accelerator_host_build "$selected_profile" "$directory"
@@ -2486,6 +2675,7 @@ do_host_build_all() {
     (
       case "$accelerator_abi" in
         spmv-input-report-v13) do_spmv_simulation_host_build_directory "$directory" ;;
+        spmv-input-u55c-runtime-v1) do_spmv_input_xrt_host_build_directory "$directory" ;;
         *) do_host_build_directory "$directory" ;;
       esac
     ) &

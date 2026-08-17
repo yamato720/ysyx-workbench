@@ -2,21 +2,31 @@ package accelerators.spmv
 
 import npc.ConfigCatalog
 
-/** SPMV 正式输入和流水报告构造的 CPU-free profile。 */
-object SpmvInputSimulationProfile {
+/** U55C SPMV 输入/乘法 runtime 的 FPGA-only profile。 */
+object SpmvInputFpgaProfile {
   private def hex(value: Long): String =
     s"0x${java.lang.Long.toUnsignedString(value, 16)}"
 
+  private def safe(key: String, value: String): (String, String) = {
+    require(key.matches("[A-Z][A-Z0-9_]*"), s"非法 profile 字段名：$key")
+    require(!value.exists(character => character == '\n' || character == '\r' || character == '\u0000'),
+      s"profile 字段 $key 含非法字符")
+    key -> value
+  }
+
   def values(
     entry: ConfigCatalog.Entry,
-    construction: SpmvInputSimulationConstruction,
+    construction: SpmvInputFpgaRuntimeConstruction,
     input: SpmvInputConfig,
-    report: SpmvInputReportConfig
+    extra: Seq[(String, String)]
   ): Seq[(String, String)] = {
-    require(entry.scope == "spmv" && entry.board.isEmpty && entry.target == "SPMV")
+    require(entry.scope == "fpga" && entry.board.contains("u55c") && entry.target == "SPMV",
+      s"U55C 输入 runtime 只支持 U55C SPMV terminal：${entry.className}")
     require(construction.capability == "run")
-    require(construction.acceleratorHostConfig == SpmvAcceleratorHostConfig.InputReport)
-    Seq(
+    require(construction.acceleratorHostConfig == SpmvAcceleratorHostConfig.InputU55cRuntime)
+    require(input.fp64MulProvider == SpmvFp64MulProvider.XilinxFloatingPointV71,
+      "U55C 输入 runtime 必须使用 Xilinx floating_point Binary64 multiply")
+    val base = Seq(
       "PROFILE_FORMAT" -> "25",
       "CONFIG_SHORT_NAME" -> entry.shortName,
       "CONFIG_FQCN" -> entry.className,
@@ -24,9 +34,11 @@ object SpmvInputSimulationProfile {
       "CAPABILITY" -> construction.capability,
       "HOST_ABI" -> "none",
       "ACCELERATOR_HOST_KIND" -> construction.acceleratorHostConfig.kind,
-      "ACCELERATOR_HOST_ABI" -> "spmv-input-report-v13",
-      "PROTOCOL_ABI" -> "spmv-input-windowed-v12",
+      "ACCELERATOR_HOST_ABI" -> construction.acceleratorHostConfig.abi,
+      "PROTOCOL_ABI" -> "spmv-input-u55c-windowed-v1",
       "TARGET" -> entry.target,
+      "SPMV_XRT_KERNEL" -> "SpmvInputKernel",
+      "SPMV_INPUT_HBM_MASTER_COUNT" -> input.totalHbmPortCount.toString,
       "SPMV_INPUT_A_READER_COUNT" -> input.aReaderCount.toString,
       "SPMV_INPUT_X_READER_COUNT" -> input.xReaderCount.toString,
       "SPMV_INPUT_CTRL_READER_COUNT" -> input.ctrlReaderCount.toString,
@@ -59,9 +71,11 @@ object SpmvInputSimulationProfile {
       "SPMV_FP64_MUL_RESPONSE_FIFO_DEPTH" -> input.fp64MultiplyResponseFifoDepth.toString,
       "SPMV_FP64_MUL_LANES" -> input.fp64MultiplyLaneCount.toString,
       "SPMV_FP64_MUL_CORE_COUNT" -> input.fp64MultiplyCoreCount.toString,
-      "SPMV_FP64_MUL_TOTAL_LANES" -> input.fp64MultiplyTotalLaneCount.toString,
-      "SPMV_PERFORMANCE_HTML" -> (if (report.performanceHtml) "1" else "0"),
-      "SPMV_PIPELINE_HTML" -> (if (report.pipelineHtml) "1" else "0")
+      "SPMV_FP64_MUL_TOTAL_LANES" -> input.fp64MultiplyTotalLaneCount.toString
     )
+    val all = (base ++ extra).map { case (key, value) => safe(key, value) }
+    val duplicates = all.groupBy(_._1).collect { case (key, entries) if entries.size > 1 => key }
+    require(duplicates.isEmpty, s"U55C SPMV 输入 profile 含重复字段：${duplicates.toSeq.sorted.mkString(", ")}")
+    all
   }
 }

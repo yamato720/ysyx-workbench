@@ -2,7 +2,7 @@
 # 不提供 fpga=、soc=、VERSION、SIM_FPGA_CONFIG 或结构参数兼容。
 FPGA_COMMON_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 FPGA_ROOT := $(abspath $(FPGA_COMMON_DIR)/..)
-FPGA_BUILD_REQUESTED := $(if $(filter fpga-check fpga-config fpga-plan fpga-elaborate fpga-ip fpga-synth fpga-link spmv-check spmv-elaborate spmv-ooc-synth spmv-link,$(MAKECMDGOALS)),1,)
+FPGA_BUILD_REQUESTED := $(if $(filter fpga-check fpga-config fpga-plan fpga-elaborate fpga-ip fpga-synth fpga-link spmv-check spmv-elaborate spmv-ooc-synth spmv-link spmv-input-fpga-check spmv-input-fpga-elaborate spmv-input-fpga-ip spmv-input-fpga-package spmv-input-fpga-link,$(MAKECMDGOALS)),1,)
 fpga_normalize_number = $(shell printf '%d' '$(strip $(1))' 2>/dev/null)
 
 ifeq ($(FPGA_BUILD_REQUESTED),1)

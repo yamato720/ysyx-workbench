@@ -1,7 +1,6 @@
 package accelerators.spmv
 
-import npc.AcceleratorHostConfig
-import npc.AcceleratorHostConstruction
+import npc.{AcceleratorHostConfig, AcceleratorHostConstruction, Construction, FpgaToolchainConstruction}
 
 /** SPMV 自有的软件宿主预设，不向 NPC 公共构造层泄漏加速器策略。 */
 object SpmvAcceleratorHostConfig {
@@ -14,6 +13,11 @@ object SpmvAcceleratorHostConfig {
     kind = "spmv",
     abi = "spmv-input-report-v13"
   )
+
+  val InputU55cRuntime: AcceleratorHostConfig = AcceleratorHostConfig(
+    kind = "spmv",
+    abi = "spmv-input-u55c-runtime-v1"
+  )
 }
 
 /** 独立于 NEMU 的本地 SPMV 正式输入与流水报告构造。 */
@@ -22,4 +26,10 @@ trait SpmvInputSimulationConstruction extends AcceleratorHostConstruction {
   protected def configuredSpmvInputReport: SpmvInputReportConfig
 
   final def spmvInputReportConfig: SpmvInputReportConfig = configuredSpmvInputReport
+}
+
+/** 独立 U55C 输入/乘法运行构造：生成 Vitis 资产与 XRT host，不进入 NEMU。 */
+trait SpmvInputFpgaRuntimeConstruction
+    extends Construction with FpgaToolchainConstruction with AcceleratorHostConstruction {
+  final override protected def configuredCapability: String = "run"
 }

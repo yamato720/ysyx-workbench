@@ -86,6 +86,8 @@ awk -F= '
   $1 == "SPMV_CUPER_SLOT_COLUMN_BITS" { spmv_cuper_slot_column_bits=$2 }
   $1 == "SPMV_CUPER_SLOT_TAG_BITS" { spmv_cuper_slot_tag_bits=$2 }
   $1 == "SPMV_CUPER_SLOT_ROW_BITS" { spmv_cuper_slot_row_bits=$2 }
+  $1 == "SPMV_FP64_MUL_PROVIDER" { spmv_fp64_mul_provider=$2 }
+  $1 == "SPMV_FP64_MUL_LATENCY" { spmv_fp64_mul_latency=$2 }
   $1 == "SPMV_PERFORMANCE_HTML" { spmv_performance_html=$2 }
   $1 == "SPMV_PIPELINE_HTML" { spmv_pipeline_html=$2 }
   seen[$1]++ { exit 1 }
@@ -150,6 +152,37 @@ awk -F= '
           seen["NEMU_PRESET"] || seen["NEMU_BACKEND"] || seen["PIPELINE"] ||
           seen["ICACHE_ENABLED"] || seen["DCACHE_ENABLED"] || seen["L2CACHE_ENABLED"]) exit 1
       asset_only=1
+    }
+    if (scope == "fpga" && capability == "run" && target == "SPMV" &&
+        accelerator_host_kind == "spmv" && accelerator_host_abi == "spmv-input-u55c-runtime-v1") {
+      if (host_abi != "none" || !seen["FPGA_BOARD"] || !seen["FPGA_PART"] ||
+          !seen["FPGA_PLATFORM"] || !seen["FPGA_CLOCK_MHZ"] ||
+          !seen["FPGA_PLATFORM_CLOCK_MHZ"] || !seen["FPGA_VIVADO_SYNTH_JOBS"] ||
+          !seen["SPMV_XRT_KERNEL"] || !seen["SPMV_INPUT_HBM_MASTER_COUNT"] ||
+          !seen["SPMV_INPUT_A_READER_COUNT"] || !seen["SPMV_INPUT_X_READER_COUNT"] ||
+          !seen["SPMV_INPUT_CTRL_READER_COUNT"] || !seen["SPMV_INPUT_HBM_CHANNEL_COUNT"] ||
+          !seen["SPMV_INPUT_HBM_BASE"] || !seen["SPMV_INPUT_HBM_BYTES"] ||
+          !seen["SPMV_INPUT_HBM_CHANNEL_ALIGNMENT_BYTES"] || !seen["SPMV_INPUT_AXI_ADDR_WIDTH"] ||
+          !seen["SPMV_INPUT_AXI_DATA_WIDTH"] || !seen["SPMV_INPUT_AXI_ID_WIDTH"] ||
+          !seen["SPMV_INPUT_MAX_OUTSTANDING_BURSTS"] || !seen["SPMV_INPUT_CONSUMER_COUNT"] ||
+          !seen["SPMV_INPUT_X_BROADCAST"] || !seen["SPMV_INPUT_CTRL_BROADCAST"] ||
+          !seen["SPMV_INPUT_X_WINDOW_SIZE"] || !seen["SPMV_INPUT_X_REPLICA_COUNT"] ||
+          !seen["SPMV_INPUT_X_BANK_COUNT"] || !seen["SPMV_INPUT_X_ELEMENT_WIDTH"] ||
+          !seen["SPMV_INPUT_X_PORT_SCHEDULE"] || !seen["SPMV_INPUT_X_WRITE_LANES"] ||
+          !seen["SPMV_INPUT_X_OVERLAP_LANES"] || !seen["SPMV_CUPER_SLOT_ABI"] ||
+          !seen["SPMV_CUPER_SLOT_COLUMN_BITS"] || !seen["SPMV_CUPER_SLOT_TAG_BITS"] ||
+          !seen["SPMV_CUPER_SLOT_ROW_BITS"] || !seen["SPMV_FP64_MUL_INTERFACE"] ||
+          !seen["SPMV_FP64_MUL_PROVIDER"] || !seen["SPMV_FP64_MUL_LATENCY"] ||
+          !seen["SPMV_FP64_MUL_II"] || !seen["SPMV_FP64_MUL_RESPONSE_FIFO_DEPTH"] ||
+          !seen["SPMV_FP64_MUL_LANES"] || !seen["SPMV_FP64_MUL_CORE_COUNT"] ||
+          !seen["SPMV_FP64_MUL_TOTAL_LANES"] || spmv_input_x_reader_count != "2" ||
+          spmv_cuper_slot_abi != "cuper-a-slot-v4" || spmv_cuper_slot_column_bits != "13" ||
+          spmv_cuper_slot_tag_bits != "3" || spmv_cuper_slot_row_bits != "16" ||
+          spmv_fp64_mul_provider != "xilinx-floating-point-v7.1" ||
+          spmv_fp64_mul_latency != "12" || seen["XLEN"] || seen["ISA_STRING"] ||
+          seen["NEMU_PRESET"] || seen["NEMU_BACKEND"] || seen["PIPELINE"] ||
+          seen["ICACHE_ENABLED"] || seen["DCACHE_ENABLED"] || seen["L2CACHE_ENABLED"]) exit 1
+      accelerator_only=1
     }
     if (!asset_only && !accelerator_only && (!seen["XLEN"] || !seen["NEMU_PRESET"] || !seen["NEMU_CACHE_HTML"] ||
         !seen["NPC_TRACE"] || !seen["NPC_SDB_DEBUG"] || !seen["NPC_FINAL_LOG"] ||

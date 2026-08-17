@@ -21,6 +21,21 @@ object SpmvXPortSchedule {
   }
 }
 
+/** FP64 乘法端点的实现提供者。仿真模型和 U55C vendor IP 共享同一 req/resp 时序合同。 */
+sealed trait SpmvFp64MulProvider {
+  def profileName: String
+}
+
+object SpmvFp64MulProvider {
+  case object Simulation extends SpmvFp64MulProvider {
+    override val profileName: String = "simulation"
+  }
+
+  case object XilinxFloatingPointV71 extends SpmvFp64MulProvider {
+    override val profileName: String = "xilinx-floating-point-v7.1"
+  }
+}
+
 /** SPMV 输入封装及其 HBM reader 的静态参数。 */
 final case class SpmvInputConfig(
   /** 单个 A 输入封装内的 HBM/reader 数量。 */
@@ -59,7 +74,9 @@ final case class SpmvInputConfig(
   /** Cuper A slot v4 的 [47:32] PE-local 行标宽度。 */
   cuperSlotRowBits: Int = 16,
   /** local_X 写端口和 A 读端口的物理复用策略。 */
-  xPortSchedule: SpmvXPortSchedule = SpmvXPortSchedule.Preload
+  xPortSchedule: SpmvXPortSchedule = SpmvXPortSchedule.Preload,
+  /** FP64 乘法的实现提供者；U55C 必须选择可综合的 vendor IP。 */
+  fp64MulProvider: SpmvFp64MulProvider = SpmvFp64MulProvider.Simulation
 ) {
   require(aReaderCount > 0, s"A reader 数量必须为正数，实际为 $aReaderCount")
   require(xReaderCount == 2,
@@ -129,6 +146,13 @@ object SpmvInputConfig {
   val Cuper16Hbm: SpmvInputConfig = SpmvInputConfig()
   val Cuper16HbmPingPong: SpmvInputConfig =
     Cuper16Hbm.copy(xPortSchedule = SpmvXPortSchedule.PingPong)
+  val Cuper16HbmPingPongU55c: SpmvInputConfig =
+    // Vivado 2022.2 的 floating_point v7.1 Binary64 Multiply 固定为 12 拍。
+    // 这里必须与 vendor IP 及 tag 延迟管线保持同一合同。
+    Cuper16HbmPingPong.copy(
+      fp64MultiplyLatency = 12,
+      fp64MulProvider = SpmvFp64MulProvider.XilinxFloatingPointV71
+    )
 }
 
 case object SpmvInputConfigKey extends Field[Option[SpmvInputConfig]](None)

@@ -12,6 +12,7 @@ CHISEL_DPI_SOURCE_MANIFEST := $(CHISEL_DPI_OUT)/ip-sources.manifest
 include ./config-catalog.mk
 include ./fpga/common/config-select.mk
 include ./fpga/common/spmv-build.mk
+include ./fpga/common/spmv-input-fpga-build.mk
 
 # 统一构造器把 Scala 生成的 profile 作为底层 recipe 的唯一结构输入。变量名
 # `NPC_*` 仅保留为本 Makefile 内部适配层，不再接受公开命令行覆盖。
@@ -43,6 +44,7 @@ LEGACY_PUBLIC_GOALS := cpu run-cpu all check sim create gtk chisel chisel-dpi ch
 	fpga-build fpga-check fpga-config fpga-plan fpga-elaborate fpga-ip fpga-synth fpga-link
 
 LEGACY_PUBLIC_GOALS += spmv-check spmv-elaborate spmv-ooc-synth spmv-link
+LEGACY_PUBLIC_GOALS += spmv-input-fpga-check spmv-input-fpga-elaborate spmv-input-fpga-ip spmv-input-fpga-package spmv-input-fpga-link
 LEGACY_PUBLIC_GOALS += spmv-sim-elaborate spmv-sim-verilator
 LEGACY_STRUCTURE_VARS := S D VERSION fpga soc fpga-build SIM_FPGA_CONFIG FPGA_SCALA_PROPS \
 	NPC_XLEN NPC_TARGET NPC_PIPELINE NPC_INTERLOCK NPC_ID_FWD NPC_EX_FWD \

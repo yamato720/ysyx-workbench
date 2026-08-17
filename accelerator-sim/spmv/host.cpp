@@ -110,7 +110,7 @@ fs::path resolveDataRoot() {
   return fs::path(ACCELERATOR_SIM_DEFAULT_DATA_ROOT);
 }
 
-#ifndef SPMV_INPUT_TRANSACTION_VERILATOR
+#if !defined(SPMV_INPUT_TRANSACTION_VERILATOR) && !defined(SPMV_INPUT_XRT)
 fs::path resolveGoldenDirectory() {
   if (const char* configured = std::getenv("SPMV_GOLDEN_DIR")) {
     if (*configured != '\0') {
@@ -121,7 +121,7 @@ fs::path resolveGoldenDirectory() {
 }
 #endif
 
-fs::path resolveEncodingReportDirectory() {
+[[maybe_unused]] fs::path resolveEncodingReportDirectory() {
   if (const char* configured = std::getenv("SPMV_ENCODING_REPORT_DIR")) {
     if (*configured != '\0') {
       return fs::path(configured);
@@ -130,8 +130,9 @@ fs::path resolveEncodingReportDirectory() {
   return fs::current_path() / "build" / "encoding";
 }
 
-void printChoices(const fs::path& dataRoot, const std::vector<DatasetChoice>& choices,
-                  const std::string& target) {
+[[maybe_unused]] void printChoices(const fs::path& dataRoot,
+                                   const std::vector<DatasetChoice>& choices,
+                                   const std::string& target) {
   std::cout << "Usage: make -C accelerator-sim/spmv " << target << " mainargs=<scale>\n";
   std::cout << "Available scales from " << dataRoot << ":\n";
   if (choices.empty()) {
@@ -407,7 +408,7 @@ void validateCuperAInstances(const encoding::cuper::CuperPackage& package,
   }
 }
 
-#ifndef SPMV_INPUT_TRANSACTION_VERILATOR
+#if !defined(SPMV_INPUT_TRANSACTION_VERILATOR) && !defined(SPMV_INPUT_XRT)
 int runGolden(const DatasetChoice& choice) {
   const auto loadStart = std::chrono::steady_clock::now();
   const CsrMatrix matrix = loadMatrix(choice);
@@ -438,6 +439,7 @@ int runGolden(const DatasetChoice& choice) {
 }
 #endif
 
+#ifndef SPMV_INPUT_XRT
 int runCuperASmokeTest(const std::string& requested) {
   const fs::path dataRoot = resolveDataRoot();
   const std::vector<DatasetChoice> choices = discoverDatasets(dataRoot);
@@ -587,8 +589,9 @@ int runEncoding(const std::string& formatName, const std::string& requested) {
   std::cout << "[spmv-demand] json=" << demandSchedulePath << '\n';
   return 0;
 }
+#endif
 
-#ifdef SPMV_INPUT_TRANSACTION_VERILATOR
+#if defined(SPMV_INPUT_TRANSACTION_VERILATOR) || defined(SPMV_INPUT_XRT)
 std::uint64_t fp64Bits(double value) {
   std::uint64_t bits = 0;
   static_assert(sizeof(bits) == sizeof(value));
@@ -750,13 +753,14 @@ std::vector<encoding::cuper::CuperBeat> packCtrlMap(
   return beats;
 }
 
-int runInputTransactions(const std::string& requested) {
+}  // namespace
+
+InputSimulationData buildInputSimulationData(const std::string& requested) {
   const fs::path dataRoot = resolveDataRoot();
   const std::vector<DatasetChoice> choices = discoverDatasets(dataRoot);
   const std::string dataset = requested.empty() ? "n512" : requested;
   if (dataset == "--list") {
-    printChoices(dataRoot, choices, "run");
-    return 0;
+    throw std::invalid_argument("输入数据 builder 不接受 --list");
   }
   if (choices.empty()) {
     throw std::runtime_error("no CSR datasets were found under " + dataRoot.string() +
@@ -875,13 +879,28 @@ int runInputTransactions(const std::string& requested) {
     throw std::invalid_argument("SPMV_PIPELINE_HTML requires SPMV_PERFORMANCE_HTML");
   }
 
+  return simulation;
+}
+
+#ifdef SPMV_INPUT_TRANSACTION_VERILATOR
+int runInputTransactions(const std::string& requested) {
+  const fs::path dataRoot = resolveDataRoot();
+  const std::vector<DatasetChoice> choices = discoverDatasets(dataRoot);
+  if (requested == "--list") {
+    printChoices(dataRoot, choices, "run");
+    return 0;
+  }
+  const InputSimulationData simulation = buildInputSimulationData(requested);
   const InputSimulationResult result = runInputSimulation(simulation);
+  const std::size_t aBeats = std::accumulate(
+      simulation.aChannels.begin(), simulation.aChannels.end(), std::size_t{0},
+      [](std::size_t sum, const auto& channel) { return sum + channel.size(); });
   const std::size_t xBeats = std::accumulate(
       simulation.xChannels.begin(), simulation.xChannels.end(), std::size_t{0},
       [](std::size_t sum, const auto& channel) { return sum + channel.size(); });
-  std::cout << "[spmv-input] dataset=" << choice.name
+  std::cout << "[spmv-input] dataset=" << simulation.dataset
             << " A_readers=" << simulation.aChannels.size()
-            << " A_beats=" << package.stats.totalMatrixBeats
+            << " A_beats=" << aBeats
             << " X_readers=" << simulation.xChannels.size()
             << " X_broadcast_consumers=16 X_beats=" << xBeats
             << " Ctrl_readers=1 Ctrl_beats=" << simulation.ctrlChannel.size()
@@ -891,7 +910,8 @@ int runInputTransactions(const std::string& requested) {
     std::cout << "[spmv-input] mixed-v3 fp64_mul=" << simulation.expectedMultiplyCount
               << " product_checksum=0x" << std::hex << simulation.expectedProductChecksum << std::dec
               << " mul_cycles=" << result.mulCycles << " PASS\n";
-    std::cout << "[spmv-input] schedule=" << config.xPortSchedule
+    std::cout << "[spmv-input] schedule="
+              << (simulation.xPortSchedule == InputXPortSchedule::PingPong ? "pingpong" : "preload")
               << " x_load_cycles=" << result.xLoadCycles
               << " x_overlap_cycles=" << result.xOverlapCycles
               << " x_drain_cycles=" << result.xDrainCycles
@@ -912,10 +932,14 @@ int runInputTransactions(const std::string& requested) {
   return 0;
 }
 #endif
+#endif
 
 int run(const std::string& requested) {
 #ifdef SPMV_INPUT_TRANSACTION_VERILATOR
   return runInputTransactions(requested);
+#elif defined(SPMV_INPUT_XRT)
+  (void)requested;
+  throw std::logic_error("U55C XRT host 必须通过完整命令行入口运行");
 #else
   const fs::path dataRoot = resolveDataRoot();
   const std::vector<DatasetChoice> choices = discoverDatasets(dataRoot);
@@ -931,11 +955,13 @@ int run(const std::string& requested) {
 #endif
 }
 
-}  // namespace
 }  // namespace accelerator_sim::spmv
 
 int main(int argc, char** argv) {
   try {
+#ifdef SPMV_INPUT_XRT
+    return accelerator_sim::spmv::runInputXrt(argc, argv);
+#else
     if (argc >= 2 && std::string(argv[1]) == "--encode") {
       if (argc < 3 || argc > 4) {
         throw std::invalid_argument("用法: spmv-host --encode <format> [dataset]");
@@ -949,6 +975,7 @@ int main(int argc, char** argv) {
       return accelerator_sim::spmv::runCuperASmokeTest(argc == 3 ? argv[2] : "");
     }
     return accelerator_sim::spmv::run(argc >= 2 ? argv[1] : "");
+#endif
   } catch (const std::exception& error) {
     std::cerr << "spmv-host: " << error.what() << '\n';
     return 2;

@@ -117,7 +117,7 @@ final class SpmvMulEngine(config: SpmvInputConfig, channel: Int = 0) extends Mod
     latency = config.fp64MultiplyLatency,
     initiationInterval = config.fp64MultiplyInitiationInterval,
     responseFifoDepth = config.fp64MultiplyResponseFifoDepth
-  ), productTagWidth)))
+  ), productTagWidth, config.fp64MulProvider)))
 
   for (slot <- 0 until slotsPerBeat) {
     promote(slot).io.in := stageFp32(slot)

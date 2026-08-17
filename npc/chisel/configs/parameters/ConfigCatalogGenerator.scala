@@ -31,6 +31,7 @@ object ConfigCatalogGenerator {
     "U55cNpcPerformanceMonitorTerminal" -> ("fpga", "NPC"),
     "U55cSpmvSynthesisTerminal" -> ("fpga", "SPMV"),
     "U55cSpmvBitstreamTerminal" -> ("fpga", "SPMV"),
+    "U55cSpmvInputRuntimeTerminal" -> ("fpga", "SPMV"),
     "U55cSocTerminal" -> ("fpga", "SOC"),
     "Zcu102NpcTerminal" -> ("fpga", "NPC"),
     "Zcu102SocTerminal" -> ("fpga", "SOC")

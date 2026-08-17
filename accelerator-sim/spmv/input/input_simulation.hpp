@@ -1,6 +1,6 @@
 #pragma once
 
-#ifdef SPMV_INPUT_TRANSACTION_VERILATOR
+#if defined(SPMV_INPUT_TRANSACTION_VERILATOR) || defined(SPMV_INPUT_XRT)
 
 #include "../encoding/cuper/cuper.hpp"
 
@@ -53,6 +53,11 @@ struct InputSimulationData {
   std::size_t expectedMultiplyCount = 0;
 };
 
+/** 生成 Verilator 与 U55C XRT host 共用的 Cuper A/X/Ctrl HBM 输入。 */
+InputSimulationData buildInputSimulationData(const std::string& dataset);
+
+#ifdef SPMV_INPUT_TRANSACTION_VERILATOR
+
 struct InputSimulationResult {
   std::uint64_t cycles = 0;
   std::uint64_t mulCycles = 0;
@@ -74,6 +79,15 @@ struct InputSimulationResult {
 };
 
 InputSimulationResult runInputSimulation(const InputSimulationData& input);
+
+#endif
+
+#ifdef SPMV_INPUT_XRT
+
+/** 运行 U55C 的乘法-only XRT 链路。 */
+int runInputXrt(int argc, char** argv);
+
+#endif
 
 }  // namespace accelerator_sim::spmv
 

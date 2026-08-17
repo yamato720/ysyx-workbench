@@ -37,3 +37,13 @@ trait U55cSpmvBitstreamTerminal
   final override val constructionScope: String = "fpga"
   final override val constructionTarget: String = "SPMV"
 }
+
+/** U55C 上板输入/乘法终端；由独立 XRT host 驱动，不挂载 CPU/NEMU。 */
+trait U55cSpmvInputRuntimeTerminal
+    extends SpmvInputFpgaRuntimeConstruction with MakeTerminal {
+  override protected def configuredFpga: FpgaToolchainConfig = FpgaToolchainConfig.U55cBase
+  override protected def configuredAcceleratorHost: npc.AcceleratorHostConfig =
+    SpmvAcceleratorHostConfig.InputU55cRuntime
+  final override val constructionScope: String = "fpga"
+  final override val constructionTarget: String = "SPMV"
+}

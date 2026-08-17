@@ -32,7 +32,8 @@ object CdeConfigResolver {
           case "fpga" =>
             val validConstruction = entry.target match {
               case "SPMV" => (config.isInstanceOf[FpgaSynthesisConstruction] ||
-                config.isInstanceOf[FpgaBitstreamConstruction]) &&
+                config.isInstanceOf[FpgaBitstreamConstruction] ||
+                config.isInstanceOf[accelerators.spmv.SpmvInputFpgaRuntimeConstruction]) &&
                 config.isInstanceOf[AcceleratorHostConstruction] &&
                 !config.isInstanceOf[HostConstruction] && !config.isInstanceOf[IpConstruction]
               case _ => config.isInstanceOf[FpgaConstruction]

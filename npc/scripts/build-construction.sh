@@ -34,6 +34,8 @@ done < "$profile"
 mkdir -p "$stage/logs/build"
 if [[ $SCOPE == spmv ]]; then
   mkdir -p "$stage/abi/rtl" "$stage/abi/verilator" "$stage/abi/spmv"
+elif [[ $SCOPE == fpga && ${ACCELERATOR_HOST_ABI:-} == spmv-input-u55c-runtime-v1 ]]; then
+  mkdir -p "$stage/fpga" "$stage/abi/spmv"
 elif [[ $CAPABILITY == synthesize-only || $CAPABILITY == bitstream-only ]]; then
   mkdir -p "$stage/fpga"
 else
@@ -59,6 +61,11 @@ root_construction_work_args() {
       "SPMV_SIM_OUT=$local_work_dir/spmv-rtl" \
       "SPMV_SIM_MODEL_DIR=$local_work_dir/spmv-verilator"
   fi
+}
+
+is_spmv_input_xrt_runtime() {
+  [[ $SCOPE == fpga && $TARGET == SPMV && $CAPABILITY == run &&
+    ${ACCELERATOR_HOST_ABI:-} == spmv-input-u55c-runtime-v1 ]]
 }
 
 run_phase() {
@@ -133,7 +140,22 @@ dry_run() {
       note_phase verilator 2 "$total" 'dry-run SPMV Verilator 模型构建'
       note_phase accelerator-host 3 "$total" 'dry-run SPMV accelerator host 构建'
       ;;
-    run:fpga|batch:fpga)
+    run:fpga)
+      total=5
+      if is_spmv_input_xrt_runtime; then
+        note_phase elaborate 1 "$total" 'dry-run SPMV input elaboration'
+        note_phase ip 2 "$total" 'dry-run SPMV FP64 IP 生成'
+        note_phase package 3 "$total" 'dry-run SPMV XO 打包'
+        note_phase link 4 "$total" 'dry-run SPMV Vitis link'
+        note_phase accelerator-host 5 "$total" 'dry-run SPMV XRT host 构建'
+      else
+        note_phase elaborate 1 "$total" 'dry-run FPGA elaboration'
+        note_phase ip 2 "$total" 'dry-run FPGA IP 生成'
+        note_phase synth 3 "$total" 'dry-run FPGA 综合'
+        note_phase link 4 "$total" 'dry-run FPGA 链接'
+      fi
+      ;;
+    batch:fpga)
       total=5
       note_phase elaborate 1 "$total" 'dry-run FPGA elaboration'
       note_phase ip 2 "$total" 'dry-run FPGA IP 生成'
@@ -157,7 +179,8 @@ dry_run() {
   if [[ $SCOPE == spmv ]]; then
     printf 'module SpmvInputTop; endmodule\n' > \
       "$stage/abi/rtl/SpmvInputTop.sv"
-  elif [[ $CAPABILITY != synthesize-only && $CAPABILITY != bitstream-only ]]; then
+  elif [[ $CAPABILITY != synthesize-only && $CAPABILITY != bitstream-only ]] &&
+    ! is_spmv_input_xrt_runtime; then
     printf 'dry-run\n' > "$stage/abi/rtl/placeholder.sv"
   fi
   if [[ $SCOPE == spmv ]]; then
@@ -192,6 +215,28 @@ dry_run() {
     local artifacts asset
     artifacts="$stage/fpga/artifacts"
     mkdir -p "$stage/fpga/rtl" "$stage/fpga/synth" "$artifacts"
+    if is_spmv_input_xrt_runtime; then
+      printf '%s\n' 'module SpmvInputTop; endmodule' > "$stage/fpga/rtl/SpmvInputTop.sv"
+      printf '%s\n' 'module SpmvInputKernel; endmodule' > "$stage/fpga/rtl/spmv-input-kernel.sv"
+      printf '%s\n' 'dry-run FP64 XCI' > "$stage/fpga/artifacts/SpmvFp64MulXilinxCore.xci"
+      printf '%s\n' 'dry-run XO' > "$stage/fpga/artifacts/spmv-input.xo"
+      printf '%s\n' 'dry-run xclbin' > "$stage/fpga/artifacts/spmv-input.xclbin"
+      printf '%s\n' '0.000' > "$stage/fpga/artifacts/spmv-input.wns"
+      "$ip_source_manifest" write synthesis \
+        "$stage/fpga/synthesis-sources.manifest" "$npc_root" --absolute \
+        --rtl-dir "$stage/fpga/rtl"
+      "$npc_root/fpga/common/scripts/artifact-manifest.sh" write \
+        --directory "$artifacts" --source-root "$workspace" --release-tag UNRELEASED \
+        --board "$FPGA_BOARD" --variant "$CONFIG_FQCN" --type "$FPGA_TYPE" \
+        --platform "$FPGA_PLATFORM" --config-fqcn "$CONFIG_FQCN" \
+        --host-abi "$HOST_ABI" --protocol-abi "$PROTOCOL_ABI" --timing-wns 0.000 \
+        --asset spmv-input.xclbin --asset spmv-input.xo --asset SpmvFp64MulXilinxCore.xci
+      mkdir -p "$stage/abi/spmv"
+      printf '%s\n' '#!/bin/sh' 'exit 0' > "$stage/abi/spmv/spmv-host"
+      chmod +x "$stage/abi/spmv/spmv-host"
+      { printf '%s\n' 'HOST_FORMAT=14'; cat "$profile"; } > "$stage/abi/spmv/host.env"
+      return
+    fi
     if [[ $CAPABILITY == synthesize-only ]]; then
       printf '%s\n' 'module SpmvResourceProbeTop; endmodule' > "$stage/fpga/rtl/SpmvResourceProbeTop.sv"
       printf '%s\n' 'module SpmvResourceProbeKernel; endmodule' > "$stage/fpga/rtl/spmv-resource-probe-kernel.sv"
@@ -288,20 +333,23 @@ dry_run() {
     printf '%s\n' '按测试请求模拟构造失败' | tee -a "$phase_logs/all.log" >&2
     exit 1
   }
-  if [[ $SCOPE != spmv && ($CAPABILITY == run || $CAPABILITY == batch) ]]; then
+  if [[ $SCOPE != spmv && ! is_spmv_input_xrt_runtime &&
+    ($CAPABILITY == run || $CAPABILITY == batch) ]]; then
     refresh_host "$total" "$total"
   fi
 }
 
 if [[ ${CONSTRUCTION_DRY_RUN:-0} == 1 ]]; then
   dry_run
-  [[ $SCOPE == spmv || $CAPABILITY == synthesize-only || $CAPABILITY == bitstream-only ]] || copy_glue
+  [[ $SCOPE == spmv || $CAPABILITY == synthesize-only || $CAPABILITY == bitstream-only ]] ||
+    is_spmv_input_xrt_runtime || copy_glue
   exit 0
 fi
 
 # NEMU 编译通过保存构造的 glue include 引用 NPC 调试 ABI；必须先冻结这些
 # 头文件，再进入末尾的 host 阶段。源码副本不依赖 Chisel/Verilator 产物。
-[[ $SCOPE == spmv || $CAPABILITY == synthesize-only || $CAPABILITY == bitstream-only ]] || copy_glue
+[[ $SCOPE == spmv || $CAPABILITY == synthesize-only || $CAPABILITY == bitstream-only ]] ||
+  is_spmv_input_xrt_runtime || copy_glue
 
 case "$CAPABILITY:$SCOPE" in
   generate-only:npc)
@@ -341,7 +389,27 @@ case "$CAPABILITY:$SCOPE" in
     run_phase accelerator-host 3 3 make --no-print-directory -C "$workspace/accelerator-sim/spmv" \
       build-simulation-host CONSTRUCTION_DIR="$stage" BUILD_DIR="$stage/abi/spmv"
     ;;
-  run:fpga|batch:fpga)
+  run:fpga)
+    if is_spmv_input_xrt_runtime; then
+      run_root_phase elaborate 1 5 spmv-input-fpga-elaborate SPMV_INPUT_WORK_DIR="$stage/fpga"
+      run_root_phase_visible ip 2 5 spmv-input-fpga-ip SPMV_INPUT_WORK_DIR="$stage/fpga" \
+        SPMV_INPUT_PHASE_PREREQUISITES=0
+      run_root_phase_visible package 3 5 spmv-input-fpga-package SPMV_INPUT_WORK_DIR="$stage/fpga" \
+        SPMV_INPUT_PHASE_PREREQUISITES=0
+      run_root_phase_visible link 4 5 spmv-input-fpga-link SPMV_INPUT_WORK_DIR="$stage/fpga" \
+        SPMV_INPUT_PHASE_PREREQUISITES=0
+      run_phase accelerator-host 5 5 make --no-print-directory -C "$workspace/accelerator-sim/spmv" \
+        build-input-fpga-host CONSTRUCTION_DIR="$stage" CONSTRUCTION_PROFILE="$profile" \
+        BUILD_DIR="$stage/abi/spmv"
+    else
+      run_root_phase elaborate 1 5 fpga-elaborate FPGA_WORK_DIR="$stage/fpga"
+      run_root_phase_visible ip 2 5 fpga-ip FPGA_WORK_DIR="$stage/fpga"
+      run_root_phase_visible synth 3 5 fpga-synth FPGA_WORK_DIR="$stage/fpga" FPGA_PHASE_PREREQUISITES=0
+      run_root_phase_visible link 4 5 fpga-link FPGA_WORK_DIR="$stage/fpga" FPGA_PHASE_PREREQUISITES=0
+      refresh_host 5 5
+    fi
+    ;;
+  batch:fpga)
     run_root_phase elaborate 1 5 fpga-elaborate FPGA_WORK_DIR="$stage/fpga"
     run_root_phase_visible ip 2 5 fpga-ip FPGA_WORK_DIR="$stage/fpga"
     run_root_phase_visible synth 3 5 fpga-synth FPGA_WORK_DIR="$stage/fpga" FPGA_PHASE_PREREQUISITES=0
