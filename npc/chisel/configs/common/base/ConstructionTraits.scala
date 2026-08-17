@@ -61,15 +61,25 @@ trait AcceleratorHostConstruction extends Construction {
   final def acceleratorHostConfig: AcceleratorHostConfig = configuredAcceleratorHost
 }
 
-/** 与运行宿主平行的计算 IP 挂载合同。
+/** 与运行宿主平行的计算后端挂载合同。
   *
-  * 完整构造必须由终端 trait 主动提供该选择；核心组合和 CDE 图不能通过构造参数或
-  * `++` 链自行挑选 NEMU/FPGA 后端。
+  * 完整构造必须由终端 trait 主动提供 Builtin 或 FPGA 后端；核心组合和 CDE 图
+  * 不能通过构造参数或 `++` 链自行挑选该通道。算子时序不属于本 trait。
   */
 trait IpConstruction {
   protected def configuredIp: IpComputeSelection
 
   final def ipComputeSelection: IpComputeSelection = configuredIp
+}
+
+/** 检查构造或可复用 SoC 图可直接挂载的本地乘除法后端。 */
+trait BuiltinComputeConstruction extends IpConstruction {
+  override protected final def configuredIp: IpComputeSelection = BuiltinCompute
+}
+
+/** 非 Make 的 FPGA 核心图可直接挂载的厂商 IP 乘除法后端。 */
+trait FpgaComputeConstruction extends IpConstruction {
+  override protected final def configuredIp: IpComputeSelection = FpgaCompute
 }
 
 /** 从 CDE 顶层终端取得已挂载的计算 IP。
@@ -81,14 +91,13 @@ private[npc] object IpConstruction {
   def selection(site: View): IpComputeSelection = site match {
     case construction: IpConstruction => construction.ipComputeSelection
     case _ => throw new IllegalArgumentException(
-      "NPC CDE 构造必须挂载 IP terminal trait，例如 " +
-        "NemuSimulationIpTerminal 或 FpgaIpTerminal"
+      "NPC CDE 构造必须挂载乘除法后端，例如 LocalNpcTerminal 或 FpgaComputeConstruction"
     )
   }
 }
 
 /** 本地 NPC/SoC 仿真底层行为；完整终端预设必须提供 local NEMU 配方。 */
-trait NemuSimulationConstruction extends HostConstruction {
+trait NemuSimulationConstruction extends HostConstruction with BuiltinComputeConstruction {
   final override def nemuConfig: NemuHostConfig = ConstructionValidation.localNemu(configuredNemu)
 }
 
@@ -101,7 +110,7 @@ trait FpgaToolchainConstruction {
 }
 
 /** FPGA 运行构造；完整终端预设必须同时提供 NEMU 与 FPGA 工具链配方。 */
-trait FpgaConstruction extends HostConstruction with FpgaToolchainConstruction {
+trait FpgaConstruction extends HostConstruction with FpgaToolchainConstruction with FpgaComputeConstruction {
 
   final override def nemuConfig: NemuHostConfig = {
     ConstructionValidation.fpga(configuredNemu, fpgaToolchainConfig)

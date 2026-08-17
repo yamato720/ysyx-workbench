@@ -18,14 +18,17 @@ class WithNpcCoreConfig(npcConfig: NpcConfig) extends CDEConfig((_, _, _) => {
   case NpcCoreConfigKey => npcConfig
 })
 
-/** 把最终终端主动挂载的计算 IP 应用到一个完整 NPC 核心。
+/** 把最终终端主动挂载的计算后端应用到一个完整 NPC 核心。
   *
-  * 该 CDE 桥不携带 IP 选择；它只从顶层 `IpConstruction` trait 读取选择，因此 SoC
-  * 与 FPGA 图不会在各自的 `++` 链里再次指定 NEMU 或 FPGA 计算后端。
+  * 该 CDE 桥不携带 IP 选择或算子时序；它只从顶层 `IpConstruction` trait 读取
+  * Builtin/FPGA 后端，默认时序作为最右侧 Config 基线，可由 `++` 或板卡
+  * attachment 覆盖。
   */
 class WithTerminalIpCoreConfig(layers: ConfigFragment) extends CDEConfig((site, _, _) => {
   case NpcCoreConfigKey =>
-    (IpConstruction.selection(site).computeUnitConfig ++ layers).build
+    (IpConstruction.selection(site).computeUnitConfig ++
+      layers ++
+      new WithDefaultArithmeticTimingConfig).build
 })
 
 /** 把 NPC 参数片段接入 CDE 图，并发布完整的 `NpcCoreConfigKey`。
@@ -38,10 +41,14 @@ class ConstructionConfig(
   layers: ConfigFragment
 ) extends CDEConfig((site, _, _) => {
   case NpcCoreConfigKey =>
-    (IpConstruction.selection(site).computeUnitConfig ++ layers).build
+    (IpConstruction.selection(site).computeUnitConfig ++
+      layers ++
+      new WithDefaultArithmeticTimingConfig).build
 }) with ConfigFragment {
   private lazy val mountedLayers: ConfigFragment =
-    IpConstruction.selection(this).computeUnitConfig ++ layers
+    IpConstruction.selection(this).computeUnitConfig ++
+      layers ++
+      new WithDefaultArithmeticTimingConfig
 
   override final private[npc] def applyTo(base: NpcConfig): NpcConfig = mountedLayers.applyTo(base)
   final lazy val config: NpcConfig = build

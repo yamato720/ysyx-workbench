@@ -1,45 +1,58 @@
 package npc
 
-// 终端预设一步提供完整默认值；派生终端可重载配方，scope 与 target 保持固定。
+// 终端预设一步写出 scope、target 和默认 host/工具链；派生终端可重载配方。
 
 /** 本地 NPC 的完整终端预设。 */
-trait LocalNpcTerminal extends LocalNemuTerminalCore {
+trait LocalNpcTerminal extends NemuSimulationConstruction with MakeTerminal {
+  override protected def configuredNemu: NemuHostConfig = NemuHostConfig.LocalPipelineTrace
   final override val constructionScope: String = "npc"
   final override val constructionTarget: String = "NPC"
 }
 
 /** 本地 ysyxSoC 的完整终端预设。 */
-trait LocalSocTerminal extends LocalNemuTerminalCore {
+trait LocalSocTerminal extends NemuSimulationConstruction with MakeTerminal {
+  override protected def configuredNemu: NemuHostConfig = NemuHostConfig.LocalPipelineTrace
   final override val constructionScope: String = "soc"
   final override val constructionTarget: String = "SOC"
 }
 
 /** U55C 裸 NPC 的完整终端预设。 */
-trait U55cNpcTerminal extends U55cFpgaTerminalCore {
+trait U55cNpcTerminal extends FpgaConstruction with MakeTerminal {
+  override protected def configuredNemu: NemuHostConfig = NemuHostConfig.U55cBase
+  override protected def configuredFpga: FpgaToolchainConfig = FpgaToolchainConfig.U55cBase
   final override val constructionScope: String = "fpga"
   final override val constructionTarget: String = "NPC"
 }
 
 /** U55C 裸 NPC 的批处理性能监测终端。 */
-trait U55cNpcPerformanceMonitorTerminal extends U55cPerformanceMonitorFpgaTerminalCore {
+trait U55cNpcPerformanceMonitorTerminal extends FpgaConstruction with MakeTerminal {
+  override protected def configuredNemu: NemuHostConfig = NemuHostConfig.U55cBase
+  override protected def configuredFpga: FpgaToolchainConfig = FpgaToolchainConfig.U55cBase
+  override protected def configuredCapability: String = "batch"
   final override val constructionScope: String = "fpga"
   final override val constructionTarget: String = "NPC"
 }
 
 /** U55C ysyxSoC 的完整终端预设。 */
-trait U55cSocTerminal extends U55cFpgaTerminalCore {
+trait U55cSocTerminal extends FpgaConstruction with MakeTerminal {
+  override protected def configuredNemu: NemuHostConfig = NemuHostConfig.U55cBase
+  override protected def configuredFpga: FpgaToolchainConfig = FpgaToolchainConfig.U55cBase
   final override val constructionScope: String = "fpga"
   final override val constructionTarget: String = "SOC"
 }
 
 /** ZCU102 裸 NPC 的完整终端预设。 */
-trait Zcu102NpcTerminal extends Zcu102FpgaTerminalCore {
+trait Zcu102NpcTerminal extends FpgaConstruction with MakeTerminal {
+  override protected def configuredNemu: NemuHostConfig = NemuHostConfig.Zcu102Base
+  override protected def configuredFpga: FpgaToolchainConfig = FpgaToolchainConfig.Zcu102Base
   final override val constructionScope: String = "fpga"
   final override val constructionTarget: String = "NPC"
 }
 
 /** ZCU102 ysyxSoC 的完整终端预设。 */
-trait Zcu102SocTerminal extends Zcu102FpgaTerminalCore {
+trait Zcu102SocTerminal extends FpgaConstruction with MakeTerminal {
+  override protected def configuredNemu: NemuHostConfig = NemuHostConfig.Zcu102Base
+  override protected def configuredFpga: FpgaToolchainConfig = FpgaToolchainConfig.Zcu102Base
   final override val constructionScope: String = "fpga"
   final override val constructionTarget: String = "SOC"
 }

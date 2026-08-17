@@ -22,8 +22,17 @@ class WithXlenConfig(xlen: Int) extends ConfigFragment {
   */
 class BaseIsaConfig extends ConfigFragment {
   override private[npc] def applyTo(base: NpcConfig): NpcConfig = base.copy(
-    isa = base.isa.copy(M = false, Zicsr = false)
+    isa = base.isa.copy(
+      M = false,
+      Zicsr = false
+    )
   )
+}
+
+/** 架构的逐指令详情硬件依赖：提交 PC 与指令字。 */
+class WithInstructionLogConfig extends ConfigFragment {
+  override private[npc] def applyTo(base: NpcConfig): NpcConfig =
+    base.copy(isa = base.isa.copy(instructionLog = true))
 }
 
 /** 启用 RISC-V M 扩展。 */

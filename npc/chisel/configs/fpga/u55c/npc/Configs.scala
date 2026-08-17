@@ -5,13 +5,15 @@ import _root_.fpga.u55c._
 import _root_.npc.{
   BaseConfig,
   BranchPredictorConfig,
-  FpgaIpTerminal,
+  ConstructionConfig,
+  FinalLogConfig,
   FpgaNpcIntegrationConfig,
   PipelineDualFwdPerformConfig,
   PipelineDualFwdTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecutePerformConfig,
   Rv32IMZicsrConfig,
   Rv64IMZicsrConfig,
-  ConstructionConfig
+  SdbDebugConfig,
+  TraceConfig
 }
 import _root_.npc.{U55cNpcPerformanceMonitorTerminal, U55cNpcTerminal}
 
@@ -21,13 +23,14 @@ import _root_.npc.{U55cNpcPerformanceMonitorTerminal, U55cNpcTerminal}
 class U55cNpcFpgaConfig extends CDEConfig(
   new U55cBoardConfig ++
     new ConstructionConfig(
-      new BranchPredictorConfig ++
+      new SdbDebugConfig ++
+        new BranchPredictorConfig ++
         new Rv32IMZicsrConfig ++
         new PipelineDualFwdPerformConfig ++
         new FpgaNpcIntegrationConfig ++
         new BaseConfig
     )
-) with U55cNpcTerminal with FpgaIpTerminal
+) with U55cNpcTerminal
 
 /** U55C 的 RV64IM_Zicsr 裸 NPC 终端构造。
   *
@@ -36,13 +39,14 @@ class U55cNpcFpgaConfig extends CDEConfig(
 class U55cRv64NpcFpgaConfig extends CDEConfig(
   new U55cBoardConfig ++
     new ConstructionConfig(
-      new BranchPredictorConfig ++
+      new SdbDebugConfig ++
+        new BranchPredictorConfig ++
         new Rv64IMZicsrConfig ++
         new PipelineDualFwdPerformConfig ++
         new FpgaNpcIntegrationConfig ++
         new BaseConfig
     )
-) with U55cNpcTerminal with FpgaIpTerminal
+) with U55cNpcTerminal
 
 /** U55C RV64IM 的 100 MHz 高性能上板终端。
   *
@@ -58,7 +62,7 @@ class U55cRv64Npc100MHzFpgaConfig extends CDEConfig(
         new FpgaNpcIntegrationConfig ++
         new BaseConfig
     )
-) with U55cNpcTerminal with FpgaIpTerminal
+) with U55cNpcTerminal
 
 /** U55C RV64IM 的 225 MHz 高性能上板终端，关闭性能监测与运行时 SDB。 */
 class U55cRv64Npc225MHzFpgaConfig extends CDEConfig(
@@ -70,7 +74,7 @@ class U55cRv64Npc225MHzFpgaConfig extends CDEConfig(
         new FpgaNpcIntegrationConfig ++
         new BaseConfig
     )
-) with U55cNpcTerminal with FpgaIpTerminal
+) with U55cNpcTerminal
 
 /** U55C RV64IM 裸 NPC 的 300 MHz 时序实验终端。
   *
@@ -81,13 +85,14 @@ class U55cRv64Npc225MHzFpgaConfig extends CDEConfig(
 class U55cRv64Npc300MHzFpgaConfig extends CDEConfig(
   new U55c300MHzSdbBoardConfig ++
     new ConstructionConfig(
-      new BranchPredictorConfig ++
+      new SdbDebugConfig ++
+        new BranchPredictorConfig ++
         new Rv64IMZicsrConfig ++
         new PipelineDualFwdTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecutePerformConfig ++
         new FpgaNpcIntegrationConfig ++
         new BaseConfig
     )
-) with U55cNpcTerminal with FpgaIpTerminal
+) with U55cNpcTerminal
 
 /** U55C RV64IM 300 MHz 的批处理性能监测构造。
  *
@@ -98,13 +103,15 @@ class U55cRv64Npc300MHzFpgaConfig extends CDEConfig(
 class U55cRv64Npc300MHzPerformanceMonitorFpgaConfig extends CDEConfig(
   new U55c300MHzPerformanceMonitorBoardConfig ++
     new ConstructionConfig(
-      new BranchPredictorConfig ++
+      new TraceConfig ++
+        new FinalLogConfig ++
+        new BranchPredictorConfig ++
         new Rv64IMZicsrConfig ++
         new PipelineDualFwdTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecutePerformConfig ++
         new FpgaNpcIntegrationConfig ++
         new BaseConfig
     )
-) with U55cNpcPerformanceMonitorTerminal with FpgaIpTerminal
+) with U55cNpcPerformanceMonitorTerminal
 
 /** 使用硬件生成慢速核心时钟的 U55C RV64IM performance-monitor 终端。
   *
@@ -114,54 +121,64 @@ class U55cRv64Npc300MHzPerformanceMonitorFpgaConfig extends CDEConfig(
 class U55cRv64Npc100MHzPerformanceMonitorFpgaConfig extends CDEConfig(
   new U55cPerformanceMonitorBoardConfig(100) ++
     new ConstructionConfig(
-      new BranchPredictorConfig ++
+      new TraceConfig ++
+        new FinalLogConfig ++
+        new BranchPredictorConfig ++
         new Rv64IMZicsrConfig ++
         new PipelineDualFwdTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecutePerformConfig ++
         new FpgaNpcIntegrationConfig ++
         new BaseConfig
     )
-) with U55cNpcPerformanceMonitorTerminal with FpgaIpTerminal
+) with U55cNpcPerformanceMonitorTerminal
 
 class U55cRv64Npc125MHzPerformanceMonitorFpgaConfig extends CDEConfig(
   new U55cPerformanceMonitorBoardConfig(125) ++
     new ConstructionConfig(
-      new BranchPredictorConfig ++
+      new TraceConfig ++
+        new FinalLogConfig ++
+        new BranchPredictorConfig ++
         new Rv64IMZicsrConfig ++
         new PipelineDualFwdTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecutePerformConfig ++
         new FpgaNpcIntegrationConfig ++
         new BaseConfig
     )
-) with U55cNpcPerformanceMonitorTerminal with FpgaIpTerminal
+) with U55cNpcPerformanceMonitorTerminal
 
 class U55cRv64Npc150MHzPerformanceMonitorFpgaConfig extends CDEConfig(
   new U55cPerformanceMonitorBoardConfig(150) ++
     new ConstructionConfig(
-      new BranchPredictorConfig ++
+      new TraceConfig ++
+        new FinalLogConfig ++
+        new BranchPredictorConfig ++
         new Rv64IMZicsrConfig ++
         new PipelineDualFwdTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecutePerformConfig ++
         new FpgaNpcIntegrationConfig ++
         new BaseConfig
     )
-) with U55cNpcPerformanceMonitorTerminal with FpgaIpTerminal
+) with U55cNpcPerformanceMonitorTerminal
 
 class U55cRv64Npc200MHzPerformanceMonitorFpgaConfig extends CDEConfig(
   new U55cPerformanceMonitorBoardConfig(200) ++
     new ConstructionConfig(
-      new BranchPredictorConfig ++
+      new TraceConfig ++
+        new FinalLogConfig ++
+        new BranchPredictorConfig ++
         new Rv64IMZicsrConfig ++
         new PipelineDualFwdTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecutePerformConfig ++
         new FpgaNpcIntegrationConfig ++
         new BaseConfig
     )
-) with U55cNpcPerformanceMonitorTerminal with FpgaIpTerminal
+) with U55cNpcPerformanceMonitorTerminal
 
 class U55cRv64Npc250MHzPerformanceMonitorFpgaConfig extends CDEConfig(
   new U55cPerformanceMonitorBoardConfig(250) ++
     new ConstructionConfig(
-      new BranchPredictorConfig ++
+      new TraceConfig ++
+        new FinalLogConfig ++
+        new BranchPredictorConfig ++
         new Rv64IMZicsrConfig ++
         new PipelineDualFwdTwoStageIntegerExecuteRegisteredFetchSeparateSerialIntegerAluThreeStageSerialExecutePerformConfig ++
         new FpgaNpcIntegrationConfig ++
         new BaseConfig
     )
-) with U55cNpcPerformanceMonitorTerminal with FpgaIpTerminal
+) with U55cNpcPerformanceMonitorTerminal

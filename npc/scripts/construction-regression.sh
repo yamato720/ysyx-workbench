@@ -32,6 +32,29 @@ export CONSTRUCTION_ID_PREFIX=20260718153042
 "$npc_root/scripts/generate-config-catalog.sh" "$npc_root"
 export NPC_CONFIG_CATALOG_READY=1
 
+# 选择器解析不依赖已保存构造：1-13 必须是闭区间，旧的 1-2-3 分隔写法必须拒绝。
+empty_list=$("$manager" list "$npc_root")
+grep -q '^删除：make version D=<序号>$' <<< "$empty_list" ||
+  fail '空构造库的 version 列表没有输出删除用法'
+if delete_error=$("$manager" delete "$npc_root" '1-13' '' 2>&1); then
+  fail '空构造库上的 D=1-13 不应成功'
+fi
+[[ $delete_error == *'版本序号 1 不存在'* ]] ||
+  fail "D=1-13 没有按闭区间解析：${delete_error:-<empty>}"
+if delete_error=$("$manager" delete "$npc_root" '1-2-3' '' 2>&1); then
+  fail '旧的连字符分隔列表 D=1-2-3 仍被接受'
+fi
+[[ $delete_error == *非法版本选择* ]] ||
+  fail "D=1-2-3 没有被拒绝：${delete_error:-<empty>}"
+if delete_error=$("$manager" delete "$npc_root" '1,3-5,8' '1,3,4,5,8' 2>&1); then
+  fail '空构造库上的混合区间删除不应成功'
+fi
+[[ $delete_error == *'版本序号 1 不存在'* ]] ||
+  fail "混合区间没有展开：${delete_error:-<empty>}"
+if "$manager" delete "$npc_root" '1,3-5,8' '1,3,5,8' >/dev/null 2>&1; then
+  fail 'D=1,3-5,8 与缺少 4 的 delete= 冲突仍被接受'
+fi
+
 # 没有正式 FPGA 构造时，host-build 仍应能根据完整 Config 产生可与外部 xclbin
 # 搭配使用的 U55C host；兼容目录不出现在正式版本库中，也不生成硬件资产。
 host_only_fqcn=npc.fpga.u55c.U55cRv64Npc300MHzFpgaConfig
@@ -73,7 +96,7 @@ monitor_host_only="$CONSTRUCTION_TEST_ROOT/.compatible/$monitor_fqcn"
   $(value "$monitor_host_only/profile.env" FPGA_RUNTIME_SDB) == 0 &&
   $(value "$monitor_host_only/profile.env" FPGA_RUNTIME_TRACE) == 1 &&
   $(value "$monitor_host_only/profile.env" FPGA_TRACE_CACHE_RECORDS) == 2048 &&
-  $(value "$monitor_host_only/abi/nemu/host.env" NEMU_PRESET) == U55cPerformanceMonitor ]] ||
+  $(value "$monitor_host_only/abi/nemu/host.env" NEMU_PRESET) == U55cBase ]] ||
   fail '性能监测 host-only 缓存没有冻结 v13 batch trace ABI'
 cpu_tests=$(realpath "$npc_root/../am-kernels/tests/cpu-tests")
 if interactive_monitor=$(make -C "$cpu_tests" run ALL=add \
@@ -188,19 +211,22 @@ pipeline_version=$(value "$pipeline/construction.env" VERSION_INDEX)
 version_list=$("$manager" list "$npc_root")
 grep -q '^=== 构造属性位图（+ 表示启用）===$' <<< "$version_list" ||
   fail '版本列表没有显示属性位图'
-attribute_header=$(grep '^Version  *RV32  *RV64  *M  *Zicsr  *Pipe  *ID  *EX  *valid?  *Arch  *RunningTime  *Config' <<< "$version_list" || true)
+attribute_header=$(grep '^Version  *RV32  *RV64  *M  *Zicsr  *Pipe  *ID  *EX  *BP  *valid?  *Arch  *RunningTime  *Config' <<< "$version_list" || true)
 [[ -n $attribute_header ]] || fail '属性位图表头不完整'
 [[ $version_list != *'=== Config 名称 ==='* && $version_list != *'=== 可构造 Config ==='* ]] ||
   fail '版本列表仍显示 Config 补充表'
 grep -Eq '^1.*SimulationConfig$' <<< "$version_list" || fail '版本列表没有显示对应 Config 短名'
+grep -q '^删除：make version D=<序号>$' <<< "$version_list" || fail '版本列表没有输出删除用法'
+grep -q 'D=1-13' <<< "$version_list" || fail '删除用法没有说明闭区间写法'
 [[ $(value "$dpi/version.info" RV32) == 0 && $(value "$dpi/version.info" RV64) == 1 &&
   $(value "$dpi/version.info" M) == 1 &&
   $(value "$dpi/version.info" ZICSR) == 1 && $(value "$dpi/version.info" PIPE) == 0 &&
-  $(value "$dpi/version.info" ID) == 0 && $(value "$dpi/version.info" EX) == 0 ]] ||
+  $(value "$dpi/version.info" ID) == 0 && $(value "$dpi/version.info" EX) == 0 &&
+  $(value "$dpi/version.info" BP) == 1 ]] ||
   fail '标量构造的属性信息不正确'
 [[ $(value "$pipeline/version.info" PIPE) == 1 && $(value "$pipeline/version.info" ID) == 1 &&
-  $(value "$pipeline/version.info" EX) == 1 ]] ||
-  fail '流水线三格属性信息不正确'
+  $(value "$pipeline/version.info" EX) == 1 && $(value "$pipeline/version.info" BP) == 1 ]] ||
+  fail '流水线与分支预测属性信息不正确'
 [[ $version_list != *"$dpi_id"* && $version_list != *"$pipeline_id"* ]] ||
   fail '版本列表泄漏了内部时间 ID'
 incomplete="$CONSTRUCTION_TEST_ROOT/unindexed-regression-incomplete"
@@ -412,6 +438,7 @@ spmv="$CONSTRUCTION_TEST_ROOT/$spmv_fqcn"
 spmv_version=$(value "$spmv/version.tag" VERSION_INDEX)
 [[ $spmv_version == 4 && $(value "$spmv/version.tag" STATE) == complete &&
   $(value "$spmv/version.info" ARCH) == SpMV && $(value "$spmv/version.info" RUNNING_TIME) == SYNTH &&
+  $(value "$spmv/version.info" BP) == '' &&
   $(value "$spmv/construction.env" CAPABILITY) == synthesize-only &&
   $(value "$spmv/.complete" FPGA_ARTIFACT) == fpga/artifacts/spmv-resource-probe.xo ]] ||
   fail 'SPMV 构造没有发布正确的只综合版本元数据'
@@ -510,8 +537,8 @@ done
   -s $spmv_input/logs/build/verilator.log &&
   -s $spmv_input/logs/build/accelerator-host.log ]] ||
   fail 'SPMV 正式输入 dry-run 的阶段或 host 边界不正确'
-[[ $(value "$spmv_input/profile.env" ACCELERATOR_HOST_ABI) == spmv-input-report-v12 &&
-  $(value "$spmv_input/profile.env" PROTOCOL_ABI) == spmv-input-windowed-v11 &&
+[[ $(value "$spmv_input/profile.env" ACCELERATOR_HOST_ABI) == spmv-input-report-v13 &&
+  $(value "$spmv_input/profile.env" PROTOCOL_ABI) == spmv-input-windowed-v12 &&
   $(value "$spmv_input/profile.env" SPMV_INPUT_A_READER_COUNT) == 16 &&
   $(value "$spmv_input/profile.env" SPMV_INPUT_X_READER_COUNT) == 2 &&
   $(value "$spmv_input/profile.env" SPMV_INPUT_CTRL_READER_COUNT) == 1 &&
@@ -523,9 +550,9 @@ done
   $(value "$spmv_input/profile.env" SPMV_INPUT_CTRL_BROADCAST) == 1 &&
   $(value "$spmv_input/profile.env" SPMV_INPUT_X_WINDOW_SIZE) == 8192 &&
   $(value "$spmv_input/profile.env" SPMV_INPUT_X_REPLICA_COUNT) == 4 &&
-  $(value "$spmv_input/profile.env" SPMV_INPUT_X_BANK_COUNT) == 16 &&
+  $(value "$spmv_input/profile.env" SPMV_INPUT_X_BANK_COUNT) == 8 &&
   $(value "$spmv_input/profile.env" SPMV_INPUT_X_ELEMENT_WIDTH) == 64 &&
-  $(value "$spmv_input/profile.env" SPMV_CUPER_SLOT_ABI) == cuper-a-slot-v3 &&
+  $(value "$spmv_input/profile.env" SPMV_CUPER_SLOT_ABI) == cuper-a-slot-v4 &&
   $(value "$spmv_input/profile.env" SPMV_CUPER_SLOT_COLUMN_BITS) == 13 &&
   $(value "$spmv_input/profile.env" SPMV_CUPER_SLOT_TAG_BITS) == 3 &&
   $(value "$spmv_input/profile.env" SPMV_CUPER_SLOT_ROW_BITS) == 16 &&
@@ -679,10 +706,17 @@ fi
 if make -C "$npc_root" version D=1--2 >/dev/null 2>&1; then
   fail '非法版本列表仍被接受'
 fi
+if make -C "$npc_root" version D=1-2-3 >/dev/null 2>&1; then
+  fail '旧的连字符分隔列表 D=1-2-3 仍被接受'
+fi
+# 旧语法把 1-3 当成 {1,3}；现在必须是闭区间 {1,2,3}。
+if make -C "$npc_root" version D=1-3 delete=1,3 >/dev/null 2>&1; then
+  fail 'D=1-3 仍被当成离散列表 {1,3} 而不是闭区间'
+fi
 
-# D=1-2-3 和 delete=1,2,3 必须按同一张删除前版本表解析；别名的顺序或
-# 分隔符不同不应构成冲突。一次性删除后不应保留任何旧构造目录。
-make -C "$npc_root" version D=1-2-3 delete=3,2,1 >/dev/null
+# D=1-3 和 delete=1,2,3 必须按同一张删除前版本表解析；别名的顺序或
+# 写法不同不应构成冲突。一次性删除后不应保留任何旧构造目录。
+make -C "$npc_root" version D=1-3 delete=3,2,1 >/dev/null
 [[ ! -d $dpi && ! -d $pipeline && ! -d $u55c ]] ||
   fail '多版本 D=/delete= 没有删除全部原始构造'
 

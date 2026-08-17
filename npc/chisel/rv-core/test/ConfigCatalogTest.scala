@@ -54,6 +54,7 @@ class ConfigCatalogTest extends AnyFlatSpec {
     assert(names.contains("U55cRv64Npc300MHzPerformanceMonitorFpgaConfig"))
     assert(names.contains("U55cSpmv32PcFp32X8192UramResourceProbeConfig"))
     assert(names.contains("SpmvInputSimulationConfig"))
+    assert(names.contains("SpmvInputPingPongSimulationConfig"))
     assert(!names.contains("SpmvOneHbmCsr5MulSimulationConfig"))
     assert(!names.contains("SpmvOneHbmCsr5MulCachedXSimulationConfig"))
     assert(!names.contains("SpmvOneHbmCsr5MulPerformanceMonitorSimulationConfig"))
@@ -77,6 +78,10 @@ class ConfigCatalogTest extends AnyFlatSpec {
         entry.className == "accelerators.spmv.SpmvInputSimulationConfig" &&
         entry.board.isEmpty && entry.target == "SPMV"))
     assert(generated.exists(entry =>
+      entry.shortName == "SpmvInputPingPongSimulationConfig" && entry.scope == "spmv" &&
+        entry.className == "accelerators.spmv.SpmvInputPingPongSimulationConfig" &&
+        entry.board.isEmpty && entry.target == "SPMV"))
+    assert(generated.exists(entry =>
       entry.shortName == "U55cYsyxSocFpgaConfig" &&
         entry.className == "ysyx.fpga.u55c.U55cYsyxSocFpgaConfig" &&
         entry.board.contains("u55c") && entry.target == "SOC"))
@@ -91,6 +96,7 @@ class ConfigCatalogTest extends AnyFlatSpec {
     val common = root.resolve("chisel/configs/common")
 
     assert(Files.isRegularFile(common.resolve("TerminalTraits.scala")))
+    assert(!Files.exists(common.resolve("IpTerminalTraits.scala")))
     assert(!Files.exists(common.resolve("base/TerminalTraits.scala")))
     assert(!Files.exists(common.resolve("core/TerminalTraits.scala")))
     assert(!Files.exists(common.resolve("terminal/TerminalTraits.scala")))
@@ -176,7 +182,7 @@ class ConfigCatalogTest extends AnyFlatSpec {
       Files.writeString(npcTerminal.resolve("Configs.scala"),
         "package npc.fpga.u55c\n" +
           "class WrongTargetConfig extends CDEConfig " +
-          "with U55cSocTerminal with FpgaIpTerminal\n",
+          "with U55cSocTerminal\n",
         StandardCharsets.UTF_8)
 
       val error = intercept[IllegalArgumentException] {
@@ -217,6 +223,13 @@ class ConfigCatalogTest extends AnyFlatSpec {
     assert(values("HOST_ABI") == "nemu-construction-v1")
     assert(values("NEMU_PRESET") == "LocalPipelineTrace")
     assert(values("NEMU_BACKEND") == "local")
+    assert(values("NPC_TRACE") == "0")
+    assert(values("NPC_SDB_DEBUG") == "1")
+    assert(values("NPC_FINAL_LOG") == "1")
+    assert(values("NPC_INSTRUCTION_LOG") == "1")
+    assert(values("NPC_PIPELINE_LOG") == "1")
+    assert(values("NPC_CACHE_LOG") == "0")
+    assert(values("NPC_BP_LOG") == "1")
     assert(values("NEMU_MEMORY_STATISTICS_MODE") == "Split")
     assert(values("PROTOCOL_ABI") == "npc-dpi-v1")
     assert(values("ISA_STRING") == "rv64im_zicsr")

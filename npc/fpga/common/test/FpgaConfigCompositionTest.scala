@@ -5,7 +5,7 @@ import org.chipsalliance.cde.config.Parameters
 import org.scalatest.flatspec.AnyFlatSpec
 import _root_.fpga._
 import _root_.fpga.u55c.U55cXilinxIpAttachment
-import npc.{ArithmeticRouteOperation, BaseConfig, BranchPredictorConfig, ComputeBackend, ConfigCatalog, ConstructionConfig, ConstructionProfile, ExternalAxiSocIntegrationConfig, FpgaIpTerminal, FpgaNpcIntegrationConfig, FpgaToolchainConfig, NemuHostConfig, NemuSimulationIpTerminal, NpcConfig, NpcCoreComponents, NpcCoreConfigKey, OperatorIpTimingConfig, OperatorRouteTarget, PipelineDualFwdPerformConfig, Rv32IMZicsrConfig, Rv64IMZicsrConfig, WithNpcCoreConfig}
+import npc.{ArithmeticRouteOperation, BaseConfig, BranchPredictorConfig, BuiltinCompute, BuiltinComputeConstruction, ComputeBackend, ConfigCatalog, ConstructionConfig, ConstructionProfile, ExternalAxiSocIntegrationConfig, FpgaComputeConstruction, FpgaNpcIntegrationConfig, FpgaToolchainConfig, NemuHostConfig, NpcConfig, NpcCoreComponents, NpcCoreConfigKey, OperatorIpTimingConfig, OperatorRouteTarget, PipelineDualFwdPerformConfig, Rv32IMZicsrConfig, Rv64IMZicsrConfig, SdbDebugConfig, WithArithmeticTimingConfig, WithNpcCoreConfig}
 import npc.fpga.u55c.{U55cNpcFpgaConfig, U55cRv64Npc300MHzPerformanceMonitorFpgaConfig, U55cRv64Npc300MHzFpgaConfig, U55cRv64NpcFpgaConfig}
 import npc.fpga.zcu102.Zcu102NpcFpgaConfig
 import ysyx.{YsyxPlatformParameters, YsyxSimulationConfig, YsyxSocConfig}
@@ -19,16 +19,17 @@ class FpgaConfigCompositionTest extends AnyFlatSpec {
         new PipelineDualFwdPerformConfig ++
         new ExternalAxiSocIntegrationConfig ++
         new BaseConfig
-    ) with NemuSimulationIpTerminal
+    ) with BuiltinComputeConstruction
 
   private class FpgaModelConstruction
     extends ConstructionConfig(
-      new BranchPredictorConfig ++
+      new SdbDebugConfig ++
+        new BranchPredictorConfig ++
         new Rv32IMZicsrConfig ++
         new PipelineDualFwdPerformConfig ++
         new FpgaNpcIntegrationConfig ++
         new BaseConfig
-    ) with FpgaIpTerminal
+    ) with FpgaComputeConstruction
 
   private def withConfig[T](value: String)(body: => T): T = {
     val previous = sys.props.get("npc.config")
@@ -62,7 +63,7 @@ class FpgaConfigCompositionTest extends AnyFlatSpec {
     assert(new U55cNpcFpgaConfig().capability == "run")
     assert(new U55cNpcFpgaConfig().nemuConfig == NemuHostConfig.U55cBase)
     assert(new U55cNpcFpgaConfig().fpgaToolchainConfig == FpgaToolchainConfig.U55cBase)
-    assert(new U55cNpcFpgaConfig().isInstanceOf[FpgaIpTerminal])
+    assert(new U55cNpcFpgaConfig().isInstanceOf[FpgaComputeConstruction])
     implicit val parameters: Parameters =
       new U55cNpcFpgaConfig
 
@@ -117,9 +118,12 @@ class FpgaConfigCompositionTest extends AnyFlatSpec {
     assert(profile("REGISTER_INITIAL_FETCH_REQUEST") == "1")
     assert(profile("SEPARATE_SERIAL_INTEGER_ALU") == "1")
     assert(profile("SERIAL_EXECUTE_RESULT_FORWARDING") == "0")
-    assert(profile("NEMU_PERFORMANCE_HTML") == "0")
-    assert(profile("NEMU_CACHE_HTML") == "0")
-    assert(profile("NEMU_PIPELINE_HTML") == "0")
+    assert(profile("NEMU_PERFORMANCE_HTML") == "1")
+    assert(profile("NEMU_CACHE_HTML") == "1")
+    assert(profile("NEMU_PIPELINE_HTML") == "1")
+    assert(profile("NPC_SDB_DEBUG") == "1")
+    assert(profile("NPC_TRACE") == "0")
+    assert(profile("NPC_FINAL_LOG") == "0")
     assert(profile("PROTOCOL_ABI") == "npc-fpga-runtime-v11")
     assert(profile("FPGA_RUNTIME_SDB") == "1")
     assert(profile("FPGA_RUNTIME_TRACE") == "0")
@@ -142,7 +146,7 @@ class FpgaConfigCompositionTest extends AnyFlatSpec {
     ).toMap
 
     assert(terminal.capability == "batch")
-    assert(terminal.nemuConfig == NemuHostConfig.U55cPerformanceMonitor)
+    assert(terminal.nemuConfig == NemuHostConfig.U55cBase)
     assert(terminal.fpgaToolchainConfig == FpgaToolchainConfig.U55cBase)
     assert(FpgaConfigParameters.platform.clockMHz == 300)
     assert(monitor.enabled)
@@ -163,6 +167,9 @@ class FpgaConfigCompositionTest extends AnyFlatSpec {
     assert(profile("NEMU_PERFORMANCE_HTML") == "1")
     assert(profile("NEMU_CACHE_HTML") == "1")
     assert(profile("NEMU_PIPELINE_HTML") == "1")
+    assert(profile("NPC_TRACE") == "1")
+    assert(profile("NPC_FINAL_LOG") == "1")
+    assert(profile("NPC_SDB_DEBUG") == "0")
   }
 
   "Zcu102NpcFpgaConfig" should "use the PS UIO notification path with the same strict routes" in {
@@ -202,15 +209,15 @@ class FpgaConfigCompositionTest extends AnyFlatSpec {
     assert(!YsyxPlatformParameters.isFpga)
     assert(YsyxPlatformParameters.isDpiSimulation)
     assert(new YsyxSimulationConfig().nemuConfig == NemuHostConfig.LocalPipelineTrace)
-    assert(new YsyxSimulationConfig().isInstanceOf[NemuSimulationIpTerminal])
+    assert(new YsyxSimulationConfig().isInstanceOf[BuiltinComputeConstruction])
     assert(new YsyxSimulationConfig().nemuConfig.pipelineHtml)
-    assert(!new U55cNpcFpgaConfig().nemuConfig.pipelineHtml)
-    assert(!new Zcu102NpcFpgaConfig().nemuConfig.pipelineHtml)
+    assert(new U55cNpcFpgaConfig().nemuConfig.pipelineHtml)
+    assert(new Zcu102NpcFpgaConfig().nemuConfig.pipelineHtml)
   }
 
   it should "wrap the reusable SoC core without redefining its hardware graph" in {
     val terminal = new YsyxSimulationConfig
-    val core = new YsyxSocConfig with NemuSimulationIpTerminal
+    val core = new YsyxSocConfig with BuiltinComputeConstruction
 
     assert(terminal(NpcCoreConfigKey) == core(NpcCoreConfigKey))
   }
@@ -334,7 +341,11 @@ class FpgaConfigCompositionTest extends AnyFlatSpec {
       outputFifoDepth = 8,
       multiply = defaults.multiply.copy(latency = 5)
     ))
-    val model = (NemuSimulationIpTerminal.from(attachment).computeUnitConfig ++ new Rv64IMZicsrConfig).build
+    val model = (
+      new WithArithmeticTimingConfig(attachment.timing) ++
+        BuiltinCompute.computeUnitConfig ++
+        new Rv64IMZicsrConfig
+    ).build
 
     assert(model.operators.mulDiv.implementation.backend == ComputeBackend.Builtin)
     assert(model.operators.mulDiv.multiplyTiming.latency == 5)

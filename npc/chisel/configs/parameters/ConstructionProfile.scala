@@ -86,13 +86,16 @@ object ConstructionProfile {
     } require(actual == expected,
       s"Config ${entry.className} 的 NEMU host=$actual 与 $entry 作用域/板卡要求的 $expected 不兼容")
     val protocolAbi = protocolAbiFor(entry, performanceMonitor)
-    val requestsHardwareReports = settings.performanceHtml || settings.cacheHtml || settings.pipelineHtml
-    if (entry.scope == "fpga" && entry.board.contains("u55c")) {
-      require(requestsHardwareReports == performanceMonitor.enabled,
-        s"U55C HTML reports must match the performance-monitor hardware ABI: ${entry.className}")
-    }
     require(!(performanceMonitor.enabled && runtimeSdbEnabled),
       s"FPGA performance monitoring and interactive SDB are mutually exclusive: ${entry.className}")
+    if (entry.scope == "fpga") {
+      require(config.debug.enableSdbDebug == runtimeSdbEnabled,
+        s"FPGA_RUNTIME_SDB must match ++ SdbDebugConfig: ${entry.className}")
+      if (entry.board.contains("u55c")) {
+        require(config.debug.enableTrace == performanceMonitor.enabled,
+          s"FPGA_RUNTIME_TRACE must match ++ TraceConfig: ${entry.className}")
+      }
+    }
     require(entry.scope == "fpga" || !config.cache.usesUram,
       s"CacheStorage.Uram is only valid for an FPGA construction: ${entry.className}")
     val base = Seq(
@@ -117,6 +120,13 @@ object ConstructionProfile {
       "NEMU_LTO" -> bit(settings.lto),
       "NEMU_ASAN" -> bit(settings.asan),
       "NEMU_MEMORY_STATISTICS_MODE" -> settings.memoryStatisticsMode.name,
+      "NPC_TRACE" -> bit(config.debug.enableTrace),
+      "NPC_SDB_DEBUG" -> bit(config.debug.enableSdbDebug),
+      "NPC_FINAL_LOG" -> bit(config.debug.enableFinalLog),
+      "NPC_INSTRUCTION_LOG" -> bit(config.isa.instructionLog),
+      "NPC_PIPELINE_LOG" -> bit(config.pipeline.pipelineLog),
+      "NPC_CACHE_LOG" -> bit(config.cache.cacheLog),
+      "NPC_BP_LOG" -> bit(config.branchPredictor.bpLog),
       "PROTOCOL_ABI" -> protocolAbi,
       "FPGA_RUNTIME_SDB" -> bit(runtimeSdbEnabled),
       "FPGA_RUNTIME_TRACE" -> bit(performanceMonitor.enabled),

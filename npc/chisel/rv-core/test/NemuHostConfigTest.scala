@@ -24,9 +24,9 @@ class NemuHostConfigTest extends AnyFlatSpec {
     assert(NemuHostConfig.LocalBase.optimization == "O2")
     assert(!NemuHostConfig.LocalBase.trace)
     assert(!NemuHostConfig.LocalBase.vcd)
-    assert(!NemuHostConfig.LocalBase.performanceHtml)
-    assert(!NemuHostConfig.LocalBase.cacheHtml)
-    assert(!NemuHostConfig.LocalBase.pipelineHtml)
+    assert(NemuHostConfig.LocalBase.performanceHtml)
+    assert(NemuHostConfig.LocalBase.cacheHtml)
+    assert(NemuHostConfig.LocalBase.pipelineHtml)
     assert(!NemuHostConfig.LocalBase.softwareDifftest)
     assert(!NemuHostConfig.LocalBase.debug)
     assert(!NemuHostConfig.LocalBase.lto)
@@ -45,13 +45,12 @@ class NemuHostConfigTest extends AnyFlatSpec {
     assert(NemuHostConfig.LocalVcdTrace.pipelineHtml)
     assert(NemuHostConfig.LocalVcdTrace.softwareDifftest)
     assert(NemuHostConfig.U55cBase.backend == NemuBackend.U55c)
-    assert(!NemuHostConfig.U55cBase.performanceHtml)
-    assert(!NemuHostConfig.U55cBase.cacheHtml)
-    assert(!NemuHostConfig.U55cBase.pipelineHtml)
-    assert(NemuHostConfig.U55cPerformanceMonitor.performanceHtml)
-    assert(NemuHostConfig.U55cPerformanceMonitor.cacheHtml)
-    assert(NemuHostConfig.U55cPerformanceMonitor.pipelineHtml)
+    assert(NemuHostConfig.U55cBase.performanceHtml)
+    assert(NemuHostConfig.U55cBase.cacheHtml)
+    assert(NemuHostConfig.U55cBase.pipelineHtml)
+    assert(NemuHostConfig.U55cPerformanceMonitor == NemuHostConfig.U55cBase)
     assert(NemuHostConfig.Zcu102Base.backend == NemuBackend.Zcu102)
+    assert(NemuHostConfig.Zcu102Base.performanceHtml)
   }
 
   it should "support direct copy overrides and reject invalid combinations" in {
@@ -69,8 +68,10 @@ class NemuHostConfigTest extends AnyFlatSpec {
 
     assertThrows[IllegalArgumentException](NemuHostConfig.LocalBase.copy(vcd = true))
     assertThrows[IllegalArgumentException](NemuHostConfig.U55cBase.copy(vcd = true, trace = true))
-    assertThrows[IllegalArgumentException](NemuHostConfig.LocalBase.copy(pipelineHtml = true))
-    assertThrows[IllegalArgumentException](NemuHostConfig.LocalBase.copy(cacheHtml = true))
+    assertThrows[IllegalArgumentException](
+      NemuHostConfig.LocalBase.copy(performanceHtml = false, pipelineHtml = true))
+    assertThrows[IllegalArgumentException](
+      NemuHostConfig.LocalBase.copy(performanceHtml = false, cacheHtml = true))
     assertThrows[IllegalArgumentException](NemuHostConfig.U55cBase.copy(softwareDifftest = true))
     assertThrows[IllegalArgumentException](NemuHostConfig.LocalBase.copy(optimization = "Os"))
   }
@@ -117,10 +118,9 @@ class NemuHostConfigTest extends AnyFlatSpec {
       "LocalPipelineTrace",
       "LocalVcdTrace",
       "U55cBase",
-      "U55cPerformanceMonitor",
       "Zcu102Base"
     ))
-    assert(NemuHostConfig.registeredPresets.map(_.config).distinct.size == 7)
+    assert(NemuHostConfig.registeredPresets.map(_.config).distinct.size == 6)
     assert(NemuHostConfig.presetName(NemuHostConfig.LocalPipelineTrace) == "LocalPipelineTrace")
     assert(NemuHostConfig.presetName(NemuHostConfig.LocalVcdTrace) == "LocalVcdTrace")
   }

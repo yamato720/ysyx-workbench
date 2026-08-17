@@ -8,13 +8,16 @@ import npc.{CacheConfig, CacheMapping, CacheReadMissPolicy, CacheReplacement, Ca
 /** Board-neutral bare-core system; DDR/HBM address conversion belongs to board RTL. */
 class NpcFpgaSystem(implicit parameters: Parameters) extends Module {
   private val config = FpgaConfigParameters.npcCoreConfig
-  require(config.debug.enableTopDebugIo, "NpcFpgaSystem requires runtime debug signals")
-
   private val width = config.isa.xlen
   private val axiConfig = config.axi
   private val memoryDataWidth = config.memoryDataWidth
   private val performanceMonitor = FpgaConfigParameters.performanceMonitor
   private val runtimeSdb = FpgaConfigParameters.runtimeSdb
+  require(config.debug.enableTopDebugIo, "NpcFpgaSystem requires runtime debug signals")
+  require(runtimeSdb.enabled == config.debug.enableSdbDebug,
+    "FPGA SDB hardware must match ++ SdbDebugConfig")
+  require(performanceMonitor.enabled == config.debug.enableTrace,
+    "FPGA performance-monitor hardware must match ++ TraceConfig")
   val io = IO(new FpgaSystemIO(axiConfig.addrWidth, memoryDataWidth, axiConfig.idWidth,
     performanceMonitor.enabled, performanceMonitor.traceDataWidth))
 

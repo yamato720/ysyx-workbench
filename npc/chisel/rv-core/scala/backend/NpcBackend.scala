@@ -244,6 +244,22 @@ class NpcBackend(
     pipelinedMemoryStage.map(_.io.completionCandidates(index)).getOrElse(
       0.U.asTypeOf(new OutstandingCompletionCandidate(cfg.xlen)))
   }
+  // 以下所有 producer*、idCandidate* 和 executeForward* 数组必须保持同一槽位顺序。
+  // HazardUnit 与 ForwardingUnit 依赖“从新到旧”的顺序选择最新匹配写入者。
+  // producerWritesRd(n)、producerRd(n)、producerValid(n) 以及对应的前递数据
+  // 数组都使用下面这组 n：
+  //
+  // producerWritesRd(0)  -> decode/execute
+  // producerWritesRd(1)  -> integer execute
+  // producerWritesRd(2)  -> serial execute request
+  // producerWritesRd(3)  -> serial execute result
+  // producerWritesRd(4)  -> EX/MEM
+  // producerWritesRd(5)  -> completion slot 0
+  // producerWritesRd(6)  -> completion slot 1
+  // producerWritesRd(7)  -> completion slot 2
+  // producerWritesRd(8)  -> completion slot 3
+  // producerWritesRd(9)  -> blocking memory request
+  // producerWritesRd(10) -> MEM/WB
   val producerValid = Seq(
     decodeExecuteReg.io.out.valid,
     if (twoStageIntegerExecute) integerExecuteReg.io.out.valid else false.B,

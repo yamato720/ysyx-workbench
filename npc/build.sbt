@@ -40,7 +40,6 @@ lazy val root = (project in file("./chisel"))
       baseDirectory.value / "accelerators/spmv/scala",
       baseDirectory.value / "configs/parameters",
       baseDirectory.value / "configs/common",
-      baseDirectory.value / "configs/nemu",
       baseDirectory.value / "configs/npc",
       baseDirectory.value / "configs/accelerators/spmv",
       baseDirectory.value / "ysyxSoC/rocket-chip/dependencies/cde/cde/src",

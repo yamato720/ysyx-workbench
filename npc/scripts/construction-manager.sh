@@ -10,7 +10,7 @@ usage() {
       ensure <config> <build> <host-rebuild>
       list [selector] | delete <versions> [delete-alias]
 
-<versions> 是由逗号或连字符分隔的正整数列表，例如 1,2,3 或 1-2-3。
+<versions> 是逗号分隔的正整数或闭区间，例如 1,2,3 或 1-13；也可混合书写，例如 1,3-5,8。
 EOF
   exit 2
 }
@@ -50,7 +50,7 @@ matching_mark() {
 valid_protocol_abi() {
   local scope=$1 board=${2:-} abi=$3
   case "$scope:$board:$abi" in
-    fpga:u55c:npc-fpga-runtime-v11|fpga:u55c:npc-fpga-runtime-v13-performance-monitor|fpga:u55c:spmv-resource-probe-v1|fpga:u55c:spmv-resource-probe-v2|fpga:zcu102:npc-fpga-runtime-v7|npc::npc-dpi-v1|soc::ysyx-dpi-v1|spmv::spmv-input-windowed-v11) return 0 ;;
+    fpga:u55c:npc-fpga-runtime-v11|fpga:u55c:npc-fpga-runtime-v13-performance-monitor|fpga:u55c:spmv-resource-probe-v1|fpga:u55c:spmv-resource-probe-v2|fpga:zcu102:npc-fpga-runtime-v7|npc::npc-dpi-v1|soc::ysyx-dpi-v1|spmv::spmv-input-windowed-v12) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -154,7 +154,7 @@ migrate_config_names_locked() {
 
 migrate_profile_mode() {
   local file=$1 capability scope board replacement normalized_scope temporary inferred_preset host_backend host_devices
-  local saved_host_config saved_preset preset pipeline_html performance_html cache_html memory_statistics_mode integer_execute_stages serial_execute_stages register_initial_fetch_request separate_serial_integer_alu serial_execute_result_forwarding branch_predictor divider_non_blocking needs_divider_non_blocking runtime_sdb trace_enabled trace_bank trace_buffer trace_max trace_cache trace_format trace_record_bytes trace_data_width trace_burst_records dpi_timing_enabled dpi_read_min dpi_read_max dpi_write_min dpi_write_max dpi_timing_seed
+  local saved_host_config saved_preset preset pipeline_html performance_html cache_html memory_statistics_mode integer_execute_stages serial_execute_stages register_initial_fetch_request separate_serial_integer_alu serial_execute_result_forwarding branch_predictor divider_non_blocking needs_divider_non_blocking runtime_sdb saved_runtime_sdb npc_trace npc_sdb_debug npc_final_log npc_instruction_log npc_pipeline_log npc_cache_log npc_bp_log trace_enabled trace_bank trace_buffer trace_max trace_cache trace_format trace_record_bytes trace_data_width trace_burst_records dpi_timing_enabled dpi_read_min dpi_read_max dpi_write_min dpi_write_max dpi_timing_seed
   [[ -f $file ]] || return 0
   capability=$(value "$file" CAPABILITY)
   scope=$(value "$file" SCOPE)
@@ -264,6 +264,32 @@ migrate_profile_mode() {
       trace_format=2; trace_record_bytes=32; trace_data_width=256; trace_burst_records=16
       ;;
   esac
+  saved_runtime_sdb=$(value "$file" FPGA_RUNTIME_SDB)
+  [[ -n $saved_runtime_sdb ]] && runtime_sdb=$saved_runtime_sdb
+  npc_trace=$(value "$file" NPC_TRACE)
+  [[ -n $npc_trace ]] || npc_trace=$trace_enabled
+  npc_sdb_debug=$(value "$file" NPC_SDB_DEBUG)
+  [[ -n $npc_sdb_debug ]] || npc_sdb_debug=$runtime_sdb
+  npc_final_log=$(value "$file" NPC_FINAL_LOG)
+  [[ -n $npc_final_log ]] || npc_final_log=$performance_html
+  npc_instruction_log=$(value "$file" NPC_INSTRUCTION_LOG)
+  [[ -n $npc_instruction_log ]] || npc_instruction_log=$(value "$file" NPC_EXPORT_INSTRUCTIONS)
+  [[ -n $npc_instruction_log ]] || npc_instruction_log=1
+  npc_pipeline_log=$(value "$file" NPC_PIPELINE_LOG)
+  [[ -n $npc_pipeline_log ]] || npc_pipeline_log=$(value "$file" NPC_EXPORT_PIPELINE)
+  [[ -n $npc_pipeline_log ]] || npc_pipeline_log=1
+  npc_cache_log=$(value "$file" NPC_CACHE_LOG)
+  [[ -n $npc_cache_log ]] || npc_cache_log=$(value "$file" NPC_EXPORT_CACHE)
+  if [[ -z $npc_cache_log ]]; then
+    if [[ $(value "$file" ICACHE_ENABLED) == 1 || $(value "$file" DCACHE_ENABLED) == 1 ]]; then
+      npc_cache_log=1
+    else
+      npc_cache_log=0
+    fi
+  fi
+  npc_bp_log=$(value "$file" NPC_BP_LOG)
+  [[ -n $npc_bp_log ]] || npc_bp_log=$(value "$file" NPC_EXPORT_BRANCH)
+  [[ -n $npc_bp_log ]] || npc_bp_log=$branch_predictor
   [[ $pipeline_html == 1 ]] && performance_html=1
   [[ $cache_html == 1 ]] && performance_html=1
   [[ $performance_html == 0 || $performance_html == 1 ]] || performance_html=0
@@ -283,6 +309,9 @@ migrate_profile_mode() {
     -z $(value "$file" DPI_MEMORY_WRITE_RESPONSE_MIN_CYCLES) ||
     -z $(value "$file" DPI_MEMORY_WRITE_RESPONSE_MAX_CYCLES) ||
     -z $(value "$file" DPI_MEMORY_TIMING_SEED) ||
+    -z $(value "$file" NPC_TRACE) || -z $(value "$file" NPC_SDB_DEBUG) || -z $(value "$file" NPC_FINAL_LOG) ||
+    -z $(value "$file" NPC_INSTRUCTION_LOG) || -z $(value "$file" NPC_PIPELINE_LOG) ||
+    -z $(value "$file" NPC_CACHE_LOG) || -z $(value "$file" NPC_BP_LOG) ||
     -z $(value "$file" FPGA_RUNTIME_SDB) || -z $(value "$file" FPGA_RUNTIME_TRACE) || -z $(value "$file" FPGA_TRACE_HBM_BANK) ||
     -z $(value "$file" FPGA_TRACE_BUFFER_BYTES) || -z $(value "$file" FPGA_TRACE_MAX_RECORDS) ||
     -z $(value "$file" FPGA_TRACE_CACHE_RECORDS) || -z $(value "$file" FPGA_TRACE_FORMAT) ||
@@ -309,7 +338,10 @@ migrate_profile_mode() {
       -v trace_record_bytes="$trace_record_bytes" -v trace_data_width="$trace_data_width" \
       -v trace_burst_records="$trace_burst_records" \
       -v dpi_timing_enabled="$dpi_timing_enabled" -v dpi_read_min="$dpi_read_min" -v dpi_read_max="$dpi_read_max" \
-      -v dpi_write_min="$dpi_write_min" -v dpi_write_max="$dpi_write_max" -v dpi_timing_seed="$dpi_timing_seed" '
+      -v dpi_write_min="$dpi_write_min" -v dpi_write_max="$dpi_write_max" -v dpi_timing_seed="$dpi_timing_seed" \
+      -v npc_trace="$npc_trace" -v npc_sdb_debug="$npc_sdb_debug" -v npc_final_log="$npc_final_log" \
+      -v npc_instruction_log="$npc_instruction_log" -v npc_pipeline_log="$npc_pipeline_log" \
+      -v npc_cache_log="$npc_cache_log" -v npc_bp_log="$npc_bp_log" '
       /^PROFILE_FORMAT=/ { print "PROFILE_FORMAT=" profile_format; next }
       /^(F|D|FADD_CYCLES|FADD_II|FMUL_CYCLES|FMUL_II|FDIV_CYCLES|FDIV_II|FFMA_CYCLES|FFMA_II|FSQRT_CYCLES|FSQRT_II|FCVT_CYCLES|FCVT_II|FCMP_CYCLES|FCMP_II)=/ { next }
       /^CAPABILITY=/ { print "CAPABILITY=" capability; next }
@@ -342,6 +374,14 @@ migrate_profile_mode() {
       /^FPGA_TRACE_RECORD_BYTES=/ { if (!trace_record_bytes_seen++) print "FPGA_TRACE_RECORD_BYTES=" trace_record_bytes; next }
       /^FPGA_TRACE_DATA_WIDTH=/ { if (!trace_data_width_seen++) print "FPGA_TRACE_DATA_WIDTH=" trace_data_width; next }
       /^FPGA_TRACE_BURST_RECORDS=/ { if (!trace_burst_records_seen++) print "FPGA_TRACE_BURST_RECORDS=" trace_burst_records; next }
+      /^NPC_TRACE=/ { if (!npc_trace_seen++) print "NPC_TRACE=" npc_trace; next }
+      /^NPC_SDB_DEBUG=/ { if (!npc_sdb_debug_seen++) print "NPC_SDB_DEBUG=" npc_sdb_debug; next }
+      /^NPC_FINAL_LOG=/ { if (!npc_final_log_seen++) print "NPC_FINAL_LOG=" npc_final_log; next }
+      /^NPC_INSTRUCTION_LOG=/ { if (!npc_instruction_log_seen++) print "NPC_INSTRUCTION_LOG=" npc_instruction_log; next }
+      /^NPC_PIPELINE_LOG=/ { if (!npc_pipeline_log_seen++) print "NPC_PIPELINE_LOG=" npc_pipeline_log; next }
+      /^NPC_CACHE_LOG=/ { if (!npc_cache_log_seen++) print "NPC_CACHE_LOG=" npc_cache_log; next }
+      /^NPC_BP_LOG=/ { if (!npc_bp_log_seen++) print "NPC_BP_LOG=" npc_bp_log; next }
+      /^NPC_EXPORT_(PERFORMANCE|INSTRUCTIONS|CACHE|PIPELINE|BRANCH)=/ { next }
       { print }
       END {
         if (!preset_seen) print "NEMU_PRESET=" preset
@@ -369,6 +409,13 @@ migrate_profile_mode() {
         if (!trace_record_bytes_seen) print "FPGA_TRACE_RECORD_BYTES=" trace_record_bytes
         if (!trace_data_width_seen) print "FPGA_TRACE_DATA_WIDTH=" trace_data_width
         if (!trace_burst_records_seen) print "FPGA_TRACE_BURST_RECORDS=" trace_burst_records
+        if (!npc_trace_seen) print "NPC_TRACE=" npc_trace
+        if (!npc_sdb_debug_seen) print "NPC_SDB_DEBUG=" npc_sdb_debug
+        if (!npc_final_log_seen) print "NPC_FINAL_LOG=" npc_final_log
+        if (!npc_instruction_log_seen) print "NPC_INSTRUCTION_LOG=" npc_instruction_log
+        if (!npc_pipeline_log_seen) print "NPC_PIPELINE_LOG=" npc_pipeline_log
+        if (!npc_cache_log_seen) print "NPC_CACHE_LOG=" npc_cache_log
+        if (!npc_bp_log_seen) print "NPC_BP_LOG=" npc_bp_log
         print "NEMU_PERFORMANCE_HTML=" performance_html
         print "NEMU_CACHE_HTML=" cache_html
       }
@@ -408,6 +455,7 @@ migrate_profile_mode() {
     /^FPGA_TRACE_BURST_RECORDS=/ { next }
     /^NEMU_(CONFIG_FQCN|PRESET|BACKEND|TRACE|WATCHPOINT|VCD|PERFORMANCE_HTML|CACHE_HTML|PIPELINE_HTML|NPC_DIFFTEST|DEVICES|OPTIMIZATION|DEBUG|LTO|ASAN)=/ { next }
     /^NEMU_MEMORY_STATISTICS_MODE=/ { next }
+    /^NPC_(TRACE|SDB_DEBUG|FINAL_LOG|INSTRUCTION_LOG|PIPELINE_LOG|CACHE_LOG|BP_LOG|EXPORT_PERFORMANCE|EXPORT_INSTRUCTIONS|EXPORT_CACHE|EXPORT_PIPELINE|EXPORT_BRANCH)=/ { next }
     { print }
   ' "$file" > "$temporary"
   {
@@ -426,6 +474,13 @@ migrate_profile_mode() {
     echo 'NEMU_LTO=0'
     echo 'NEMU_ASAN=0'
     echo "NEMU_MEMORY_STATISTICS_MODE=$memory_statistics_mode"
+    echo "NPC_TRACE=$npc_trace"
+    echo "NPC_SDB_DEBUG=$npc_sdb_debug"
+    echo "NPC_FINAL_LOG=$npc_final_log"
+    echo "NPC_INSTRUCTION_LOG=$npc_instruction_log"
+    echo "NPC_PIPELINE_LOG=$npc_pipeline_log"
+    echo "NPC_CACHE_LOG=$npc_cache_log"
+    echo "NPC_BP_LOG=$npc_bp_log"
     echo "INTEGER_EXECUTE_STAGES=$integer_execute_stages"
     echo "SERIAL_EXECUTE_STAGES=$serial_execute_stages"
     echo "REGISTER_INITIAL_FETCH_REQUEST=$register_initial_fetch_request"
@@ -575,25 +630,55 @@ require_version_index() {
   [[ ${1:-} =~ ^[1-9][0-9]*$ ]] || { echo "非法版本序号 '${1:-}'：应为从 1 开始的正整数" >&2; exit 2; }
 }
 
-# D= 和 delete= 都接受同一组已保存构造的原始版本序号。规范化为有序集合，
-# 让两个别名可以用不同分隔符或顺序表示同一批删除目标。
+# D= 和 delete= 都接受同一组已保存构造的原始版本序号。逗号分隔离散项，
+# 单个 start-end 是闭区间；规范化为有序集合后，两个别名可用不同写法表示同一批删除目标。
 normalize_version_selector() {
-  local selector=${1:-} version_index
+  local selector=${1:-} token start end version_index
   local -A selected=()
+  local -a tokens=()
 
   [[ -n $selector ]] || {
     printf '\n'
     return 0
   }
-  [[ $selector =~ ^[1-9][0-9]*([,-][1-9][0-9]*)*$ ]] || {
-    echo "非法版本选择 '$selector'：应为逗号或连字符分隔的正整数列表，例如 1,2,3 或 1-2-3" >&2
+  [[ $selector =~ ^[1-9][0-9]*(-[1-9][0-9]*)?(,[1-9][0-9]*(-[1-9][0-9]*)?)*$ ]] || {
+    echo "非法版本选择 '$selector'：应为逗号分隔的正整数或闭区间，例如 1,2,3 或 1-13" >&2
     exit 2
   }
-  while IFS= read -r version_index; do
-    require_version_index "$version_index"
-    selected[$version_index]=1
-  done < <(tr ',-' '\n\n' <<< "$selector")
+  IFS=, read -r -a tokens <<< "$selector"
+  for token in "${tokens[@]}"; do
+    if [[ $token == *-* ]]; then
+      start=${token%-*}
+      end=${token#*-}
+      require_version_index "$start"
+      require_version_index "$end"
+      if ((10#$start <= 10#$end)); then
+        for ((version_index = 10#$start; version_index <= 10#$end; version_index++)); do
+          selected[$version_index]=1
+        done
+      else
+        for ((version_index = 10#$start; version_index >= 10#$end; version_index--)); do
+          selected[$version_index]=1
+        done
+      fi
+    else
+      require_version_index "$token"
+      selected[$token]=1
+    fi
+  done
   printf '%s\n' "${!selected[@]}" | LC_ALL=C sort -n | paste -sd, -
+}
+
+print_version_delete_usage() {
+  cat <<'EOF'
+
+删除：make version D=<序号>
+  D=1          删除第 1 号
+  D=1,3,5      删除多个不连续编号
+  D=1-13       删除 1 到 13 的闭区间，等价于 D=1,2,...,13
+  D=1,3-5,8    可混合书写；倒序区间如 D=13-1 与 D=1-13 是同一集合
+  delete=      与 D= 等价；两者同时给出时必须表示同一集合
+EOF
 }
 
 construction_environments() {
@@ -841,12 +926,14 @@ write_version_info() {
       echo 'PIPE='
       echo 'ID='
       echo 'EX='
+      echo 'BP='
     else
       echo "M=$(value "$profile" M)"
       echo "ZICSR=$(value "$profile" ZICSR)"
       echo "PIPE=$(value "$profile" PIPELINE)"
       echo "ID=$(value "$profile" ID_FWD)"
       echo "EX=$(value "$profile" EX_FWD)"
+      echo "BP=$(value "$profile" BRANCH_PREDICTOR)"
     fi
     echo "ARCH=$arch"
     echo "RUNNING_TIME=$running_time"
@@ -883,6 +970,7 @@ write_pending_version_info() {
     echo 'PIPE=0'
     echo 'ID=0'
     echo 'EX=0'
+    echo 'BP=0'
     echo "ARCH=$arch"
     echo "RUNNING_TIME=$running_time"
   } > "$temporary"
@@ -1206,7 +1294,7 @@ profile_cache_valid() {
   if [[ $scope == spmv ]]; then
     [[ $capability == run && $target == SPMV && $(value "$file" HOST_ABI) == none &&
       $(value "$file" ACCELERATOR_HOST_KIND) == spmv &&
-      $(value "$file" ACCELERATOR_HOST_ABI) == spmv-input-report-v12 &&
+      $(value "$file" ACCELERATOR_HOST_ABI) == spmv-input-report-v13 &&
       -z $(value "$file" XLEN) && -z $(value "$file" ISA_STRING) &&
       -z $(value "$file" NEMU_PRESET) && -z $(value "$file" NEMU_BACKEND) &&
       -n $(value "$file" SPMV_INPUT_A_READER_COUNT) &&
@@ -1226,9 +1314,12 @@ profile_cache_valid() {
       $(value "$file" SPMV_INPUT_CTRL_BROADCAST) == 1 &&
       $(value "$file" SPMV_INPUT_X_WINDOW_SIZE) == 8192 &&
       $(value "$file" SPMV_INPUT_X_REPLICA_COUNT) == 4 &&
-      $(value "$file" SPMV_INPUT_X_BANK_COUNT) == 16 &&
+      $(value "$file" SPMV_INPUT_X_BANK_COUNT) == 8 &&
       $(value "$file" SPMV_INPUT_X_ELEMENT_WIDTH) == 64 &&
-      $(value "$file" SPMV_CUPER_SLOT_ABI) == cuper-a-slot-v3 &&
+      $(value "$file" SPMV_INPUT_X_PORT_SCHEDULE) =~ ^(preload|pingpong)$ &&
+      $(value "$file" SPMV_INPUT_X_WRITE_LANES) == 8 &&
+      $(value "$file" SPMV_INPUT_X_OVERLAP_LANES) == 4 &&
+      $(value "$file" SPMV_CUPER_SLOT_ABI) == cuper-a-slot-v4 &&
       $(value "$file" SPMV_CUPER_SLOT_COLUMN_BITS) == 13 &&
       $(value "$file" SPMV_CUPER_SLOT_TAG_BITS) == 3 &&
       $(value "$file" SPMV_CUPER_SLOT_ROW_BITS) == 16 &&
@@ -1320,8 +1411,8 @@ verify_spmv_model_assets() {
   accelerator_abi=$(value "$profile" ACCELERATOR_HOST_ABI)
   [[ -f $profile && $(value "$profile" SCOPE) == spmv &&
     $(value "$profile" HOST_ABI) == none &&
-    $accelerator_abi == spmv-input-report-v12 &&
-    $(value "$profile" PROTOCOL_ABI) == spmv-input-windowed-v11 ]] || {
+    $accelerator_abi == spmv-input-report-v13 &&
+    $(value "$profile" PROTOCOL_ABI) == spmv-input-windowed-v12 ]] || {
     echo "构造不是独立 SPMV Verilator ABI：$directory" >&2; return 1;
   }
   [[ ! -e $directory/abi/nemu && ! -e $directory/fpga ]] || {
@@ -1341,7 +1432,7 @@ verify_spmv_model_assets() {
 
 verify_spmv_host_assets() {
   local directory=$1 profile="$1/profile.env" host="$1/abi/spmv/host.env"
-  [[ -x $directory/abi/spmv/spmv-host && -f $host && $(value "$host" HOST_FORMAT) == 12 ]] || {
+  [[ -x $directory/abi/spmv/spmv-host && -f $host && $(value "$host" HOST_FORMAT) == 13 ]] || {
     echo "独立 SPMV 构造缺少可执行 host 或 host.env：$directory/abi/spmv" >&2; return 1;
   }
   local key
@@ -1357,7 +1448,8 @@ verify_spmv_host_assets() {
     SPMV_INPUT_CONSUMER_COUNT SPMV_INPUT_X_BROADCAST \
     SPMV_INPUT_CTRL_READER_COUNT SPMV_INPUT_CTRL_BROADCAST \
     SPMV_INPUT_X_WINDOW_SIZE SPMV_INPUT_X_REPLICA_COUNT \
-    SPMV_INPUT_X_BANK_COUNT SPMV_INPUT_X_ELEMENT_WIDTH \
+    SPMV_INPUT_X_BANK_COUNT SPMV_INPUT_X_ELEMENT_WIDTH SPMV_INPUT_X_PORT_SCHEDULE \
+    SPMV_INPUT_X_WRITE_LANES SPMV_INPUT_X_OVERLAP_LANES \
     SPMV_CUPER_SLOT_ABI SPMV_CUPER_SLOT_COLUMN_BITS SPMV_CUPER_SLOT_TAG_BITS \
     SPMV_CUPER_SLOT_ROW_BITS \
     SPMV_FP64_MUL_INTERFACE SPMV_FP64_MUL_LATENCY SPMV_FP64_MUL_II \
@@ -2124,7 +2216,7 @@ do_spmv_simulation_host_build_directory() {
     echo "独立 SPMV build-host 需要已保存的完整构造：$directory" >&2; return 1;
   }
   verify_spmv_model_assets "$directory" || return 1
-  [[ $(value "$profile" ACCELERATOR_HOST_ABI) == spmv-input-report-v12 ]] || {
+  [[ $(value "$profile" ACCELERATOR_HOST_ABI) == spmv-input-report-v13 ]] || {
     echo "保存构造不是当前 SPMV 输入流水 ABI，不能只刷新 host；请先执行 make -C $npc_root rebuild version=$(version_index_from_tag "$directory")" >&2
     return 1
   }
@@ -2155,7 +2247,7 @@ do_spmv_simulation_host_build_directory() {
     echo "完整日志目录：$failed_dir" >&2
     return 1
   fi
-  [[ -x $host_stage/spmv-host && $(value "$host_stage/host.env" HOST_FORMAT) == 12 ]] || {
+  [[ -x $host_stage/spmv-host && $(value "$host_stage/host.env" HOST_FORMAT) == 13 ]] || {
     rm -rf "$host_stage" "$log_stage"
     echo "新 SPMV host 资产不完整：$fqcn" >&2
     return 1
@@ -2168,7 +2260,8 @@ do_spmv_simulation_host_build_directory() {
     SPMV_INPUT_CONSUMER_COUNT SPMV_INPUT_X_BROADCAST \
     SPMV_INPUT_CTRL_READER_COUNT SPMV_INPUT_CTRL_BROADCAST \
     SPMV_INPUT_X_WINDOW_SIZE SPMV_INPUT_X_REPLICA_COUNT \
-    SPMV_INPUT_X_BANK_COUNT SPMV_INPUT_X_ELEMENT_WIDTH \
+    SPMV_INPUT_X_BANK_COUNT SPMV_INPUT_X_ELEMENT_WIDTH SPMV_INPUT_X_PORT_SCHEDULE \
+    SPMV_INPUT_X_WRITE_LANES SPMV_INPUT_X_OVERLAP_LANES \
     SPMV_CUPER_SLOT_ABI SPMV_CUPER_SLOT_COLUMN_BITS SPMV_CUPER_SLOT_TAG_BITS \
     SPMV_CUPER_SLOT_ROW_BITS \
     SPMV_FP64_MUL_INTERFACE SPMV_FP64_MUL_LATENCY SPMV_FP64_MUL_II \
@@ -2214,7 +2307,7 @@ do_accelerator_host_build() {
       }
       make --no-print-directory -C "$host_root" build-host
       ;;
-    spmv:spmv-input-report-v12)
+    spmv:spmv-input-report-v13)
       [[ -n $directory ]] || {
         echo "独立 SPMV host 必须绑定已保存的 Verilator 构造" >&2
         return 1
@@ -2244,7 +2337,7 @@ do_accelerator_run() {
     resolved=$(resolve_catalog "$request")
     IFS='|' read -r fqcn _ <<< "$resolved"
     profile=$(profile_for "$fqcn")
-    if [[ $(value "$profile" ACCELERATOR_HOST_ABI) == spmv-input-report-v12 ]]; then
+    if [[ $(value "$profile" ACCELERATOR_HOST_ABI) == spmv-input-report-v13 ]]; then
       directory="$root/$fqcn"
       if [[ ! -d $directory ]] || ! version_directory_is_valid "$directory"; then
         do_build "$fqcn" 0
@@ -2260,7 +2353,7 @@ do_accelerator_run() {
       host_root="$workspace/accelerator-sim/spmv"
       make --no-print-directory -C "$host_root" run "mainargs=$mainargs"
       ;;
-    spmv:spmv-input-report-v12)
+    spmv:spmv-input-report-v13)
       verify_assets "$directory"
       host="$directory/abi/spmv/spmv-host"
       "$host" "$mainargs"
@@ -2292,7 +2385,7 @@ do_host_build() {
     else selected_profile=$(profile_for "$fqcn" 1)
     fi
     case "$(value "$selected_profile" ACCELERATOR_HOST_ABI)" in
-      spmv-input-report-v12)
+      spmv-input-report-v13)
         [[ -d $directory ]] || {
           echo "独立 SPMV build-host 找不到保存构造：$fqcn；请先执行 make -C $npc_root build config=$(config_short_name "$fqcn")" >&2
           return 1
@@ -2392,7 +2485,7 @@ do_host_build_all() {
     accelerator_abi=$(value "$directory/profile.env" ACCELERATOR_HOST_ABI)
     (
       case "$accelerator_abi" in
-        spmv-input-report-v12) do_spmv_simulation_host_build_directory "$directory" ;;
+        spmv-input-report-v13) do_spmv_simulation_host_build_directory "$directory" ;;
         *) do_host_build_directory "$directory" ;;
       esac
     ) &
@@ -2591,8 +2684,8 @@ case "$command" in
 
     found=0
     echo '=== 构造属性位图（+ 表示启用）==='
-    printf '%-8s %-4s %-4s %-2s %-5s %-4s %-3s %-3s %-6s %-5s %-12s %s\n' \
-      Version RV32 RV64 M Zicsr Pipe ID EX 'valid?' Arch RunningTime Config
+    printf '%-8s %-4s %-4s %-2s %-5s %-4s %-3s %-3s %-3s %-6s %-5s %-12s %s\n' \
+      Version RV32 RV64 M Zicsr Pipe ID EX BP 'valid?' Arch RunningTime Config
     if (( ${#indexes[@]} != 0 )); then
       while IFS= read -r version_index; do
         directory=${final_valid[$version_index]:-${final_any[$version_index]:-}}
@@ -2604,7 +2697,7 @@ case "$command" in
         found=$((found + 1))
         valid=''
         version_directory_is_valid "$directory" && valid=+
-        printf '%-8s %-4s %-4s %-2s %-5s %-4s %-3s %-3s %-6s %-5s %-12s %s\n' \
+        printf '%-8s %-4s %-4s %-2s %-5s %-4s %-3s %-3s %-3s %-6s %-5s %-12s %s\n' \
           "$version_index" \
           "$(feature_mark "$(value "$info" RV32)")" \
           "$(feature_mark "$(value "$info" RV64)")" \
@@ -2613,12 +2706,14 @@ case "$command" in
           "$(feature_mark "$(value "$info" PIPE)")" \
           "$(feature_mark "$(value "$info" ID)")" \
           "$(feature_mark "$(value "$info" EX)")" \
+          "$(feature_mark "$(value "$info" BP)")" \
           "$valid" \
           "$(value "$info" ARCH)" \
           "$(value "$info" RUNNING_TIME)" \
           "$short"
       done < <(printf '%s\n' "${!indexes[@]}" | LC_ALL=C sort -n)
     fi
+    print_version_delete_usage
     if [[ $selector_is_version == 1 && $found != 1 ]]; then
       echo "版本序号 $selector 不存在" >&2
       exit 1

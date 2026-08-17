@@ -2,8 +2,8 @@ package npc.fpga.zcu102
 
 import org.chipsalliance.cde.config.{Config => CDEConfig}
 import _root_.fpga.zcu102.Zcu102BoardConfig
-import _root_.npc.{BaseConfig, BranchPredictorConfig, ConstructionConfig, FpgaIpTerminal, FpgaNpcIntegrationConfig,
-  PipelineDualFwdPerformConfig, Rv32IMZicsrConfig, Zcu102NpcTerminal}
+import _root_.npc.{BaseConfig, BranchPredictorConfig, ConstructionConfig, FpgaNpcIntegrationConfig,
+  PipelineDualFwdPerformConfig, Rv32IMZicsrConfig, SdbDebugConfig, Zcu102NpcTerminal}
 
 /** ZCU102 裸 NPC 的可运行终端构造。 */
 
@@ -11,10 +11,11 @@ import _root_.npc.{BaseConfig, BranchPredictorConfig, ConstructionConfig, FpgaIp
 class Zcu102NpcFpgaConfig extends CDEConfig(
   new Zcu102BoardConfig ++
     new ConstructionConfig(
-      new BranchPredictorConfig ++
+      new SdbDebugConfig ++
+        new BranchPredictorConfig ++
         new Rv32IMZicsrConfig ++
         new PipelineDualFwdPerformConfig ++
         new FpgaNpcIntegrationConfig ++
         new BaseConfig
     )
-) with Zcu102NpcTerminal with FpgaIpTerminal
+) with Zcu102NpcTerminal

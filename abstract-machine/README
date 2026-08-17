@@ -32,8 +32,8 @@ make -C nanos-lite run config=FullIsa64PipelineDualForwardingSimulationConfig
 显式传入时只做一致性校验。`version` 是从 `1` 开始、不会因删除其他构造而重排的稳定构造序号。
 
 仿真 Config 缺失时自动原子构造；已有构造直接执行保存的 NEMU host。只有 `host-rebuild=1` 或
-`make -C npc host-build` 才会按 NEMU 的 C/C++、头文件和 menuconfig 依赖增量刷新 host。Chisel、
-Verilator glue 和 FPGA 构造只在 `rebuild=1` 时更新。FPGA
+`make -C npc host-build` 才会按 NEMU 的 C/C++、头文件和 menuconfig 依赖增量刷新 host。
+硬件、Verilator 或 FPGA 资产更新请先执行 `make -C npc rebuild config=<Config>`。FPGA
 Config 缺失资产时需添加 `build=1`；已有 FPGA 一直使用同一构造目录中冻结的 NEMU host、manifest 和
 bitstream/xclbin。资产 SHA、板卡、XRT 平台或协议 ABI 不兼容会硬失败。
 

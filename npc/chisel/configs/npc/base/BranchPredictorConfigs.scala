@@ -11,7 +11,10 @@ class WithNpcBranchPredictorConfig(
   table: BranchPredictorTableConfig = BranchPredictorTableConfig()
 ) extends ConfigFragment {
   override private[npc] def applyTo(base: NpcConfig): NpcConfig = base.copy(
-    branchPredictor = BranchPredictorParameters(enabled = true, table = table)
+    branchPredictor = BranchPredictorParameters(
+      enabled = true,
+      table = table
+    )
   )
 }
 
@@ -26,4 +29,10 @@ class WithoutNpcBranchPredictorConfig extends ConfigFragment {
   override private[npc] def applyTo(base: NpcConfig): NpcConfig = base.copy(
     branchPredictor = BranchPredictorParameters()
   )
+}
+
+/** 动态分支预测的预测/实际 next-PC 硬件依赖。 */
+class WithBpLogConfig extends ConfigFragment {
+  override private[npc] def applyTo(base: NpcConfig): NpcConfig =
+    base.copy(branchPredictor = base.branchPredictor.copy(bpLog = true))
 }

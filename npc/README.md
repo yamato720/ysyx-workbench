@@ -50,7 +50,7 @@ make -C npc version config=SimulationConfig
 make -C npc version version=1
 make -C npc version D=1
 make -C npc version delete=1
-make -C npc version D=1-2-3
+make -C npc version D=1-13
 make -C npc version delete=1,2,3
 ```
 
@@ -80,12 +80,13 @@ make -C am-kernels/tests/cpu-tests run-bat ALL="forwarding matrix-mul fpu" \
 
 `make version` 只读取构造目录中的 `version.tag` 和 `version.info`，不会刷新或解析 Scala catalog。
 它显示已有的 `constructions/<FQCN>/` 构造，不罗列尚未构造的 Config。属性位图固定为
-`Version RV32 RV64 M F Zicsr Pipe ID EX valid?`；`Arch` 以 `NPC`/`SoC`/`SpMV` 显示，
+`Version RV32 RV64 M F Zicsr Pipe ID EX BP valid?`；`Arch` 以 `NPC`/`SoC`/`SpMV` 显示，
 `RunningTime` 以 `SIM`/`FPGA`/`SYNTH` 显示，最右侧 `Config` 为对应保存构造的短名。
 `valid?` 为 `+` 时该正式构造当前资产完整；进行中的构造和缺少必要资产的构造保留显示
-但为空。`D=<序号列表>` 与 `delete=<序号列表>` 都会删除对应构造并紧凑重映射后续序号。列表可用逗号或
-连字符分隔，例如 `D=1,2,3` 与 `D=1-2-3`；所有目标都按删除前的同一张版本表先解析，最后才统一删除和
-重编号，不需要根据中途变化的编号重复执行。两个别名同时给出时必须表示同一集合，顺序与分隔符可以不同。
+但为空。`D=<序号列表>` 与 `delete=<序号列表>` 都会删除对应构造并紧凑重映射后续序号。列表用逗号分隔离散项，
+`start-end` 表示闭区间，例如 `D=1,3,5` 与 `D=1-13`；也可混合书写，例如 `D=1,3-5,8`。
+`make version` 在表格后输出这些删除写法。所有目标都按删除前的同一张版本表先解析，最后才统一删除和
+重编号，不需要根据中途变化的编号重复执行。两个别名同时给出时必须表示同一集合，顺序与写法可以不同。
 
 ## 独立 SPMV 输入流水
 
@@ -318,7 +319,7 @@ U55C 平台限定 `xclbin`、ZCU102 `npc.bit` 或保存 host 的构造显示为�
 `build` 和按当前 Config 解析的运行仍会刷新 Scala 目录。
 
 版本主表用 `+`/空白属性位图代替长 Config 名称：XLEN 分为 RV32/RV64，ISA 显示 M/F/Zicsr，流水线
-固定显示 Pipe/ID/EX 三格，随后显示 `valid?`。`Arch` 和 `RunningTime` 使用文本，分别表达
+固定显示 Pipe/ID/EX 三格，动态分支预测单独占 `BP` 一格，随后显示 `valid?`。`Arch` 和 `RunningTime` 使用文本，分别表达
 NPC/SoC/SpMV 与 SIM/FPGA/SYNTH；最右侧 `Config` 显示保存的 Config 短名，不再输出额外名称映射或
 可构造 Config 表。
 
@@ -352,7 +353,7 @@ Config 启用 VCD，则在同一运行目录依次写 `wave-001.vcd`、`wave-002
 
 | 层级 | 目录 | 职责 | 是否可选 |
 | --- | --- | --- | --- |
-| 公共运行宿主 | `chisel/configs/common/`、`chisel/configs/nemu/` | 运行 trait 与内部 NEMU menuconfig 预设 | 运行终端必需 |
+| 公共运行宿主 | `chisel/configs/common/` | 运行 trait、NEMU host 配方与 FPGA 工具链配方 | 运行终端必需 |
 | 加速器领域 | `chisel/configs/accelerators/spmv/`、`chisel/accelerators/spmv/` | `accelerators.spmv` 参数、host/terminal preset、profile 与 RTL | SPMV 才需要 |
 | L1 | `chisel/configs/npc/` | 完整 NPC 成品与 Make 反射解析器 | 必需 |
 | L2 | `chisel/configs/ysyx/` | Rocket/ysyxSoC CDE 图与运行平台 | SoC 才需要 |
@@ -361,8 +362,8 @@ Config 启用 VCD，则在同一运行目录依次写 `wave-001.vcd`、`wave-002
 
 所有配置按 `base -> core -> 根部终端文件` 分层：`base/` 放底层键、数据、原子片段和不可直挂的
 底层 trait，`core/` 形成可复用的具名完整组合，终端级内容直接放在领域根部。公共终端协议位于
-`common/TerminalTraits.scala`；并列的 `common/IpTerminalTraits.scala` 只保留 FPGA 与 NEMU 两种
-计算单元终端，其共享合同位于 `common/base/IpComputeSelectionTraits.scala`，并由运行 Config 显式混入。
+`common/TerminalTraits.scala`。本地仿真构造自带 `BuiltinCompute`，FPGA 运行构造自带 `FpgaCompute`；
+共享合同位于 `common/base/IpComputeSelectionTraits.scala`。
 最终无参终端位于各领域根部 `Configs.scala`；板卡终端位于
 `fpga/<board>/{npc,ysyx,spmv}/Configs.scala`。每个终端只挂载一个 terminal 层 trait，不能直接混入 base trait。Make 每次顶层启动都会由 Scala 校验该
 布局并生成派生 TSV；终端 trait 出现在领域内其他文件或终端直接混入 base trait 都会报错。选中 Config

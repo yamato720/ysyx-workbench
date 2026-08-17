@@ -4,8 +4,8 @@ set -euo pipefail
 
 npc_root=${1:?usage: generate-nemu-config-catalog.sh NPC_ROOT OUTPUT_TSV}
 output=${2:?usage: generate-nemu-config-catalog.sh NPC_ROOT OUTPUT_TSV}
-[[ -d "$npc_root/chisel/configs/nemu" ]] || {
-  printf '找不到 NEMU Host Config 源目录：%s\n' "$npc_root/chisel/configs/nemu" >&2
+[[ -f "$npc_root/chisel/configs/common/core/NemuHostConfig.scala" ]] || {
+  printf '找不到 NEMU Host Config：%s\n' "$npc_root/chisel/configs/common/core/NemuHostConfig.scala" >&2
   exit 2
 }
 

@@ -23,9 +23,8 @@ object CdeConfigResolver {
           s"CDE configuration ${entry.className} terminal trait conflicts with catalog metadata")
         entry.scope match {
           case "soc" => require(config.isInstanceOf[HostConstruction] &&
-            config.isInstanceOf[LocalSocTerminal] &&
-            config.isInstanceOf[NemuSimulationIpTerminal],
-            s"SoC configuration ${entry.className} must directly mount LocalSocTerminal and NemuSimulationIpTerminal")
+            config.isInstanceOf[LocalSocTerminal],
+            s"SoC configuration ${entry.className} must directly mount LocalSocTerminal")
           case "spmv" => require(config.isInstanceOf[AcceleratorHostConstruction] &&
             config.capability == "run" &&
             !config.isInstanceOf[HostConstruction] && !config.isInstanceOf[IpConstruction],
@@ -36,7 +35,7 @@ object CdeConfigResolver {
                 config.isInstanceOf[FpgaBitstreamConstruction]) &&
                 config.isInstanceOf[AcceleratorHostConstruction] &&
                 !config.isInstanceOf[HostConstruction] && !config.isInstanceOf[IpConstruction]
-              case _ => config.isInstanceOf[FpgaConstruction] && config.isInstanceOf[FpgaIpTerminal]
+              case _ => config.isInstanceOf[FpgaConstruction]
             }
             require(validConstruction,
               s"FPGA configuration ${entry.className} must mount the construction terminal required by target ${entry.target}")

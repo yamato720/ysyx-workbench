@@ -12,6 +12,7 @@ import npc.ip.arithmetic.ArithmeticIpProvider
 trait FpgaIpAttachment extends FpgaIpComputeSelection {
   def name: String
   def arithmeticIp: ArithmeticIpProvider
+  def timing: OperatorIpTimingConfig
 
   /** 把 IP 合同写入已完成的核心配置。 */
   def attachTo(core: NpcConfig): NpcConfig
@@ -61,8 +62,6 @@ final case class XilinxIntegerIpAttachment(
     }
     OperatorRouteConfig(integer.toMap)
   }
-
-  override def operatorTiming: OperatorIpTimingConfig = timing
 
   override def attachTo(core: NpcConfig): NpcConfig = {
     require(core.isa.M, s"FPGA IP attachment $name requires the RISC-V M extension")

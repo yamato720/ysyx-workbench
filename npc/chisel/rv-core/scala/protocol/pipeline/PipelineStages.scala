@@ -76,6 +76,7 @@ class FetchDecodePayload(cfg: ISAConfig) extends Bundle {
   * *编号* 而非源数值：未来可在这个 Decoupled 边界插入重命名、ROB 或发射阶段，
   * 无需让前端了解物理寄存器或推测数值。
   */
+  
 class DecodedDispatchPayload(cfg: ISAConfig) extends Bundle {
   val pc = UInt(cfg.xlen.W)
   val instruction = UInt(32.W)
@@ -242,3 +243,4 @@ class MemoryWritebackPayload(cfg: ISAConfig) extends Bundle {
   val trapEpc = UInt(cfg.xlen.W)
   val mretEnable = Bool()
 }
+

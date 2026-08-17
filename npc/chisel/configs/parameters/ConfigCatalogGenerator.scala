@@ -35,14 +35,12 @@ object ConfigCatalogGenerator {
     "Zcu102NpcTerminal" -> ("fpga", "NPC"),
     "Zcu102SocTerminal" -> ("fpga", "SOC")
   )
-  private val ipTerminalForTarget = Map(
-    "NPC" -> "FpgaIpTerminal",
-    "SOC" -> "FpgaIpTerminal"
-  )
-  private val ipTerminalNames = Vector("NemuSimulationIpTerminal", "FpgaIpTerminal")
   private val baseConstructionTraits = Vector(
     "HostConstruction",
     "AcceleratorHostConstruction",
+    "IpConstruction",
+    "BuiltinComputeConstruction",
+    "FpgaComputeConstruction",
     "FpgaToolchainConstruction",
     "NemuSimulationConstruction",
     "FpgaConstruction",
@@ -205,35 +203,6 @@ object ConfigCatalogGenerator {
     found.headOption.map(_._2)
   }
 
-  /** 运行终端必须在根部 Config 中直接写出唯一的计算 IP terminal。
-    *
-    * 这与 NEMU/FPGA host 配方同样是终端 ABI 的一部分；核心和 CDE `++` 链不能
-    * 隐式选择或重复挂载它。
-    */
-  private def validateIpTerminal(block: ClassBlock, scope: String, target: String): Unit = {
-    val mounted = ipTerminalNames.flatMap { name =>
-      val occurrences = raw"\b$name\b".r.findAllMatchIn(block.body).size
-      Option.when(occurrences > 0)(name -> occurrences)
-    }
-    if (target == "SPMV") {
-      require(mounted.isEmpty,
-        s"Config ${block.name} 的 SPMV 终端不能挂载 CPU 计算 IP terminal，实际为 " +
-          mounted.map { case (name, count) => s"$name x$count" }.mkString(", "))
-    } else {
-      val expected = if (scope == "npc" || scope == "soc") "NemuSimulationIpTerminal"
-        else ipTerminalForTarget(target)
-      require(mounted == Vector(expected -> 1),
-        s"Config ${block.name} 必须直接且唯一地挂载 $expected，实际为 " +
-          mounted.map { case (name, count) => s"$name x$count" }.mkString(", "))
-    }
-    val nested = ipTerminalNames.filter { name =>
-      raw"(?s)\bnew\s+[^()]*?\bwith\s+$name\b".r.findFirstIn(block.body).nonEmpty
-    }
-    require(nested.isEmpty,
-      s"Config ${block.name} 只能在公开终端自身挂载计算 IP，不能在 CDE ++ 链中挂载：" +
-        nested.mkString(", "))
-  }
-
   private def discoverTerminals(
     directory: Path,
     expectedScope: String,
@@ -258,7 +227,6 @@ object ConfigCatalogGenerator {
         require(target == value,
           s"Config ${block.name} 的 terminal TARGET=$target 与目录 $directory 要求的 $value 不一致")
       }
-      validateIpTerminal(block, scope, target)
       val expectedParent = if (scope == "npc") "ConstructionConfig" else "CDEConfig"
       require(block.parent == expectedParent,
         s"Config ${block.name} 的终端 trait 要求继承 $expectedParent，实际为 ${block.parent}")

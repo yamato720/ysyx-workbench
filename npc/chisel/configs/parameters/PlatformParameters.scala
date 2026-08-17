@@ -168,7 +168,8 @@ final case class CacheHierarchyConfig(
   l2cache: CacheConfig = CacheConfig.Disabled,
   instructionBuffer: InstructionBufferConfig = InstructionBufferConfig(),
   accessMode: CacheAccessMode = CacheAccessMode.Blocking,
-  pipelinedQueues: PipelinedCacheQueueConfig = PipelinedCacheQueueConfig.Blocking
+  pipelinedQueues: PipelinedCacheQueueConfig = PipelinedCacheQueueConfig.Blocking,
+  cacheLog: Boolean = false
 ) {
   def enabled: Boolean = icache.enabled || dcache.enabled || l2cache.enabled
   def usesUram: Boolean = Seq(icache, dcache, l2cache).exists(cache =>
@@ -292,13 +293,22 @@ case class BranchPredictorTableConfig(
     s"branch predictor table depths must be positive powers of two, got ${values.mkString(",")}")
 }
 
-/** 独立于流水线性能配方的分支预测模式和容量。 */
+/** 独立于流水线性能配方的分支预测模式和容量。
+  *
+  * `bpLog` 是预测/实际 next-PC 等分支观测信号，由动态预测配方
+  * `++ new BpLogConfig` 打开。
+  */
 case class BranchPredictorParameters(
   enabled: Boolean = false,
-  table: BranchPredictorTableConfig = BranchPredictorTableConfig()
+  table: BranchPredictorTableConfig = BranchPredictorTableConfig(),
+  bpLog: Boolean = false
 )
 
-/** 流水线、互锁与旁路的生成时参数。 */
+/** 流水线、互锁与旁路的生成时参数。
+  *
+  * `pipelineLog` 是各级驻留、停顿和提交采样信号；标量核同样导出顺序驻留。
+  * 由性能配方 `++ new PipelineLogConfig` 打开。
+  */
 case class PipelineConfig(
   enablePipeline: Boolean = false,
   enableInterlock: Boolean = true,
@@ -308,7 +318,8 @@ case class PipelineConfig(
   registerInitialFetchRequest: Boolean = false,
   separateSerialIntegerAlu: Boolean = false,
   serialExecuteResultForwarding: Boolean = true,
-  directIntegerWritebackBypass: Boolean = false
+  directIntegerWritebackBypass: Boolean = false,
+  pipelineLog: Boolean = false
 ) {
   require(integerExecuteStages == 1 || integerExecuteStages == 2,
     s"integerExecuteStages must be 1 or 2, got $integerExecuteStages")
@@ -370,11 +381,23 @@ case class MemoryConfig(
   dpiTiming: DpiMemoryTimingConfig = DpiMemoryTimingConfig.Immediate
 )
 
-/** 顶层调试和派发控制接口的开关。 */
+/** 顶层调试口与观测导出模式。
+  *
+  * `enableTopDebugIo` 只表示是否存在调试端口（NEMU 运行环和 FPGA mailbox
+  * 的提交/完成通路）。额外引脚由三个导出模式打开：
+  * `enableTrace` 为逐提交采样，`enableSdbDebug` 为 SDB 快照/单步，
+  * `enableFinalLog` 为结束时的聚合计数。各域信号本身挂在 arch / cache /
+  * pipeline / branch 参数上。
+  */
 case class DebugConfig(
   enableTopDebugIo: Boolean = false,
+  enableTrace: Boolean = false,
+  enableSdbDebug: Boolean = false,
+  enableFinalLog: Boolean = false,
   enableDispatchControl: Boolean = false
-)
+) {
+  def enableObservation: Boolean = enableTrace || enableSdbDebug || enableFinalLog
+}
 
 /** NPC AXI master 的接口形状和外部连接策略。 */
 case class AxiConfig(
@@ -429,6 +452,12 @@ case class NpcConfig(
     require(cache.accessMode != CacheAccessMode.PipelinedTwoCycle ||
       (!axi.useExternalMaster && cache.icache.enabled && cache.dcache.enabled),
       "PipelinedTwoCycle cache access is limited to the local complete L1 DPI hierarchy")
+    require(!cache.cacheLog || cache.enabled,
+      "cache log requires an enabled cache hierarchy")
+    require(!branchPredictor.bpLog || branchPredictor.enabled,
+      "branch log requires a dynamic branch predictor")
+    require(!(debug.enableTrace || debug.enableFinalLog || debug.enableSdbDebug) || debug.enableTopDebugIo,
+      "trace / sdb-debug / finallog export requires the top-level debug port")
     this
   }
 }

@@ -225,15 +225,12 @@ check_terminal() {
     grep -qx 'FPGA_TRACE_DATA_WIDTH=256' "$profile" || fail "$config trace AXI 宽度错误"
     grep -qx 'FPGA_TRACE_BURST_RECORDS=16' "$profile" || fail "$config trace burst 错误"
   fi
-  if [[ $config == U55c* && $expected_trace == 0 ]]; then
-    grep -qx 'NEMU_PERFORMANCE_HTML=0' "$profile" || fail "$config 不应启用性能主页"
-    grep -qx 'NEMU_CACHE_HTML=0' "$profile" || fail "$config 不应启用缓存报告"
-    grep -qx 'NEMU_PIPELINE_HTML=0' "$profile" || fail "$config 不应启用流水页面"
-  fi
-  if [[ $expected_trace == 1 ]]; then
-    grep -qx 'NEMU_PERFORMANCE_HTML=1' "$profile" || fail "$config 应启用性能主页"
-    grep -qx 'NEMU_CACHE_HTML=1' "$profile" || fail "$config 应启用缓存报告"
-    grep -qx 'NEMU_PIPELINE_HTML=1' "$profile" || fail "$config 应启用流水页面"
+  if [[ $config == U55c* ]]; then
+    grep -qx 'NEMU_PERFORMANCE_HTML=1' "$profile" || fail "$config host 应默认打开性能主页"
+    grep -qx 'NEMU_CACHE_HTML=1' "$profile" || fail "$config host 应默认打开缓存报告"
+    grep -qx 'NEMU_PIPELINE_HTML=1' "$profile" || fail "$config host 应默认打开流水页面"
+    grep -qx "NPC_TRACE=$expected_trace" "$profile" || fail "$config NPC_TRACE 应与硬件 trace 一致"
+    grep -qx "NPC_SDB_DEBUG=$expected_sdb" "$profile" || fail "$config NPC_SDB_DEBUG 应与硬件 SDB 一致"
   fi
   grep -qx 'M=1' "$profile" || fail "$config 未启用 M 扩展"
   if [[ $config == *Cache* ]]; then

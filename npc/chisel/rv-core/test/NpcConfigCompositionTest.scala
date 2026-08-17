@@ -16,13 +16,13 @@ class NpcConfigCompositionTest extends AnyFlatSpec {
     assert(new PipelineCheckConfig().capability == "check-only")
     assert(new SimulationConfig().capability == "run")
     assert(new SimulationConfig().nemuConfig == NemuHostConfig.LocalPipelineTrace)
-    val fpgaCore: Any = new FpgaModelConstruction with FpgaIpTerminal
+    val fpgaCore: Any = new FpgaModelConstruction with FpgaComputeConstruction
     assert(!fpgaCore.isInstanceOf[MakeTerminal])
     assert(!new ExternalAxiSocIntegrationConfig().isInstanceOf[MakeTerminal])
   }
 
   "ConstructionConfig" should "directly provide its completed core through the CDE key" in {
-    val construction = new FpgaModelConstruction with FpgaIpTerminal
+    val construction = new FpgaModelConstruction with FpgaComputeConstruction
     implicit val parameters: Parameters = construction
 
     assert(parameters(NpcCoreConfigKey) == construction.config)
@@ -43,7 +43,7 @@ class NpcConfigCompositionTest extends AnyFlatSpec {
   }
 
   "FpgaConfig" should "compose explicit architecture, performance, memory, and compute fragments" in {
-    val config = (new FpgaModelConstruction with FpgaIpTerminal).config
+    val config = (new FpgaModelConstruction with FpgaComputeConstruction).config
 
     assert(config.isa.xlen == 32)
     assert(config.isa.M)
@@ -53,6 +53,9 @@ class NpcConfigCompositionTest extends AnyFlatSpec {
     assert(config.operators.mulDiv.implementation.backend == ComputeBackend.FPGA)
     assert(config.memory.mainMemorySize == 0x08000000L)
     assert(config.debug.enableTopDebugIo)
+    assert(!config.debug.enableTrace)
+    assert(!config.debug.enableSdbDebug)
+    assert(!config.debug.enableFinalLog)
     assert(config.debug.enableDispatchControl)
     assert(config.axi.useExternalMaster)
     assert(config.axi.dataWidth == 32)
@@ -77,7 +80,7 @@ class NpcConfigCompositionTest extends AnyFlatSpec {
   it should "remain composable when an integration adds a later fragment" in {
     val config = (
       new ScalarPerformConfig ++
-        (new FpgaModelConstruction with FpgaIpTerminal)
+        (new FpgaModelConstruction with FpgaComputeConstruction)
     ).build
 
     assert(config.isa.xlen == 32)
@@ -103,18 +106,23 @@ class NpcConfigCompositionTest extends AnyFlatSpec {
     assert(config.operators.mulDiv.multiplyTiming.responseFifoDepth == 8)
   }
 
-  "IP terminal traits" should "reuse one timing contract for FPGA and NEMU functional simulation" in {
+  "IP terminal traits" should "select only the compute backend" in {
+    val fpgaConfig = (FpgaCompute.computeUnitConfig ++ new Rv64IMZicsrConfig).build
+    val nemuConfig = (BuiltinCompute.computeUnitConfig ++ new Rv64IMZicsrConfig).build
+
+    assert(fpgaConfig.operators.mulDiv.implementation.backend == ComputeBackend.FPGA)
+    assert(nemuConfig.operators.mulDiv.implementation.backend == ComputeBackend.Builtin)
+  }
+
+  "Arithmetic timing fragments" should "apply the same timing to either compute backend" in {
     val defaults = OperatorIpTimingConfig.Default
-    val timing = defaults.copy(
+    val timing = new WithArithmeticTimingConfig(defaults.copy(
       outputFifoDepth = 8,
       multiply = defaults.multiply.copy(latency = 5)
-    )
-    val fpga = new FpgaIpTerminal {
-      override val operatorTiming: OperatorIpTimingConfig = timing
-    }
+    ))
 
-    val fpgaConfig = (fpga.computeUnitConfig ++ new Rv64IMZicsrConfig).build
-    val nemuConfig = (NemuSimulationIpTerminal.from(fpga).computeUnitConfig ++ new Rv64IMZicsrConfig).build
+    val fpgaConfig = (timing ++ FpgaCompute.computeUnitConfig ++ new Rv64IMZicsrConfig).build
+    val nemuConfig = (timing ++ BuiltinCompute.computeUnitConfig ++ new Rv64IMZicsrConfig).build
 
     assert(fpgaConfig.operators.mulDiv.implementation.backend == ComputeBackend.FPGA)
     assert(fpgaConfig.operators.mulDiv.multiplyTiming.latency == 5)
@@ -210,36 +218,70 @@ class NpcConfigCompositionTest extends AnyFlatSpec {
   "NPC terminal configurations" should "compose architecture, performance, and integration cores explicitly" in {
     val terminalAndCore = Seq(
       new StandaloneConfig().config -> (
-        new BranchPredictorConfig ++ new Rv64IZicsrConfig ++ new ScalarPerformConfig ++
+        new SdbDebugConfig ++ new FinalLogConfig ++
+          new BranchPredictorConfig ++ new Rv64IZicsrConfig ++ new ScalarPerformConfig ++
           new BareNpcIntegrationConfig ++ new BaseConfig).build,
       new SimulationConfig().config -> (
-        new BranchPredictorConfig ++ new Rv64IMZicsrConfig ++ new ScalarPerformConfig ++
+        new SdbDebugConfig ++ new FinalLogConfig ++
+          new BranchPredictorConfig ++ new Rv64IMZicsrConfig ++ new ScalarPerformConfig ++
           new BareNpcIntegrationConfig ++ new BaseConfig).build,
       new PipelineSimulationConfig().config -> (
-        new BranchPredictorConfig ++ new Rv64IMZicsrConfig ++ new PipelineDualFwdPerformConfig ++
+        new SdbDebugConfig ++ new FinalLogConfig ++
+          new BranchPredictorConfig ++ new Rv64IMZicsrConfig ++ new PipelineDualFwdPerformConfig ++
           new BareNpcIntegrationConfig ++ new BaseConfig).build,
       new FullIsa64NoPipelineSimulationConfig().config ->
-        (new BranchPredictorConfig ++ new Rv64IMZicsrConfig ++ new ScalarPerformConfig ++
+        (new SdbDebugConfig ++ new FinalLogConfig ++
+          new BranchPredictorConfig ++ new Rv64IMZicsrConfig ++ new ScalarPerformConfig ++
           new BareNpcIntegrationConfig ++ new BaseConfig).build,
       new FullIsa64PipelineNoForwardingSimulationConfig().config ->
-        (new BranchPredictorConfig ++ new Rv64IMZicsrConfig ++ new PipelinePerformConfig ++
+        (new SdbDebugConfig ++ new FinalLogConfig ++
+          new BranchPredictorConfig ++ new Rv64IMZicsrConfig ++ new PipelinePerformConfig ++
           new BareNpcIntegrationConfig ++ new BaseConfig).build,
       new FullIsa64PipelineDualForwardingSimulationConfig().config ->
-        (new BranchPredictorConfig ++ new Rv64IMZicsrConfig ++ new PipelineDualFwdPerformConfig ++
+        (new SdbDebugConfig ++ new FinalLogConfig ++
+          new BranchPredictorConfig ++ new Rv64IMZicsrConfig ++ new PipelineDualFwdPerformConfig ++
           new BareNpcIntegrationConfig ++ new BaseConfig).build,
       new Zcu102Rv32OperatorSimulationConfig().config ->
-        (new BranchPredictorConfig ++ new Rv32IMZicsrConfig ++ new PipelineDualFwdPerformConfig ++
+        (new SdbDebugConfig ++ new FinalLogConfig ++
+          new BranchPredictorConfig ++ new Rv32IMZicsrConfig ++ new PipelineDualFwdPerformConfig ++
           new BareNpcIntegrationConfig ++ new BaseConfig).build,
       new U55cRv32OperatorSimulationConfig().config ->
-        (new BranchPredictorConfig ++ new Rv32IMZicsrConfig ++ new PipelineDualFwdPerformConfig ++
+        (new SdbDebugConfig ++ new FinalLogConfig ++
+          new BranchPredictorConfig ++ new Rv32IMZicsrConfig ++ new PipelineDualFwdPerformConfig ++
           new BareNpcIntegrationConfig ++ new BaseConfig).build,
       new U55cRv64OperatorSimulationConfig().config ->
-        (new BranchPredictorConfig ++ new Rv64IMZicsrConfig ++ new PipelineDualFwdPerformConfig ++
+        (new SdbDebugConfig ++ new FinalLogConfig ++
+          new BranchPredictorConfig ++ new Rv64IMZicsrConfig ++ new PipelineDualFwdPerformConfig ++
           new BareNpcIntegrationConfig ++ new BaseConfig).build
     )
 
     terminalAndCore.foreach { case (terminal, core) =>
-      assert(terminal == NemuSimulationIpTerminal.computeUnitConfig.applyTo(core).validated)
+      assert(terminal == BuiltinCompute.computeUnitConfig.applyTo(
+        new WithDefaultArithmeticTimingConfig().applyTo(core)
+      ).validated)
     }
+  }
+
+  "Observation recipes" should "export discrete pins and leave domain signals on their configs" in {
+    val local = new SimulationConfig().config
+    val cache = new CacheSimulationConfig().config
+    val staticBranch = (
+      new SdbDebugConfig ++
+        new FinalLogConfig ++
+        new StaticBranchPredictorConfig ++
+        new Rv64IMZicsrConfig ++
+        new ScalarPerformConfig ++
+        new BareNpcIntegrationConfig ++
+        new BaseConfig
+    ).build
+
+    assert(!local.debug.enableTrace && local.debug.enableSdbDebug && local.debug.enableFinalLog)
+    assert(local.isa.instructionLog)
+    assert(local.pipeline.pipelineLog)
+    assert(!local.cache.cacheLog)
+    assert(local.branchPredictor.bpLog)
+    assert(cache.cache.cacheLog)
+    assert(!staticBranch.branchPredictor.enabled)
+    assert(!staticBranch.branchPredictor.bpLog)
   }
 }

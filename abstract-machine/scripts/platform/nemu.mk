@@ -26,6 +26,10 @@ ifneq ($(origin host_rebuild),undefined)
   $(error host_rebuild 已删除，请使用 host-rebuild=1)
 endif
 
+ifneq ($(strip $(rebuild)),)
+  $(error rebuild 参数已删除，请先执行 make -C $(NPC_HOME) rebuild config=<Config>)
+endif
+
 insert-arg: image
 	@python $(AM_HOME)/tools/insert-arg.py $(IMAGE).bin $(MAINARGS_MAX_LEN) $(MAINARGS_PLACEHOLDER) "$(mainargs)"
 
@@ -40,16 +44,14 @@ ifeq ($(CONFIG_CONSTRUCTION_MANAGED),1)
   .PHONY: npc-construction
   npc-construction:
 	@case "$(build)" in ''|0|1) ;; *) echo 'build 只能是 0 或 1' >&2; exit 2;; esac
-	@case "$(rebuild)" in ''|0|1) ;; *) echo 'rebuild 只能是 0 或 1' >&2; exit 2;; esac
 	@case "$(host-rebuild)" in ''|0|1) ;; *) echo 'host-rebuild 只能是 0 或 1' >&2; exit 2;; esac
-	@test "$(strip $(rebuild))" != 1 || test "$(strip $(host-rebuild))" != 1 || { echo 'rebuild=1 已包含 host 重构，不能同时提供 host-rebuild=1' >&2; exit 2; }
 	@$(CONSTRUCTION_MANAGER) ensure "$(NPC_HOME)" "$(NPC_CONFIG_FQCN)" \
-		"$(if $(filter 1,$(build)),1,0)" "$(if $(filter 1,$(rebuild)),1,0)" "$(if $(filter 1,$(host-rebuild)),1,0)"
+		"$(if $(filter 1,$(build)),1,0)" "$(if $(filter 1,$(host-rebuild)),1,0)"
 
   run run-bat gdb: npc-construction
 	@$(MAKE) --no-print-directory "$@" ARCH="$(ARCH)" \
 		NPC_CONSTRUCTION_DIR="$(NPC_CONSTRUCTION_DIR)" NPC_CONFIG_FQCN="$(NPC_CONFIG_FQCN)" \
-		config= version= build= rebuild= host-rebuild= reset="$(strip $(reset))" CONFIG_CONSTRUCTION_MANAGED=
+		config= version= build= host-rebuild= reset="$(strip $(reset))" CONFIG_CONSTRUCTION_MANAGED=
 else ifneq ($(strip $(NPC_CONSTRUCTION_DIR)),)
   CONSTRUCTION_ENV := $(NPC_CONSTRUCTION_DIR)/construction.env
   CONSTRUCTION_PROFILE := $(NPC_CONSTRUCTION_DIR)/profile.env

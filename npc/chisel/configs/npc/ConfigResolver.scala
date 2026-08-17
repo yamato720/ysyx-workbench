@@ -12,12 +12,12 @@ object ConfigResolver {
         throw new IllegalArgumentException(s"Cannot construct NPC configuration ${entry.className}: ${error.getMessage}", error)
     }
     instance match {
-      case config: ConstructionConfig with LocalNpcTerminal with NemuSimulationIpTerminal =>
+      case config: ConstructionConfig with LocalNpcTerminal =>
         require(config.constructionScope == entry.scope && config.constructionTarget == entry.target,
           s"NPC configuration ${entry.className} terminal trait conflicts with catalog metadata")
         entry -> config
       case _ => throw new IllegalArgumentException(
-        s"NPC configuration ${entry.className} must directly mount LocalNpcTerminal and NemuSimulationIpTerminal"
+        s"NPC configuration ${entry.className} must directly mount LocalNpcTerminal"
       )
     }
   }

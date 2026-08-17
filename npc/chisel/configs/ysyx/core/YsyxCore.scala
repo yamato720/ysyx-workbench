@@ -1,15 +1,18 @@
 package ysyx
 
 import org.chipsalliance.cde.config.{Config => CDEConfig}
-import _root_.npc.{BaseConfig, BranchPredictorConfig, ExternalAxiSocIntegrationConfig, PipelineDualFwdPerformConfig,
-  Rv32IMZicsrConfig, TeachingCacheConfig, WithTerminalIpCoreConfig}
+import _root_.npc.{BaseConfig, BranchPredictorConfig, ExternalAxiSocIntegrationConfig, FinalLogConfig,
+  PipelineDualFwdPerformConfig, Rv32IMZicsrConfig, SdbDebugConfig, TeachingCacheConfig,
+  WithTerminalIpCoreConfig}
 
 /** 通用 ysyxSoC：默认外部 AXI NPC 加 Rocket 基础配置。
   * 板卡 SoC 构造可在左侧直接叠加任意完整 NPC Config，以覆盖其默认 NPC。
   */
 class YsyxSocConfig extends CDEConfig(
   new WithTerminalIpCoreConfig(
-    new BranchPredictorConfig ++
+    new SdbDebugConfig ++
+      new FinalLogConfig ++
+      new BranchPredictorConfig ++
       new Rv32IMZicsrConfig ++
       new PipelineDualFwdPerformConfig ++
       new ExternalAxiSocIntegrationConfig ++
@@ -21,7 +24,9 @@ class YsyxSocConfig extends CDEConfig(
 /** 使用教学缓存层级的 ysyxSoC 图。 */
 class CacheYsyxSocConfig extends CDEConfig(
   new WithTerminalIpCoreConfig(
-    new BranchPredictorConfig ++
+    new SdbDebugConfig ++
+      new FinalLogConfig ++
+      new BranchPredictorConfig ++
       new Rv32IMZicsrConfig ++
       new PipelineDualFwdPerformConfig ++
       new TeachingCacheConfig ++

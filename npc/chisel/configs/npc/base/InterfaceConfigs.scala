@@ -1,9 +1,27 @@
 package npc
 
-/** 在顶层导出调试 IO。 */
+/** 在顶层导出调试 IO（提交/完成等运行环端口）。 */
 class WithTopDebugConfig extends ConfigFragment {
   override private[npc] def applyTo(base: NpcConfig): NpcConfig =
     base.copy(debug = base.debug.copy(enableTopDebugIo = true))
+}
+
+/** 导出逐提交观测引脚。 */
+class WithTraceConfig extends ConfigFragment {
+  override private[npc] def applyTo(base: NpcConfig): NpcConfig =
+    base.copy(debug = base.debug.copy(enableTopDebugIo = true, enableTrace = true))
+}
+
+/** 导出 NEMU SDB 互动引脚。 */
+class WithSdbDebugConfig extends ConfigFragment {
+  override private[npc] def applyTo(base: NpcConfig): NpcConfig =
+    base.copy(debug = base.debug.copy(enableTopDebugIo = true, enableSdbDebug = true))
+}
+
+/** 导出结束时聚合计数引脚。 */
+class WithFinalLogConfig extends ConfigFragment {
+  override private[npc] def applyTo(base: NpcConfig): NpcConfig =
+    base.copy(debug = base.debug.copy(enableTopDebugIo = true, enableFinalLog = true))
 }
 
 /** 启用提交/派发控制接口，供 FPGA 控制平面使用。 */

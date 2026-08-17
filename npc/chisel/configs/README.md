@@ -14,8 +14,8 @@ NEMU 运行宿主；本地仿真的 DPI 只是该宿主连接 Verilator 的内�
 | 层级 | 目录 | 依赖方向 | 是否可选 | 完整成品文件 |
 | --- | --- | --- | --- | --- |
 | 公共底层 | `common/base/` | 通用 IP 数据、计算单元选择、FPGA IP attachment、工具链字段模型和不可由终端直挂的构造接口 | 始终编译，不独立生成 | `OperatorIpConfigs.scala`、`IpComputeSelectionTraits.scala`、`FpgaIpAttachmentTraits.scala`、`FpgaToolchainConfigModels.scala`、`ConstructionTraits.scala` |
-| 构造配方 | `common/core/`、`nemu/core/` | 终端直接子项集群、检查 trait、NEMU host 与 FPGA 工具链 case class；不定义硬件 ABI | 所有 Make 终端必需 | `TerminalCoreTraits.scala`、`IpTerminalCoreTraits.scala`、`CheckTraits.scala`、`NemuHostConfig.scala`、`FpgaToolchainConfig.scala` |
-| 终端 trait | `common/TerminalTraits.scala`、`common/IpTerminalTraits.scala` | 前者提供通用 NPC/SoC 的 NEMU/FPGA 默认配方、目录身份、scope 和 target；后者只提供 FPGA/NEMU 两种计算单元终端 | CPU Make 终端必需；后者不进入 Make 目录 | 根部直挂文件 |
+| 构造配方 | `common/core/` | 检查 trait、NEMU host 与 FPGA 工具链 case class；不定义硬件 ABI | 所有 Make 终端必需 | `CheckTraits.scala`、`NemuHostConfig.scala`、`FpgaToolchainConfig.scala` |
+| 终端 trait | `common/TerminalTraits.scala` | 提供通用 NPC/SoC 的 NEMU/FPGA 默认配方、目录身份、scope、target，以及对应的乘除法后端 | CPU Make 终端必需 | 根部直挂文件 |
 | SPMV 加速器 | `accelerators/spmv/`、`../accelerators/spmv/` | 独立参数键、host/terminal preset、CPU-free profile、reader/IP 壳与 Cuper 输入层 | SPMV 才需要 | `base/SpmvInputConfig.scala`、`base/SpmvConstructionTraits.scala`、`core/SpmvInputSimulationProfile.scala`、`TerminalTraits.scala` |
 | L1 NPC | `npc/` | 仅依赖 CDE 参数库，不依赖 Rocket/板卡 | 必需 | `core/` 成品与终端 `Configs.scala` |
 | L2 SoC | `ysyx/` | 依赖 L1 与 Rocket CDE | SoC 才需要 | `core/YsyxCore.scala` 与终端 `Configs.scala` |
@@ -32,20 +32,20 @@ NEMU 运行宿主；本地仿真的 DPI 只是该宿主连接 Verilator 的内�
   成品。终端必须直接引用这些成品，不能在终端文件里重新展开底层片段。
 - 终端级文件与 `base/`、`core/` 文件夹分离，直接位于领域根部。通用 NPC/SoC Make 终端预设 trait
   位于 `common/TerminalTraits.scala`；SPMV 预设位于 `accelerators/spmv/TerminalTraits.scala`；
-  `common/IpTerminalTraits.scala` 只定义非 Make 的
-  `FpgaIpTerminal` 与 `NemuSimulationIpTerminal`。通用计算单元合同位于
-  `common/base/IpComputeSelectionTraits.scala`，让两种终端消费同一组时序属性。SPMV 的 construction、
+  本地仿真构造自带 `BuiltinCompute`，FPGA 运行构造自带 `FpgaCompute`。通用计算单元合同位于
+  `common/base/IpComputeSelectionTraits.scala`。SPMV 的 construction、
   host preset 和 terminal trait 全部位于 `accelerators/spmv/`。每个 CPU 运行 terminal
   Config 必须显式混入对应 IP terminal；`U55cSpmvSynthesisTerminal` 与
   `U55cSpmvBitstreamTerminal` 都不挂载 CPU 算子 terminal。
   不得把 IP 作为 `ConstructionConfig`/SoC Config 的构造参数，或在 CDE `++` 链中重新选择后端。
-- 根部终端文件只能声明可直接挂载的终端 trait。终端直接包含的子项和子项集群放入 `core/`，每个子项
-  的基础依赖、数据模型和原子片段放入 `base/`；终端不能直接拼接多个 base trait。
+- 根部终端文件只能声明可直接挂载的终端 trait。该 trait 自己写出 scope、target 和默认
+  host/FPGA/IP 配方，不再经 `*TerminalCore` 转发。硬件成品仍放在 `core/`，原子片段放在
+  `base/`；终端 Config 不能直接拼接多个 base 构造 trait。
 - 领域根部的 `Configs.scala` 是唯一终端 Config 文件，只包含公共无参终端类。每个类只挂载一个 terminal 层
   预设，由它完整提供运行构造、作用域、目标和 NEMU/FPGA 默认配方。内置 Config 与普通示例应保持
   一步挂载；显式自定义终端可重载配方，但不得直接混入 base trait。检查构造和可复用成品也不得放入此文件。
-- `common/`、`nemu/` 没有硬件终端 Config，因此不创建空的 `Configs.scala`；公共运行预设与计算单元 IP
-  trait 分别放在 `common/TerminalTraits.scala` 和 `common/IpTerminalTraits.scala`。FPGA 板卡共享
+- `common/` 没有硬件终端 Config，因此不创建空的 `Configs.scala`；公共运行预设
+  trait 放在 `common/TerminalTraits.scala`。FPGA 板卡共享
   `fpga/base/`，各自在 `fpga/<board>/core/` 形成物理策略，并由板卡下
   `{npc,ysyx,spmv}/Configs.scala` 生成最终终端。
 
@@ -123,7 +123,7 @@ class U55cYsyxSocFpgaConfig extends CDEConfig(
   new _root_.fpga.u55c.U55cBoardConfig ++
     new FpgaConfig ++
     new YsyxElaborateConfig
-) with _root_.npc.U55cSocTerminal with _root_.npc.FpgaIpTerminal
+) with _root_.npc.U55cSocTerminal
 ```
 
 这里 `YsyxElaborateConfig` 提供 Rocket/SoC 和默认外部 AXI NPC；完整 L1 `FpgaConfig` 自身就是
@@ -158,12 +158,10 @@ FPGA 上板和 check-only Config 保持关闭。
 core trait，不进入 Make 目录。公共构造 trait 名称不使用 `Trait` 后缀，承载这些 trait 的文件统一使用
 `*Traits.scala`。自动目录不再从类名后缀猜测目标；所有硬件参数应在可追踪的 Scala 组合中固定。
 
-`IpTerminalTraits.scala` 的 `FpgaIpTerminal` 和 `NemuSimulationIpTerminal` 分别将同一份算子时序映射为
-FPGA M backend 与本地 M/F 功能模型。通用合同和 FPGA 非终端选择留在
+本地仿真构造自带 `BuiltinCompute`，FPGA 运行构造自带 `FpgaCompute`。通用合同和 FPGA 非终端选择留在
 `common/base/IpComputeSelectionTraits.scala`；`FpgaIpAttachment` 同样只依赖该 base 合同，仍是不可变的
 IP provider、M 路由和时序合同。L4 板卡 Config 选择 attachment，NPC 与 SoC FPGA 顶层从同一 CDE 键读取。
-`IpConstruction` 与 `HostConstruction` 平行：运行 terminal Config 显式混入前者，`ConstructionConfig` 与
-`WithTerminalIpCoreConfig` 只读取它。`FpgaPlatformSettings` 只保存物理地址和时钟，避免与 IP 合同重复。
+`ConstructionConfig` 与 `WithTerminalIpCoreConfig` 只读取已挂载的后端。`FpgaPlatformSettings` 只保存物理地址和时钟，避免与 IP 合同重复。
 
 各目录 README 提供可直接复制到 `++` 链的完整特性表。
 
@@ -223,8 +221,8 @@ AXI 参数为 64/512/4，reader 支持 2 笔 outstanding burst。profile 固定
 `(batch, PE)` 时间流内以 8 项 LRU 把 `tag` 编码为累加上下文。当前乘法 RTL 只透明传递 `tag`，全部
 8 个 lane 都会读 X、进入 FMUL，物理空槽不参与上下文分配且仍编码为全零。profile 继续输出输入布局、
 16 个消费端、两路 X 条带原子广播和一路控制面广播。
-独立的 `SpmvInputReportConfig` 输出 `SPMV_PERFORMANCE_HTML` 与
-`SPMV_PIPELINE_HTML`；后者要求前者开启，公开 Config 使用 `PerformancePipeline` preset。不输出
+`LocalSpmvInputTerminal` 绑定 `SpmvInputReportConfig.PerformancePipeline`，输出
+`SPMV_PERFORMANCE_HTML` 与 `SPMV_PIPELINE_HTML`；后者要求前者开启。不输出
 `SPMV_X_MODE`、CSR5、NEMU、CPU 或 FPGA
 字段。正式构造严格执行 `elaborate -> verilator -> accelerator-host`，并只发布到
 `abi/{rtl,verilator,spmv}`。

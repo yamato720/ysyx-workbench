@@ -37,7 +37,7 @@
 | 流水线 ID/EX 双前递 | `new PipelineDualFwdPerformConfig` | `core/PerformCore.scala` | 是；与其他完整性能预设二选一 |
 | 单项性能覆盖 | `new WithPipelineConfig`、`new WithoutPipelineConfig`、`new WithInterlockConfig`、`new WithoutInterlockConfig`、`new WithNpcIdForwardingConfig`、`new WithNpcExecuteForwardingConfig`、`new WithTwoStageIntegerExecuteConfig`、`new WithSerialExecuteAdditionalStagesConfig(1|2)`、`new WithRegisteredInitialFetchRequestConfig`、`new WithSeparateSerialIntegerAluConfig` | `base/PerformConfigs.scala` | 是；用于在完整预设上精确覆盖 |
 | 主存窗口 | `new WithBareMainMemoryConfig`、`new WithSoCMainMemoryConfig`、`new WithFpgaMainMemoryConfig` | `base/MemoryConfigs.scala` | 必需且按目标选择 |
-| 算术后端/时序 | `NemuSimulationIpTerminal`、`FpgaIpTerminal` | `../common/IpTerminalTraits.scala` | 由公开运行 Config 自身显式挂载；L1 成品与 CDE `++` 链不得选择后端 |
+| 算术后端 | `BuiltinCompute`、`FpgaCompute` | `../common/base/IpComputeSelectionTraits.scala` | 由本地/FPGA 构造自动挂载；L1 成品与 CDE `++` 链不得选择后端 |
 | 可复用算子 IP 时序数据 | `OperatorIpTimingConfig(...)`、`OperatorIpTimingConfig.Default` | `../common/base/OperatorIpConfigs.scala` | 是；由本文件的算子片段消费 |
 | 外部 AXI 与调试 | `new WithExternalAxiConfig`、`new WithTopDebugConfig`、`new WithDispatchControlConfig` | `base/InterfaceConfigs.scala` | 是 |
 | 乘除法完成延迟 | `new WithMulDivCompletionConfig(37)` | `base/OperatorConfigs.scala` | 是 |

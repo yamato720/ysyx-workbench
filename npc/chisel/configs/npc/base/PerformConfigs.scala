@@ -20,6 +20,12 @@ class BasePerformConfig extends ConfigFragment {
   )
 }
 
+/** 流水线的驻留/停顿/提交采样硬件依赖。 */
+class WithPipelineLogConfig extends ConfigFragment {
+  override private[npc] def applyTo(base: NpcConfig): NpcConfig =
+    base.copy(pipeline = base.pipeline.copy(pipelineLog = true))
+}
+
 /** 在既有性能基础上启用流水线；互锁和前递由其他片段决定。 */
 class WithPipelineConfig extends ConfigFragment {
   override private[npc] def applyTo(base: NpcConfig): NpcConfig =
