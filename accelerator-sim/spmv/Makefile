@@ -8,22 +8,45 @@ LDLIBS ?=
 BUILD_DIR ?= $(CURDIR)/build
 HOST_BIN := $(BUILD_DIR)/spmv-host
 ENCODING_TEST_BIN := $(BUILD_DIR)/encoding-test
+DATAFLOW_SIM_BIN := $(BUILD_DIR)/dataflow-sim
+HISPARSE_PREPROCESS_BIN := $(BUILD_DIR)/hisparse-preprocess-benchmark
+HISPMV_PREPROCESS_BIN := $(BUILD_DIR)/hispmv-preprocess-benchmark
 ENCODING_SOURCES := encoding/encoder.cpp encoding/cuper/cuper.cpp encoding/cuper/demand_schedule.cpp \
-	encoding/cuper/report.cpp encoding/cuper/vector_report.cpp
+	encoding/cuper/report.cpp encoding/cuper/vector_report.cpp \
+	encoding/cuperflow/cuperflow.cpp encoding/cuperflow/demand_schedule.cpp \
+	encoding/cuperflow/report.cpp encoding/cuperflow/vector_report.cpp
 HOST_SOURCES := host.cpp golden.cpp $(ENCODING_SOURCES)
 HOST_OBJECTS = $(addprefix $(BUILD_DIR)/,$(HOST_SOURCES:.cpp=.o))
 ENCODING_OBJECTS := $(addprefix $(BUILD_DIR)/,$(ENCODING_SOURCES:.cpp=.o))
 ENCODING_TEST_OBJECT := $(BUILD_DIR)/encoding/encoding_test.o
-DEPFILES = $(sort $(HOST_OBJECTS:.o=.d) $(ENCODING_TEST_OBJECT:.o=.d))
+DATAFLOW_SIM_OBJECT := $(BUILD_DIR)/dataflow_sim/dataflow_sim.o
+HISPARSE_PREPROCESS_OBJECT := $(BUILD_DIR)/encoding/hisparse_preprocess_benchmark.o
+HISPMV_PREPROCESS_OBJECT := $(BUILD_DIR)/encoding/hispmv_preprocess_benchmark.o
+DEPFILES = $(sort $(HOST_OBJECTS:.o=.d) $(ENCODING_TEST_OBJECT:.o=.d) \
+	$(DATAFLOW_SIM_OBJECT:.o=.d) $(HISPARSE_PREPROCESS_OBJECT:.o=.d) \
+	$(HISPMV_PREPROCESS_OBJECT:.o=.d))
 ENCODING ?= cuper
 ENCODING_TEST_DATASET ?= n512
 ACCELERATOR_DATA_ROOT ?= $(abspath $(CURDIR)/../data)
 SPMV_GOLDEN_DIR := $(BUILD_DIR)/golden
 SPMV_ENCODING_REPORT_DIR ?= $(BUILD_DIR)/encoding
 CPPFLAGS += -DACCELERATOR_SIM_DEFAULT_DATA_ROOT=\"$(ACCELERATOR_DATA_ROOT)\"
+CUPERFLOW_ENABLE_FLEX_X ?= 1
+CPPFLAGS += -DCUPERFLOW_ENABLE_FLEX_X=$(CUPERFLOW_ENABLE_FLEX_X)
+CUPERFLOW_TIMING_FP64_MUL_LATENCY ?= 4
+CUPERFLOW_TIMING_FP64_MUL_II ?= 1
+CPPFLAGS += -DCUPERFLOW_TIMING_FP64_MUL_LATENCY=$(CUPERFLOW_TIMING_FP64_MUL_LATENCY) \
+	-DCUPERFLOW_TIMING_FP64_MUL_II=$(CUPERFLOW_TIMING_FP64_MUL_II)
 
 SPMV_PROFILE_FILE ?= $(if $(strip $(CONSTRUCTION_PROFILE)),$(CONSTRUCTION_PROFILE),$(if $(strip $(CONSTRUCTION_DIR)),$(CONSTRUCTION_DIR)/profile.env,))
 spmv_profile_value = $(shell test -n "$(SPMV_PROFILE_FILE)" && test -f "$(SPMV_PROFILE_FILE)" && sed -n 's/^$(1)=//p' "$(SPMV_PROFILE_FILE)" | tail -n 1)
+SPMV_CUPERFLOW_RTL := $(if $(filter spmv-cuperflow-rtl-v1,$(call spmv_profile_value,ACCELERATOR_HOST_ABI)),1,)
+
+ifeq ($(SPMV_CUPERFLOW_RTL),1)
+HOST_SOURCES += input/cuperflow_rtl_timing.cpp
+else
+HOST_SOURCES += input/cuperflow_timing.cpp
+endif
 
 SPMV_INPUT_A_READER_COUNT ?= $(call spmv_profile_value,SPMV_INPUT_A_READER_COUNT)
 SPMV_INPUT_X_READER_COUNT ?= $(call spmv_profile_value,SPMV_INPUT_X_READER_COUNT)
@@ -59,6 +82,9 @@ SPMV_FP64_MUL_CORE_COUNT ?= $(call spmv_profile_value,SPMV_FP64_MUL_CORE_COUNT)
 SPMV_FP64_MUL_TOTAL_LANES ?= $(call spmv_profile_value,SPMV_FP64_MUL_TOTAL_LANES)
 SPMV_PERFORMANCE_HTML ?= $(call spmv_profile_value,SPMV_PERFORMANCE_HTML)
 SPMV_PIPELINE_HTML ?= $(call spmv_profile_value,SPMV_PIPELINE_HTML)
+
+SPMV_SIM_TOP ?= $(if $(filter 1,$(SPMV_CUPERFLOW_RTL)),SpmvCuperflowInputTop,SpmvInputTop)
+SPMV_SIM_ELABORATOR ?= $(if $(filter 1,$(SPMV_CUPERFLOW_RTL)),accelerators.spmv.inputmul.cuperflow.ElaborateSpmvCuperflowInputTop,accelerators.spmv.ElaborateSpmvInputTop)
 
 # 未绑定 construction 时保留独立编码 smoke test 的默认输入布局；一旦绑定 profile，
 # 上面的 ?= 会优先采用 Config 导出的值。
@@ -116,9 +142,31 @@ export ACCELERATOR_DATA_ROOT SPMV_GOLDEN_DIR SPMV_ENCODING_REPORT_DIR mainargs \
 
 ifeq ($(strip $(SPMV_INPUT_XRT)),)
 ifneq ($(strip $(CONSTRUCTION_DIR)),)
-HOST_SOURCES += input/input_simulation.cpp
-VERILATOR_ROOT := $(shell dirname $$(dirname $$(command -v verilator)))/share/verilator
 MODEL_DIR := $(CONSTRUCTION_DIR)/abi/verilator
+VERILATOR_ROOT := $(shell dirname $$(dirname $$(command -v verilator)))/share/verilator
+SPMV_HOST_MODEL_LIBS :=
+ifeq ($(SPMV_CUPERFLOW_RTL),1)
+SPMV_HOST_MODEL_LIBS := $(MODEL_DIR)/libVSpmvCuperflowInputTop.a $(MODEL_DIR)/libverilated.a
+CPPFLAGS += -DSPMV_CUPERFLOW_RTL_VERILATOR -I$(MODEL_DIR) -isystem $(VERILATOR_ROOT)/include \
+	-isystem $(VERILATOR_ROOT)/include/vltstd \
+	-DSPMV_CUPERFLOW_HBM_PC_COUNT_FROZEN=$(call spmv_profile_value,SPMV_CUPERFLOW_HBM_PC_COUNT) \
+	-DSPMV_CUPERFLOW_HBM_BASE_FROZEN=$(call spmv_profile_value,SPMV_CUPERFLOW_HBM_BASE) \
+	-DSPMV_CUPERFLOW_HBM_BYTES_FROZEN=$(call spmv_profile_value,SPMV_CUPERFLOW_HBM_BYTES) \
+	-DSPMV_CUPERFLOW_X_REGION_BYTES_FROZEN=$(call spmv_profile_value,SPMV_CUPERFLOW_X_REGION_BYTES) \
+	-DSPMV_CUPERFLOW_AXI_ADDR_WIDTH_FROZEN=$(call spmv_profile_value,SPMV_CUPERFLOW_AXI_ADDR_WIDTH) \
+	-DSPMV_CUPERFLOW_AXI_DATA_WIDTH_FROZEN=$(call spmv_profile_value,SPMV_CUPERFLOW_AXI_DATA_WIDTH) \
+	-DSPMV_CUPERFLOW_AXI_ID_WIDTH_FROZEN=$(call spmv_profile_value,SPMV_CUPERFLOW_AXI_ID_WIDTH) \
+	-DSPMV_CUPERFLOW_MAX_OUTSTANDING_BURSTS_FROZEN=$(call spmv_profile_value,SPMV_CUPERFLOW_MAX_OUTSTANDING_BURSTS) \
+	-DSPMV_CUPERFLOW_X_WINDOW_SIZE_FROZEN=$(call spmv_profile_value,SPMV_CUPERFLOW_X_WINDOW_SIZE) \
+	-DSPMV_CUPERFLOW_X_ELEMENT_WIDTH_FROZEN=$(call spmv_profile_value,SPMV_CUPERFLOW_X_ELEMENT_WIDTH) \
+	-DSPMV_CUPERFLOW_X_DECODER_LANES_FROZEN=$(call spmv_profile_value,SPMV_CUPERFLOW_X_DECODER_LANES) \
+	-DSPMV_CUPERFLOW_FP64_MUL_LATENCY_FROZEN=$(call spmv_profile_value,SPMV_FP64_MUL_LATENCY) \
+	-DSPMV_CUPERFLOW_FP64_MUL_II_FROZEN=$(call spmv_profile_value,SPMV_FP64_MUL_II)
+LDLIBS += $(MODEL_DIR)/libVSpmvCuperflowInputTop.a \
+	$(MODEL_DIR)/libverilated.a -pthread -latomic
+else
+SPMV_HOST_MODEL_LIBS := $(MODEL_DIR)/libVSpmvInputTop.a $(MODEL_DIR)/libverilated.a
+HOST_SOURCES += input/input_simulation.cpp
 CPPFLAGS += -DSPMV_INPUT_TRANSACTION_VERILATOR -I$(MODEL_DIR) -isystem $(VERILATOR_ROOT)/include \
 	-isystem $(VERILATOR_ROOT)/include/vltstd \
 	-DSPMV_INPUT_PROFILE_FROZEN \
@@ -152,6 +200,7 @@ LDLIBS += $(MODEL_DIR)/libVSpmvInputTop.a \
 	$(MODEL_DIR)/libverilated.a -pthread -latomic
 endif
 endif
+endif
 
 XRT_ROOT ?= $(XILINX_XRT)
 
@@ -180,12 +229,36 @@ CPPFLAGS += -DSPMV_INPUT_XRT -DSPMV_INPUT_PROFILE_FROZEN -I$(XRT_ROOT)/include \
 LDLIBS += -L$(XRT_ROOT)/lib -Wl,-rpath,$(XRT_ROOT)/lib -lxrt_coreutil -luuid -pthread
 endif
 
-.PHONY: build-host build-simulation-host build-input-fpga-host encode cuper-a-test encoding-html-test encoding-test input-html-test run
+.PHONY: build-host build-simulation-host build-input-fpga-host encode cuperflow-encode \
+	cuperflow-encode-stats \
+	cuper-a-test encoding-html-test cuperflow-encoding-html-test encoding-test \
+	cuperflow-timing cuperflow-timing-model cuperflow-timing-html-test \
+	dataflow-sim hisparse-preprocess-benchmark \
+	hispmv-preprocess-benchmark input-html-test run
 
 build-host: $(HOST_BIN)
 
 build-simulation-host:
 	@test -n "$(strip $(CONSTRUCTION_DIR))" || { echo 'build-simulation-host 缺少 CONSTRUCTION_DIR' >&2; exit 2; }
+ifeq ($(SPMV_CUPERFLOW_RTL),1)
+	@test -s "$(MODEL_DIR)/VSpmvCuperflowInputTop.h"
+	@test -s "$(MODEL_DIR)/libVSpmvCuperflowInputTop.a"
+	@test -s "$(MODEL_DIR)/libverilated.a"
+	@$(MAKE) --no-print-directory "$(HOST_BIN)" CONSTRUCTION_DIR="$(CONSTRUCTION_DIR)" BUILD_DIR="$(BUILD_DIR)"
+	@{ \
+		printf '%s\n' 'HOST_FORMAT=15'; \
+		printf 'CONFIG_FQCN=%s\n' "$$(sed -n 's/^CONFIG_FQCN=//p' "$(SPMV_PROFILE_FILE)")"; \
+		printf '%s\n' 'ACCELERATOR_HOST_KIND=spmv' 'ACCELERATOR_HOST_ABI=spmv-cuperflow-rtl-v1' 'PROTOCOL_ABI=spmv-cuperflow-rtl-v1'; \
+		for key in SPMV_CUPERFLOW_HBM_PC_COUNT SPMV_CUPERFLOW_HBM_BASE SPMV_CUPERFLOW_HBM_BYTES SPMV_CUPERFLOW_X_REGION_BYTES \
+			SPMV_CUPERFLOW_AXI_ADDR_WIDTH SPMV_CUPERFLOW_AXI_DATA_WIDTH SPMV_CUPERFLOW_AXI_ID_WIDTH \
+			SPMV_CUPERFLOW_MAX_OUTSTANDING_BURSTS SPMV_CUPERFLOW_X_WINDOW_SIZE SPMV_CUPERFLOW_X_REPLICA_COUNT \
+			SPMV_CUPERFLOW_X_ELEMENT_WIDTH SPMV_CUPERFLOW_X_DECODER_LANES SPMV_FP64_MUL_INTERFACE SPMV_FP64_MUL_PROVIDER \
+			SPMV_FP64_MUL_LATENCY SPMV_FP64_MUL_II SPMV_FP64_MUL_RESPONSE_FIFO_DEPTH SPMV_FP64_MUL_LANES \
+			SPMV_FP64_MUL_CORE_COUNT SPMV_FP64_MUL_TOTAL_LANES SPMV_PERFORMANCE_HTML SPMV_PIPELINE_HTML; do \
+			printf '%s=%s\n' "$$key" "$$(sed -n "s/^$$key=//p" "$(SPMV_PROFILE_FILE)" | tail -n 1)"; \
+		done; \
+	} > "$(BUILD_DIR)/host.env"
+else
 	@test -s "$(MODEL_DIR)/VSpmvInputTop.h"
 	@test -s "$(MODEL_DIR)/libVSpmvInputTop.a"
 	@test -s "$(MODEL_DIR)/libverilated.a"
@@ -203,6 +276,7 @@ build-simulation-host:
 		printf 'SPMV_FP64_MUL_INTERFACE=%s\nSPMV_FP64_MUL_LATENCY=%s\nSPMV_FP64_MUL_II=%s\nSPMV_FP64_MUL_RESPONSE_FIFO_DEPTH=%s\nSPMV_FP64_MUL_LANES=%s\nSPMV_FP64_MUL_CORE_COUNT=%s\nSPMV_FP64_MUL_TOTAL_LANES=%s\n' "$(SPMV_FP64_MUL_INTERFACE)" "$(SPMV_FP64_MUL_LATENCY)" "$(SPMV_FP64_MUL_II)" "$(SPMV_FP64_MUL_RESPONSE_FIFO_DEPTH)" "$(SPMV_FP64_MUL_LANES)" "$(SPMV_FP64_MUL_CORE_COUNT)" "$(SPMV_FP64_MUL_TOTAL_LANES)"; \
 		printf 'SPMV_PERFORMANCE_HTML=%s\nSPMV_PIPELINE_HTML=%s\n' "$(SPMV_PERFORMANCE_HTML)" "$(SPMV_PIPELINE_HTML)"; \
 	} > "$(BUILD_DIR)/host.env"
+endif
 
 build-input-fpga-host:
 	@test -n "$(strip $(CONSTRUCTION_DIR))" || { echo 'build-input-fpga-host 缺少 CONSTRUCTION_DIR' >&2; exit 2; }
@@ -228,11 +302,26 @@ build-input-fpga-host:
 encode: build-host
 	@"$(HOST_BIN)" --encode "$(ENCODING)" "$${mainargs:-}"
 
+cuperflow-encode: build-host
+	@"$(HOST_BIN)" --encode cuperflow "$${mainargs:-}"
+
+cuperflow-encode-stats: build-host
+	@"$(HOST_BIN)" --encode-stats cuperflow "$${mainargs:-}"
+
 cuper-a-test: build-host
 	@"$(HOST_BIN)" --check-cuper-a "$${mainargs:-$(ENCODING_TEST_DATASET)}"
 
 encoding-test: $(ENCODING_TEST_BIN)
 	@"$(ENCODING_TEST_BIN)"
+
+dataflow-sim: $(DATAFLOW_SIM_BIN)
+	@"$(DATAFLOW_SIM_BIN)" "$${mainargs:-n512}"
+
+hisparse-preprocess-benchmark: $(HISPARSE_PREPROCESS_BIN)
+	@"$(HISPARSE_PREPROCESS_BIN)" $${mainargs:-thermal2}
+
+hispmv-preprocess-benchmark: $(HISPMV_PREPROCESS_BIN)
+	@"$(HISPMV_PREPROCESS_BIN)" $${mainargs:-thermal2}
 
 encoding-html-test: build-host
 	@command -v node >/dev/null || { echo 'encoding-html-test 需要 node' >&2; exit 2; }
@@ -241,6 +330,39 @@ encoding-html-test: build-host
 		"$(SPMV_ENCODING_REPORT_DIR)/$(ENCODING)/$${mainargs:-$(ENCODING_TEST_DATASET)}.html"
 	@node "$(CURDIR)/encoding/vector_html_report_test.js" \
 		"$(SPMV_ENCODING_REPORT_DIR)/$(ENCODING)/$${mainargs:-$(ENCODING_TEST_DATASET)}-x.html"
+
+cuperflow-encoding-html-test: build-host
+	@command -v node >/dev/null || { echo 'cuperflow-encoding-html-test 需要 node' >&2; exit 2; }
+	@"$(HOST_BIN)" --encode cuperflow "$${mainargs:-$(ENCODING_TEST_DATASET)}"
+	@node "$(CURDIR)/encoding/html_report_test.js" \
+		"$(SPMV_ENCODING_REPORT_DIR)/cuperflow/$${mainargs:-$(ENCODING_TEST_DATASET)}.html"
+	@node "$(CURDIR)/encoding/vector_html_report_test.js" \
+		"$(SPMV_ENCODING_REPORT_DIR)/cuperflow/$${mainargs:-$(ENCODING_TEST_DATASET)}-x.html"
+
+cuperflow-timing:
+	@test "$(SPMV_CUPERFLOW_RTL)" = 1 || { \
+		echo 'cuperflow-timing 现在只运行 Verilator RTL；请通过 make -C npc run config=SpmvCuperflowSimulationConfig mainargs=<dataset>，或传入 CONSTRUCTION_DIR=<正式 construction>' >&2; \
+		exit 2; \
+	}
+	@test -n "$(strip $(CONSTRUCTION_DIR))" || { echo 'cuperflow-timing 缺少 CONSTRUCTION_DIR；请使用 npc run 入口或传入正式 construction' >&2; exit 2; }
+	@$(MAKE) --no-print-directory build-simulation-host \
+		CONSTRUCTION_DIR="$(CONSTRUCTION_DIR)" BUILD_DIR="$(CONSTRUCTION_DIR)/abi/spmv"
+	@"$(CONSTRUCTION_DIR)/abi/spmv/spmv-host" --cuperflow-timing "$${mainargs:-$(ENCODING_TEST_DATASET)}"
+
+# 保留旧软件周期估算器，但不再占用 cuperflow-timing 正式入口。
+cuperflow-timing-model: build-host
+	@test "$(SPMV_CUPERFLOW_RTL)" != 1 || { \
+		echo 'cuperflow-timing-model 不能使用 Cuperflow RTL construction；请去掉 CONSTRUCTION_DIR/profile.env' >&2; \
+		exit 2; \
+	}
+	@"$(HOST_BIN)" --cuperflow-timing "$${mainargs:-$(ENCODING_TEST_DATASET)}"
+
+cuperflow-timing-html-test: cuperflow-timing
+	@command -v node >/dev/null || { echo 'cuperflow-timing-html-test 需要 node' >&2; exit 2; }
+	@test "$(SPMV_CUPERFLOW_RTL)" = 1 || { echo 'cuperflow-timing-html-test 只验证 Verilator RTL construction' >&2; exit 2; }
+	@test -n "$(strip $(CONSTRUCTION_DIR))" || { echo 'cuperflow-timing-html-test 缺少 CONSTRUCTION_DIR' >&2; exit 2; }
+	@node "$(CURDIR)/input/cuperflow_timing_html_test.js" \
+		"$(CONSTRUCTION_DIR)/runtime/$${mainargs:-$(ENCODING_TEST_DATASET)}/latest/cuperflow-timing.html"
 
 input-html-test:
 	@command -v node >/dev/null || { echo 'input-html-test 需要 node' >&2; exit 2; }
@@ -253,11 +375,22 @@ input-html-test:
 run: build-host
 	@"$(HOST_BIN)" "$${mainargs:-}"
 
-$(HOST_BIN): $(HOST_OBJECTS)
+$(HOST_BIN): $(HOST_OBJECTS) $(SPMV_HOST_MODEL_LIBS)
 	$(CXX) $(CXXFLAGS) $(HOST_OBJECTS) $(LDLIBS) -o "$@"
 
 $(ENCODING_TEST_BIN): $(ENCODING_TEST_OBJECT) $(ENCODING_OBJECTS)
 	$(CXX) $(CXXFLAGS) $^ -o "$@"
+
+$(DATAFLOW_SIM_BIN): $(DATAFLOW_SIM_OBJECT) $(BUILD_DIR)/encoding/cuperflow/cuperflow.o
+	$(CXX) $(CXXFLAGS) $^ -o "$@"
+
+$(HISPARSE_PREPROCESS_BIN): $(HISPARSE_PREPROCESS_OBJECT)
+	$(CXX) $(CXXFLAGS) $^ -o "$@"
+
+$(HISPMV_PREPROCESS_BIN): $(HISPMV_PREPROCESS_OBJECT) $(BUILD_DIR)/encoding/cuperflow/cuperflow.o
+	$(CXX) $(CXXFLAGS) $^ -o "$@"
+
+$(DATAFLOW_SIM_OBJECT): CXXFLAGS += -mavx512f
 
 $(BUILD_DIR)/%.o: %.cpp golden.hpp | $(BUILD_DIR)
 	@mkdir -p "$(dir $@)"

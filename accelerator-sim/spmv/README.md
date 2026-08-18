@@ -120,11 +120,118 @@ make -C accelerator-sim/spmv encode mainargs=n512 ENCODING=cuper
 make -C accelerator-sim/spmv encoding-html-test mainargs=n512
 ```
 
+`cuperflow` 是沿行方向划分 A batch 的实验编码：每个 row batch 内按行 nnz 做稳定的最长行优先
+负载均衡，把原始 CSR row 映射到物理 row、PE 和 lane。slot 的 `localRow` 表示物理 row，package
+额外保存 `physicalToOriginalRows`，计算结果回写 CSR 时必须使用该映射恢复原始行顺序；X 仍按列顺序
+编码，A 的每个 slice 则沿对应 lane 连续打包。默认启用 row 重排，也可通过
+`CuperflowConfig::rowReorder = false` 生成 identity 映射用于对照。
+
+column-slice 另外按 `sliceGroupSize` 组织 HBM 独占的 X range。默认值会根据 column-slice 数量自动选择，保证
+有足够的 group 覆盖 16 路 HBM，同时尽量增大每个 range；单个 range 不超过 8192 个 X 元素。group `g`
+归属 HBM `g % hbmChannelCount`，每路 HBM 的 X payload 与范围边界都会写入 package，因而同一路加载到
+BRAM 的 X 可以持续服务本路对应的 slice group。这里仍只完成 A/X 预处理和 ownership 元数据，跨 HBM 的
+部分和归约留给后续硬件；现有 row-to-PE 编码不在此处改变。
+
+`cuperflow` 的 A slot 位域把 `[63:51]` 定义为 `groupColumn`，即当前 slice group 内的列偏移，而不是
+单个 slice 内的列偏移。由于一个 group 最多覆盖 8192 列，它恰好可以放入 13-bit 位域；消费一个 group
+时由 `groupFirstColumn + groupColumn` 得到全局列号。A 的指针只保留
+`(rowBatch, sliceGroup, lane)` 的连续 `[begin, end)`，不再保存百万级的
+`(rowBatch, columnSlice, lane)` 边界表；这张 group 指针表既适合 host 仿真，也适合后续映射到 FPGA 的
+BRAM/寄存器表。
+
+### FP64 灵活 X
+
+`cuperflow` 的 X 预处理支持通过 C++ 宏手动选择两条路径：
+
+```bash
+# 默认：A package 收集实际列，生成带地址 marker 的灵活 X
+make -C accelerator-sim/spmv cuperflow-encoding-html-test mainargs=n65536
+
+# 对列使用较密集的矩阵切回连续满载 X
+CUPERFLOW_ENABLE_FLEX_X=0 make -C accelerator-sim/spmv \
+  cuperflow-encoding-html-test mainargs=n65536
+```
+
+宏开启时，A 编码遍历会在 `CuperflowPackage::xUsedColumnsByGroup` 中收集每个 sliceGroup 的实际列，
+X range 只写入这些列。普通 FP64 word 保持原始 64-bit IEEE-754 位型；发生跳跃时插入一个 64-bit
+quiet NaN 地址 token：`sign=0`、`exponent=0x7ff`、`quiet=1`、`opcode=001`、`magic=0x1a5a5`，
+低 13 位为该 group 内的 BRAM 地址。比如列 `1,2,6,7` 编码为：
+
+```text
+ADDR(1), X1, X2, ADDR(6), X6, X7
+```
+
+输入 X 的 NaN 和 Inf 会被预处理器拒绝，以避免与地址 token 混淆。没有 A package 信息的旧
+`encodeVector(input, config)` 接口始终走连续 X 回退路径；host 的 `cuperflow-encode` 会使用联合
+`encodeVector(input, matrixPackage)` 接口。`hbmBeats` 仍保留连续 FP64 规范副本，实际 HBM range
+的 token/marker 数量另存于 `encodedXRanges` 和 X 统计字段中。
+
+该方案不插入软件 padding；剩余零填充只来自一个 512-bit beat 内较短 lane 的物理尾部空槽。可以用
+下面的入口生成 A/X 两页 HTML，并在报告中查看 physical row 与原始 row 的对应关系：
+
+`cuperflow` 的 X 使用独立的 FP64 beat：每个 beat 包含 8 个 64-bit IEEE-754 原始位模式，A beat
+与 X beat 不混合。65536 个 X 元素对应 8192 个 X beat；每个 4096 元素的 HBM range 对应 512 个
+X beat。
+
+```bash
+make -C accelerator-sim/spmv cuperflow-encoding-html-test mainargs=n65536
+```
+
 `cuper-a-test` 将每个 channel 的 package materialize 到独立的 4 KiB 对齐地址，并逐 beat 校验输入
 数据没有改变。未绑定 construction 时使用默认输入布局；绑定 `CONSTRUCTION_PROFILE` 或
 `CONSTRUCTION_DIR` 时优先读取 profile 中的 `SPMV_INPUT_*` 字段。HTML 默认生成两页并提供双向导航：
 
-```text
-build/encoding/cuper/<scale>.html    # A：HBM/channel/slot 与 RAW 调度
-build/encoding/cuper/<scale>-x.html  # X：FP32 打包、batch、广播与 local_X bank 映射
+只需要测预处理时间和负载分布时，不生成 HTML：
+
+```bash
+make -C accelerator-sim/spmv cuperflow-encode-stats mainargs=mad_low_density_balanced
 ```
+
+该入口分别输出数据加载、A 编码、X 编码耗时，以及所有 HBM 的 beat 数、实际矩阵 slot 数、PE
+slot 数和最差 row batch 的 beat 差值。`hbm_beats`、`hbm_matrix_slots`、`pe_matrix_slots`
+三项按 channel/lane 编号顺序输出，适合直接保存为基准测试日志。
+
+```text
+build/encoding/cuperflow/<scale>.html    # A：HBM/channel/slot 与 RAW 调度
+build/encoding/cuperflow/<scale>-x.html  # X：FP64 beat、batch、HBM range 与 local_X bank 映射
+```
+
+### Cuperflow 时序与吞吐报告
+
+可以在同一套 Cuperflow 编码 package 上生成 group-major 的周期模型报告：
+
+```bash
+make -C accelerator-sim/spmv cuperflow-timing-html-test mainargs=n65536
+```
+
+报告位于 `build/encoding/cuperflow/<scale>-timing.html`。它按固定的
+`sliceGroup -> batch` 顺序记录 X preload、8-lane X decoder、packed local-X 写入、全局
+`globalXReady` barrier、A beat 和 FP64 FMUL 响应区间；同一 sliceGroup 的后续 batch 会显示为
+X reuse。总览同时给出 16 PC × 8 lane 的物理峰值吞吐、X token 吞吐、有效 nnz 利用率和尾部
+物理 slot 数。模型把 owner HBM 的 X range 作为并行复制到各 PC local_X 的逻辑源，报告中的
+`X source beats` 是源流数量，16 个 decoder 的墙钟吞吐则按并行配置统计。该页面是独立 C++
+周期模型，不冒充 `SpmvCuperflowInputTop` 的 Verilator 端口仿真；真实 RTL 接口接入后可以复用
+这套 work 级报告字段。
+
+连续满载 X 可以用同一个入口对照：
+
+```bash
+CUPERFLOW_ENABLE_FLEX_X=0 make -C accelerator-sim/spmv cuperflow-timing-html-test mainargs=n65536
+```
+
+### HiSpMV 负载均衡对照
+
+`hispmv-preprocess-benchmark` 是从 `ResearchProject/02-architecture-papers/HiSpMV/upstream/HiSpMV-16`
+host 侧移植的纯 C++ 预处理模型，不依赖 TAPA 或 Vitis。它保留 HiSpMV 的 `16 HBM / 128 PE / 8 PE
+per HBM / II_DIST=5 / PADDING=1 / 8192-column window` 参数：每个 tile 内先按 row nnz 做无 row sharing
+和 `II_DIST` interleave 负载估计，再按原算法移除重行进行 128-PE row sharing，最后估算 tree-adder 布局。
+输出同时调用当前 Cuperflow A encoder，因此可以直接比较逻辑 imbalance、物理 HBM slot 容量和 padding：
+
+```bash
+make -C accelerator-sim/spmv hispmv-preprocess-benchmark mainargs=mad_high_density_imbalanced
+make -C accelerator-sim/spmv hispmv-preprocess-benchmark mainargs=mad_low_density_balanced
+```
+
+`baseline_imbalance` 和 `tree_imbalance` 是 HiSpMV 的逻辑 PE 工作量指标；`run_len_*` 已包含
+`II_DIST=5`，代表每个 HBM channel 的物理 beat 数。两者不能混为同一个利用率指标。移植依据为
+`helper_functions.cpp` 中的 `balanceWorkload`、`computePEloads1/2`、`prepareAmtx` 和 `tileCSRMatrix`。

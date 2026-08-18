@@ -27,6 +27,7 @@ object ConfigCatalogGenerator {
     "LocalNpcTerminal" -> ("npc", "NPC"),
     "LocalSocTerminal" -> ("soc", "SOC"),
     "LocalSpmvInputTerminal" -> ("spmv", "SPMV"),
+    "LocalSpmvCuperflowTerminal" -> ("spmv", "SPMV"),
     "U55cNpcTerminal" -> ("fpga", "NPC"),
     "U55cNpcPerformanceMonitorTerminal" -> ("fpga", "NPC"),
     "U55cSpmvSynthesisTerminal" -> ("fpga", "SPMV"),

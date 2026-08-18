@@ -1,3 +1,11 @@
+`ifndef SPMV_INPUT_PLATFORM_CLOCK_MHZ
+`define SPMV_INPUT_PLATFORM_CLOCK_MHZ 300
+`endif
+
+`ifndef SPMV_INPUT_CORE_CLOCK_MHZ
+`define SPMV_INPUT_CORE_CLOCK_MHZ `SPMV_INPUT_PLATFORM_CLOCK_MHZ
+`endif
+
 `define SPMV_INPUT_AXI_MASTER_PORT(NAME) \
   output wire         m_axi_``NAME``_awvalid, \
   input  wire         m_axi_``NAME``_awready, \
@@ -38,6 +46,7 @@
   input  wire         m_axi_``NAME``_rlast
 
 `define SPMV_INPUT_AXI_READ_WIRES(INDEX) \
+  wire         core_axi_``INDEX``_arready; \
   wire         core_axi_``INDEX``_arvalid; \
   wire [63:0]  core_axi_``INDEX``_araddr; \
   wire [3:0]   core_axi_``INDEX``_arid; \
@@ -48,7 +57,12 @@
   wire [3:0]   core_axi_``INDEX``_arcache; \
   wire [2:0]   core_axi_``INDEX``_arprot; \
   wire [3:0]   core_axi_``INDEX``_arqos; \
-  wire         core_axi_``INDEX``_rready
+  wire         core_axi_``INDEX``_rready; \
+  wire         core_axi_``INDEX``_rvalid; \
+  wire [3:0]   core_axi_``INDEX``_rid; \
+  wire [511:0] core_axi_``INDEX``_rdata; \
+  wire [1:0]   core_axi_``INDEX``_rresp; \
+  wire         core_axi_``INDEX``_rlast
 
 `define SPMV_INPUT_AXI_BIND(NAME, INDEX) \
   assign m_axi_``NAME``_awvalid = 1'b0; \
@@ -66,20 +80,29 @@
   assign m_axi_``NAME``_wstrb = 64'b0; \
   assign m_axi_``NAME``_wlast = 1'b1; \
   assign m_axi_``NAME``_bready = 1'b1; \
-  assign m_axi_``NAME``_arvalid = core_axi_``INDEX``_arvalid; \
-  assign m_axi_``NAME``_araddr = core_axi_``INDEX``_araddr; \
-  assign m_axi_``NAME``_arid = core_axi_``INDEX``_arid; \
-  assign m_axi_``NAME``_arlen = core_axi_``INDEX``_arlen; \
-  assign m_axi_``NAME``_arsize = core_axi_``INDEX``_arsize; \
-  assign m_axi_``NAME``_arburst = core_axi_``INDEX``_arburst; \
-  assign m_axi_``NAME``_arlock = core_axi_``INDEX``_arlock; \
-  assign m_axi_``NAME``_arcache = core_axi_``INDEX``_arcache; \
-  assign m_axi_``NAME``_arprot = core_axi_``INDEX``_arprot; \
-  assign m_axi_``NAME``_arqos = core_axi_``INDEX``_arqos; \
-  assign m_axi_``NAME``_rready = core_axi_``INDEX``_rready
+  u55c_axi4_read_cdc #(.SAME_CLOCK(CORE_SAME_CLOCK)) hbm_read_cdc_``INDEX`` ( \
+    .core_clock(core_clock), .shell_clock(ap_clk), .reset(fifo_reset), \
+    .core_ar_valid(core_axi_``INDEX``_arvalid), .core_ar_ready(core_axi_``INDEX``_arready), \
+    .core_ar_id(core_axi_``INDEX``_arid), .core_ar_addr(core_axi_``INDEX``_araddr), \
+    .core_ar_len(core_axi_``INDEX``_arlen), .core_ar_size(core_axi_``INDEX``_arsize), \
+    .core_ar_burst(core_axi_``INDEX``_arburst), .core_ar_lock(core_axi_``INDEX``_arlock), \
+    .core_ar_cache(core_axi_``INDEX``_arcache), .core_ar_prot(core_axi_``INDEX``_arprot), \
+    .core_ar_qos(core_axi_``INDEX``_arqos), .core_r_valid(core_axi_``INDEX``_rvalid), \
+    .core_r_ready(core_axi_``INDEX``_rready), .core_r_id(core_axi_``INDEX``_rid), \
+    .core_r_data(core_axi_``INDEX``_rdata), .core_r_resp(core_axi_``INDEX``_rresp), \
+    .core_r_last(core_axi_``INDEX``_rlast), .shell_ar_valid(m_axi_``NAME``_arvalid), \
+    .shell_ar_ready(m_axi_``NAME``_arready), .shell_ar_id(m_axi_``NAME``_arid), \
+    .shell_ar_addr(m_axi_``NAME``_araddr), .shell_ar_len(m_axi_``NAME``_arlen), \
+    .shell_ar_size(m_axi_``NAME``_arsize), .shell_ar_burst(m_axi_``NAME``_arburst), \
+    .shell_ar_lock(m_axi_``NAME``_arlock), .shell_ar_cache(m_axi_``NAME``_arcache), \
+    .shell_ar_prot(m_axi_``NAME``_arprot), .shell_ar_qos(m_axi_``NAME``_arqos), \
+    .shell_r_valid(m_axi_``NAME``_rvalid), .shell_r_ready(m_axi_``NAME``_rready), \
+    .shell_r_id(m_axi_``NAME``_rid), .shell_r_data(m_axi_``NAME``_rdata), \
+    .shell_r_resp(m_axi_``NAME``_rresp), .shell_r_last(m_axi_``NAME``_rlast) \
+  )
 
 `define SPMV_INPUT_A_CORE_BIND(NAME, INDEX, PORT) \
-    .io_aHbm_``INDEX``_ar_ready (m_axi_``NAME``_arready), \
+    .io_aHbm_``INDEX``_ar_ready (core_axi_``PORT``_arready), \
     .io_aHbm_``INDEX``_ar_valid (core_axi_``PORT``_arvalid), \
     .io_aHbm_``INDEX``_ar_bits_id (core_axi_``PORT``_arid), \
     .io_aHbm_``INDEX``_ar_bits_addr (core_axi_``PORT``_araddr), \
@@ -91,14 +114,14 @@
     .io_aHbm_``INDEX``_ar_bits_prot (core_axi_``PORT``_arprot), \
     .io_aHbm_``INDEX``_ar_bits_qos (core_axi_``PORT``_arqos), \
     .io_aHbm_``INDEX``_r_ready (core_axi_``PORT``_rready), \
-    .io_aHbm_``INDEX``_r_valid (m_axi_``NAME``_rvalid), \
-    .io_aHbm_``INDEX``_r_bits_id (m_axi_``NAME``_rid), \
-    .io_aHbm_``INDEX``_r_bits_data (m_axi_``NAME``_rdata), \
-    .io_aHbm_``INDEX``_r_bits_resp (m_axi_``NAME``_rresp), \
-    .io_aHbm_``INDEX``_r_bits_last (m_axi_``NAME``_rlast)
+    .io_aHbm_``INDEX``_r_valid (core_axi_``PORT``_rvalid), \
+    .io_aHbm_``INDEX``_r_bits_id (core_axi_``PORT``_rid), \
+    .io_aHbm_``INDEX``_r_bits_data (core_axi_``PORT``_rdata), \
+    .io_aHbm_``INDEX``_r_bits_resp (core_axi_``PORT``_rresp), \
+    .io_aHbm_``INDEX``_r_bits_last (core_axi_``PORT``_rlast)
 
 `define SPMV_INPUT_X_CORE_BIND(NAME, INDEX, PORT) \
-    .io_xHbm_``INDEX``_ar_ready (m_axi_``NAME``_arready), \
+    .io_xHbm_``INDEX``_ar_ready (core_axi_``PORT``_arready), \
     .io_xHbm_``INDEX``_ar_valid (core_axi_``PORT``_arvalid), \
     .io_xHbm_``INDEX``_ar_bits_id (core_axi_``PORT``_arid), \
     .io_xHbm_``INDEX``_ar_bits_addr (core_axi_``PORT``_araddr), \
@@ -110,11 +133,11 @@
     .io_xHbm_``INDEX``_ar_bits_prot (core_axi_``PORT``_arprot), \
     .io_xHbm_``INDEX``_ar_bits_qos (core_axi_``PORT``_arqos), \
     .io_xHbm_``INDEX``_r_ready (core_axi_``PORT``_rready), \
-    .io_xHbm_``INDEX``_r_valid (m_axi_``NAME``_rvalid), \
-    .io_xHbm_``INDEX``_r_bits_id (m_axi_``NAME``_rid), \
-    .io_xHbm_``INDEX``_r_bits_data (m_axi_``NAME``_rdata), \
-    .io_xHbm_``INDEX``_r_bits_resp (m_axi_``NAME``_rresp), \
-    .io_xHbm_``INDEX``_r_bits_last (m_axi_``NAME``_rlast)
+    .io_xHbm_``INDEX``_r_valid (core_axi_``PORT``_rvalid), \
+    .io_xHbm_``INDEX``_r_bits_id (core_axi_``PORT``_rid), \
+    .io_xHbm_``INDEX``_r_bits_data (core_axi_``PORT``_rdata), \
+    .io_xHbm_``INDEX``_r_bits_resp (core_axi_``PORT``_rresp), \
+    .io_xHbm_``INDEX``_r_bits_last (core_axi_``PORT``_rlast)
 
 module SpmvInputKernel (
   input wire ap_clk,
@@ -198,6 +221,21 @@ module SpmvInputKernel (
   reg [63:0] cycle_counter;
   integer index;
 
+  localparam integer CORE_SAME_CLOCK =
+    (`SPMV_INPUT_CORE_CLOCK_MHZ == `SPMV_INPUT_PLATFORM_CLOCK_MHZ);
+  wire core_clock;
+  wire core_reset_n;
+  wire fifo_reset = !ap_rst_n || !core_reset_n;
+  u55c_core_clock #(
+    .PLATFORM_CLOCK_MHZ(`SPMV_INPUT_PLATFORM_CLOCK_MHZ),
+    .CORE_CLOCK_MHZ(`SPMV_INPUT_CORE_CLOCK_MHZ)
+  ) core_clocking (
+    .platform_clock(ap_clk),
+    .platform_reset(!ap_rst_n),
+    .core_clock(core_clock),
+    .core_reset_n(core_reset_n)
+  );
+
   wire start_pulse = ap_start && !active;
   wire ctrl_request_ready;
   wire x_request_ready [0:1];
@@ -208,19 +246,116 @@ module SpmvInputKernel (
     a_beats[4] != 0, a_beats[3] != 0, a_beats[2] != 0, a_beats[1] != 0,
     a_beats[0] != 0};
   wire [1:0] x_nonzero = {x_beats[1] != 0, x_beats[0] != 0};
-  wire [15:0] a_request_valid = {16{state == S_RUN && mul_ready}} & ~a_issued & a_nonzero;
-  wire [1:0] x_request_valid = {2{state == S_X_REQUEST}} & ~x_issued & x_nonzero;
+  wire [15:0] a_request_valid =
+    {16{state == S_RUN && mul_ready && core_reset_n}} & ~a_issued & a_nonzero;
+  wire [1:0] x_request_valid =
+    {2{state == S_X_REQUEST && core_reset_n}} & ~x_issued & x_nonzero;
   wire [15:0] a_request_fire = a_request_valid & a_request_ready;
   wire [1:0] x_request_fire = {x_request_valid[1] && x_request_ready[1],
     x_request_valid[0] && x_request_ready[0]};
-  wire ctrl_request_valid = state == S_CTRL_REQUEST;
+  wire ctrl_request_valid = state == S_CTRL_REQUEST && core_reset_n;
   wire ctrl_request_fire = ctrl_request_valid && ctrl_request_ready;
   wire all_a_issued = &(a_issued | ~a_nonzero);
   wire all_x_issued = &(x_issued | ~x_nonzero);
   wire mul_enable = state == S_RUN;
-  wire x_idle0, x_idle1, ctrl_map_ready, mul_ready, compute_done, mul_error;
-  wire [63:0] product_checksum;
+  wire [95:0] shell_request_bits [0:18];
+  wire [18:0] shell_request_valid;
+  wire [18:0] shell_request_ready;
+  wire [95:0] core_request_bits [0:18];
+  wire [18:0] core_request_valid;
+  wire [18:0] core_request_ready;
+  wire [8:0] core_mul_control;
+  wire core_mul_enable;
+  wire [7:0] core_mul_batch;
+  wire core_x_idle0, core_x_idle1, core_ctrl_map_ready, core_mul_ready;
+  wire core_compute_done, core_mul_error;
+  wire [63:0] core_product_checksum;
+  wire [4:0] shell_status;
+  wire x_idle0, x_idle1, ctrl_map_ready, mul_ready, mul_error;
+  wire core_completion_ready;
+  wire [64:0] completion_bits;
+  wire completion_valid;
+  reg core_completion_sent;
+  wire core_completion_valid = core_compute_done && core_x_idle0 && core_x_idle1 &&
+    !core_completion_sent;
+  wire compute_done = completion_valid;
+  wire [63:0] product_checksum = completion_bits[63:0];
   wire x_complete = x_idle0 && x_idle1;
+
+  // 调度器留在 Vitis shell。每个 reader 请求作为 Decoupled 命令跨域，HBM
+  // reader 不会看到异步的 address、beat count、valid 或 ready。
+  genvar request_index;
+  generate
+    for (request_index = 0; request_index < 19; request_index = request_index + 1) begin : g_request_cdc
+      u55c_decoupled_cdc #(.WIDTH(96), .SAME_CLOCK(CORE_SAME_CLOCK)) request_cdc (
+        .src_clock(ap_clk), .dst_clock(core_clock), .reset(fifo_reset),
+        .src_bits(shell_request_bits[request_index]),
+        .src_valid(shell_request_valid[request_index]),
+        .src_ready(shell_request_ready[request_index]),
+        .dst_bits(core_request_bits[request_index]),
+        .dst_valid(core_request_valid[request_index]),
+        .dst_ready(core_request_ready[request_index])
+      );
+    end
+  endgenerate
+
+  genvar a_request_index;
+  generate
+    for (a_request_index = 0; a_request_index < 16; a_request_index = a_request_index + 1) begin : g_a_request
+      assign shell_request_bits[a_request_index] = {
+        hbm_base[a_request_index] + a_offset[a_request_index], a_beats[a_request_index]
+      };
+      assign shell_request_valid[a_request_index] = a_request_valid[a_request_index];
+      assign a_request_ready[a_request_index] = shell_request_ready[a_request_index];
+    end
+  endgenerate
+  genvar x_request_index;
+  generate
+    for (x_request_index = 0; x_request_index < 2; x_request_index = x_request_index + 1) begin : g_x_request
+      assign shell_request_bits[16 + x_request_index] = {
+        hbm_base[16 + x_request_index] + x_offset[x_request_index], x_beats[x_request_index]
+      };
+      assign shell_request_valid[16 + x_request_index] = x_request_valid[x_request_index];
+      assign x_request_ready[x_request_index] = shell_request_ready[16 + x_request_index];
+    end
+  endgenerate
+  assign shell_request_bits[18] = {hbm_base[18], ctrl_beats};
+  assign shell_request_valid[18] = ctrl_request_valid;
+  assign ctrl_request_ready = shell_request_ready[18];
+
+  // batch_index 只在 idle 时配置，并在一次运行内保持稳定；核心以 mul_enable
+  // 的对应电平变化为界消费该配置。
+  u55c_cdc_bus #(.WIDTH(9), .SAME_CLOCK(CORE_SAME_CLOCK)) mul_control_cdc (
+    .src_clock(ap_clk), .dst_clock(core_clock), .reset(fifo_reset),
+    .src_bits({mul_enable, batch_index}), .dst_bits(core_mul_control)
+  );
+  assign core_mul_enable = core_mul_control[8];
+  assign core_mul_batch = core_mul_control[7:0];
+
+  u55c_cdc_bus #(.WIDTH(5), .SAME_CLOCK(CORE_SAME_CLOCK)) status_cdc (
+    .src_clock(core_clock), .dst_clock(ap_clk), .reset(fifo_reset),
+    .src_bits({core_ctrl_map_ready, core_mul_ready, core_x_idle1, core_x_idle0, core_mul_error}),
+    .dst_bits(shell_status)
+  );
+  assign ctrl_map_ready = shell_status[4];
+  assign mul_ready = shell_status[3];
+  assign x_idle1 = shell_status[2];
+  assign x_idle0 = shell_status[1];
+  assign mul_error = shell_status[0] || (completion_valid && completion_bits[64]);
+
+  // 完成包原子传输 checksum 与最终错误，避免 shell 在核心运行中直接采样多 bit
+  // checksum。
+  u55c_decoupled_cdc #(.WIDTH(65), .SAME_CLOCK(CORE_SAME_CLOCK)) completion_cdc (
+    .src_clock(core_clock), .dst_clock(ap_clk), .reset(fifo_reset),
+    .src_bits({core_mul_error, core_product_checksum}),
+    .src_valid(core_completion_valid), .src_ready(core_completion_ready),
+    .dst_bits(completion_bits), .dst_valid(completion_valid), .dst_ready(1'b1)
+  );
+  always @(posedge core_clock) begin
+    if (!core_reset_n) core_completion_sent <= 1'b0;
+    else if (!core_mul_enable) core_completion_sent <= 1'b0;
+    else if (core_completion_valid && core_completion_ready) core_completion_sent <= 1'b1;
+  end
 
   assign s_axi_control_awready = !aw_pending && !write_response_valid;
   assign s_axi_control_wready = !w_pending && !write_response_valid;
@@ -446,26 +581,26 @@ module SpmvInputKernel (
   `SPMV_INPUT_AXI_BIND(pc18, 18);
 
   SpmvInputTop core (
-    .clock(ap_clk), .reset(!ap_rst_n),
-    .io_aRequest_0_ready(a_request_ready[0]), .io_aRequest_0_valid(a_request_valid[0]), .io_aRequest_0_bits_address(hbm_base[0] + a_offset[0]), .io_aRequest_0_bits_beats(a_beats[0]),
-    .io_aRequest_1_ready(a_request_ready[1]), .io_aRequest_1_valid(a_request_valid[1]), .io_aRequest_1_bits_address(hbm_base[1] + a_offset[1]), .io_aRequest_1_bits_beats(a_beats[1]),
-    .io_aRequest_2_ready(a_request_ready[2]), .io_aRequest_2_valid(a_request_valid[2]), .io_aRequest_2_bits_address(hbm_base[2] + a_offset[2]), .io_aRequest_2_bits_beats(a_beats[2]),
-    .io_aRequest_3_ready(a_request_ready[3]), .io_aRequest_3_valid(a_request_valid[3]), .io_aRequest_3_bits_address(hbm_base[3] + a_offset[3]), .io_aRequest_3_bits_beats(a_beats[3]),
-    .io_aRequest_4_ready(a_request_ready[4]), .io_aRequest_4_valid(a_request_valid[4]), .io_aRequest_4_bits_address(hbm_base[4] + a_offset[4]), .io_aRequest_4_bits_beats(a_beats[4]),
-    .io_aRequest_5_ready(a_request_ready[5]), .io_aRequest_5_valid(a_request_valid[5]), .io_aRequest_5_bits_address(hbm_base[5] + a_offset[5]), .io_aRequest_5_bits_beats(a_beats[5]),
-    .io_aRequest_6_ready(a_request_ready[6]), .io_aRequest_6_valid(a_request_valid[6]), .io_aRequest_6_bits_address(hbm_base[6] + a_offset[6]), .io_aRequest_6_bits_beats(a_beats[6]),
-    .io_aRequest_7_ready(a_request_ready[7]), .io_aRequest_7_valid(a_request_valid[7]), .io_aRequest_7_bits_address(hbm_base[7] + a_offset[7]), .io_aRequest_7_bits_beats(a_beats[7]),
-    .io_aRequest_8_ready(a_request_ready[8]), .io_aRequest_8_valid(a_request_valid[8]), .io_aRequest_8_bits_address(hbm_base[8] + a_offset[8]), .io_aRequest_8_bits_beats(a_beats[8]),
-    .io_aRequest_9_ready(a_request_ready[9]), .io_aRequest_9_valid(a_request_valid[9]), .io_aRequest_9_bits_address(hbm_base[9] + a_offset[9]), .io_aRequest_9_bits_beats(a_beats[9]),
-    .io_aRequest_10_ready(a_request_ready[10]), .io_aRequest_10_valid(a_request_valid[10]), .io_aRequest_10_bits_address(hbm_base[10] + a_offset[10]), .io_aRequest_10_bits_beats(a_beats[10]),
-    .io_aRequest_11_ready(a_request_ready[11]), .io_aRequest_11_valid(a_request_valid[11]), .io_aRequest_11_bits_address(hbm_base[11] + a_offset[11]), .io_aRequest_11_bits_beats(a_beats[11]),
-    .io_aRequest_12_ready(a_request_ready[12]), .io_aRequest_12_valid(a_request_valid[12]), .io_aRequest_12_bits_address(hbm_base[12] + a_offset[12]), .io_aRequest_12_bits_beats(a_beats[12]),
-    .io_aRequest_13_ready(a_request_ready[13]), .io_aRequest_13_valid(a_request_valid[13]), .io_aRequest_13_bits_address(hbm_base[13] + a_offset[13]), .io_aRequest_13_bits_beats(a_beats[13]),
-    .io_aRequest_14_ready(a_request_ready[14]), .io_aRequest_14_valid(a_request_valid[14]), .io_aRequest_14_bits_address(hbm_base[14] + a_offset[14]), .io_aRequest_14_bits_beats(a_beats[14]),
-    .io_aRequest_15_ready(a_request_ready[15]), .io_aRequest_15_valid(a_request_valid[15]), .io_aRequest_15_bits_address(hbm_base[15] + a_offset[15]), .io_aRequest_15_bits_beats(a_beats[15]),
-    .io_xRequest_0_ready(x_request_ready[0]), .io_xRequest_0_valid(x_request_valid[0]), .io_xRequest_0_bits_address(hbm_base[16] + x_offset[0]), .io_xRequest_0_bits_beats(x_beats[0]),
-    .io_xRequest_1_ready(x_request_ready[1]), .io_xRequest_1_valid(x_request_valid[1]), .io_xRequest_1_bits_address(hbm_base[17] + x_offset[1]), .io_xRequest_1_bits_beats(x_beats[1]),
-    .io_ctrlRequest_0_ready(ctrl_request_ready), .io_ctrlRequest_0_valid(ctrl_request_valid), .io_ctrlRequest_0_bits_address(hbm_base[18]), .io_ctrlRequest_0_bits_beats(ctrl_beats),
+    .clock(core_clock), .reset(!core_reset_n),
+    .io_aRequest_0_ready(core_request_ready[0]), .io_aRequest_0_valid(core_request_valid[0]), .io_aRequest_0_bits_address(core_request_bits[0][95:32]), .io_aRequest_0_bits_beats(core_request_bits[0][31:0]),
+    .io_aRequest_1_ready(core_request_ready[1]), .io_aRequest_1_valid(core_request_valid[1]), .io_aRequest_1_bits_address(core_request_bits[1][95:32]), .io_aRequest_1_bits_beats(core_request_bits[1][31:0]),
+    .io_aRequest_2_ready(core_request_ready[2]), .io_aRequest_2_valid(core_request_valid[2]), .io_aRequest_2_bits_address(core_request_bits[2][95:32]), .io_aRequest_2_bits_beats(core_request_bits[2][31:0]),
+    .io_aRequest_3_ready(core_request_ready[3]), .io_aRequest_3_valid(core_request_valid[3]), .io_aRequest_3_bits_address(core_request_bits[3][95:32]), .io_aRequest_3_bits_beats(core_request_bits[3][31:0]),
+    .io_aRequest_4_ready(core_request_ready[4]), .io_aRequest_4_valid(core_request_valid[4]), .io_aRequest_4_bits_address(core_request_bits[4][95:32]), .io_aRequest_4_bits_beats(core_request_bits[4][31:0]),
+    .io_aRequest_5_ready(core_request_ready[5]), .io_aRequest_5_valid(core_request_valid[5]), .io_aRequest_5_bits_address(core_request_bits[5][95:32]), .io_aRequest_5_bits_beats(core_request_bits[5][31:0]),
+    .io_aRequest_6_ready(core_request_ready[6]), .io_aRequest_6_valid(core_request_valid[6]), .io_aRequest_6_bits_address(core_request_bits[6][95:32]), .io_aRequest_6_bits_beats(core_request_bits[6][31:0]),
+    .io_aRequest_7_ready(core_request_ready[7]), .io_aRequest_7_valid(core_request_valid[7]), .io_aRequest_7_bits_address(core_request_bits[7][95:32]), .io_aRequest_7_bits_beats(core_request_bits[7][31:0]),
+    .io_aRequest_8_ready(core_request_ready[8]), .io_aRequest_8_valid(core_request_valid[8]), .io_aRequest_8_bits_address(core_request_bits[8][95:32]), .io_aRequest_8_bits_beats(core_request_bits[8][31:0]),
+    .io_aRequest_9_ready(core_request_ready[9]), .io_aRequest_9_valid(core_request_valid[9]), .io_aRequest_9_bits_address(core_request_bits[9][95:32]), .io_aRequest_9_bits_beats(core_request_bits[9][31:0]),
+    .io_aRequest_10_ready(core_request_ready[10]), .io_aRequest_10_valid(core_request_valid[10]), .io_aRequest_10_bits_address(core_request_bits[10][95:32]), .io_aRequest_10_bits_beats(core_request_bits[10][31:0]),
+    .io_aRequest_11_ready(core_request_ready[11]), .io_aRequest_11_valid(core_request_valid[11]), .io_aRequest_11_bits_address(core_request_bits[11][95:32]), .io_aRequest_11_bits_beats(core_request_bits[11][31:0]),
+    .io_aRequest_12_ready(core_request_ready[12]), .io_aRequest_12_valid(core_request_valid[12]), .io_aRequest_12_bits_address(core_request_bits[12][95:32]), .io_aRequest_12_bits_beats(core_request_bits[12][31:0]),
+    .io_aRequest_13_ready(core_request_ready[13]), .io_aRequest_13_valid(core_request_valid[13]), .io_aRequest_13_bits_address(core_request_bits[13][95:32]), .io_aRequest_13_bits_beats(core_request_bits[13][31:0]),
+    .io_aRequest_14_ready(core_request_ready[14]), .io_aRequest_14_valid(core_request_valid[14]), .io_aRequest_14_bits_address(core_request_bits[14][95:32]), .io_aRequest_14_bits_beats(core_request_bits[14][31:0]),
+    .io_aRequest_15_ready(core_request_ready[15]), .io_aRequest_15_valid(core_request_valid[15]), .io_aRequest_15_bits_address(core_request_bits[15][95:32]), .io_aRequest_15_bits_beats(core_request_bits[15][31:0]),
+    .io_xRequest_0_ready(core_request_ready[16]), .io_xRequest_0_valid(core_request_valid[16]), .io_xRequest_0_bits_address(core_request_bits[16][95:32]), .io_xRequest_0_bits_beats(core_request_bits[16][31:0]),
+    .io_xRequest_1_ready(core_request_ready[17]), .io_xRequest_1_valid(core_request_valid[17]), .io_xRequest_1_bits_address(core_request_bits[17][95:32]), .io_xRequest_1_bits_beats(core_request_bits[17][31:0]),
+    .io_ctrlRequest_0_ready(core_request_ready[18]), .io_ctrlRequest_0_valid(core_request_valid[18]), .io_ctrlRequest_0_bits_address(core_request_bits[18][95:32]), .io_ctrlRequest_0_bits_beats(core_request_bits[18][31:0]),
     `SPMV_INPUT_A_CORE_BIND(pc00, 0, 0), `SPMV_INPUT_A_CORE_BIND(pc01, 1, 1),
     `SPMV_INPUT_A_CORE_BIND(pc02, 2, 2), `SPMV_INPUT_A_CORE_BIND(pc03, 3, 3),
     `SPMV_INPUT_A_CORE_BIND(pc04, 4, 4), `SPMV_INPUT_A_CORE_BIND(pc05, 5, 5),
@@ -475,8 +610,8 @@ module SpmvInputKernel (
     `SPMV_INPUT_A_CORE_BIND(pc12, 12, 12), `SPMV_INPUT_A_CORE_BIND(pc13, 13, 13),
     `SPMV_INPUT_A_CORE_BIND(pc14, 14, 14), `SPMV_INPUT_A_CORE_BIND(pc15, 15, 15),
     `SPMV_INPUT_X_CORE_BIND(pc16, 0, 16), `SPMV_INPUT_X_CORE_BIND(pc17, 1, 17),
-    .io_ctrlHbm_0_ar_ready(m_axi_pc18_arready), .io_ctrlHbm_0_ar_valid(core_axi_18_arvalid), .io_ctrlHbm_0_ar_bits_id(core_axi_18_arid), .io_ctrlHbm_0_ar_bits_addr(core_axi_18_araddr), .io_ctrlHbm_0_ar_bits_len(core_axi_18_arlen), .io_ctrlHbm_0_ar_bits_size(core_axi_18_arsize), .io_ctrlHbm_0_ar_bits_burst(core_axi_18_arburst), .io_ctrlHbm_0_ar_bits_lock(core_axi_18_arlock), .io_ctrlHbm_0_ar_bits_cache(core_axi_18_arcache), .io_ctrlHbm_0_ar_bits_prot(core_axi_18_arprot), .io_ctrlHbm_0_ar_bits_qos(core_axi_18_arqos), .io_ctrlHbm_0_r_ready(core_axi_18_rready), .io_ctrlHbm_0_r_valid(m_axi_pc18_rvalid), .io_ctrlHbm_0_r_bits_id(m_axi_pc18_rid), .io_ctrlHbm_0_r_bits_data(m_axi_pc18_rdata), .io_ctrlHbm_0_r_bits_resp(m_axi_pc18_rresp), .io_ctrlHbm_0_r_bits_last(m_axi_pc18_rlast),
-    .io_xIdle_0(x_idle0), .io_xIdle_1(x_idle1), .io_mulEnable(mul_enable), .io_mulBatch(batch_index), .io_ctrlMapReady(ctrl_map_ready), .io_mulReady(mul_ready), .io_computeDone(compute_done), .io_mulError(mul_error), .io_mulProductChecksum(product_checksum)
+    .io_ctrlHbm_0_ar_ready(core_axi_18_arready), .io_ctrlHbm_0_ar_valid(core_axi_18_arvalid), .io_ctrlHbm_0_ar_bits_id(core_axi_18_arid), .io_ctrlHbm_0_ar_bits_addr(core_axi_18_araddr), .io_ctrlHbm_0_ar_bits_len(core_axi_18_arlen), .io_ctrlHbm_0_ar_bits_size(core_axi_18_arsize), .io_ctrlHbm_0_ar_bits_burst(core_axi_18_arburst), .io_ctrlHbm_0_ar_bits_lock(core_axi_18_arlock), .io_ctrlHbm_0_ar_bits_cache(core_axi_18_arcache), .io_ctrlHbm_0_ar_bits_prot(core_axi_18_arprot), .io_ctrlHbm_0_ar_bits_qos(core_axi_18_arqos), .io_ctrlHbm_0_r_ready(core_axi_18_rready), .io_ctrlHbm_0_r_valid(core_axi_18_rvalid), .io_ctrlHbm_0_r_bits_id(core_axi_18_rid), .io_ctrlHbm_0_r_bits_data(core_axi_18_rdata), .io_ctrlHbm_0_r_bits_resp(core_axi_18_rresp), .io_ctrlHbm_0_r_bits_last(core_axi_18_rlast),
+    .io_xIdle_0(core_x_idle0), .io_xIdle_1(core_x_idle1), .io_mulEnable(core_mul_enable), .io_mulBatch(core_mul_batch), .io_ctrlMapReady(core_ctrl_map_ready), .io_mulReady(core_mul_ready), .io_computeDone(core_compute_done), .io_mulError(core_mul_error), .io_mulProductChecksum(core_product_checksum)
   );
 endmodule
 

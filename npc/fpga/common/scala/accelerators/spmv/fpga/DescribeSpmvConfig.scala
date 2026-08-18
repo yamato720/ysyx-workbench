@@ -47,8 +47,8 @@ object DescribeSpmvConfig extends App {
       val input = parameters(SpmvInputConfigKey).getOrElse(
         throw new IllegalArgumentException(s"${entry.className} 缺少 SpmvInputConfigKey")
       )
-      require(platform.clockMHz == 300 && platform.platformClockMHz == 300,
-        "U55C SPMV 输入 runtime 必须使用 300 MHz DATA_CLK")
+      require(platform.platformClockMHz == 300 && platform.clockMHz <= platform.platformClockMHz,
+        "U55C SPMV 输入 runtime 必须保持 300 MHz DATA_CLK，核心频率不得超过它")
       ConstructionProfile.write(
         Path.of(args(0)),
         SpmvInputFpgaProfile.values(entry, runtime, input, extra)

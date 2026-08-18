@@ -18,10 +18,23 @@ object SpmvAcceleratorHostConfig {
     kind = "spmv",
     abi = "spmv-input-u55c-runtime-v1"
   )
+
+  val CuperflowRtl: AcceleratorHostConfig = AcceleratorHostConfig(
+    kind = "spmv",
+    abi = "spmv-cuperflow-rtl-v1"
+  )
 }
 
 /** 独立于 NEMU 的本地 SPMV 正式输入与流水报告构造。 */
 trait SpmvInputSimulationConstruction extends AcceleratorHostConstruction {
+  final override protected def configuredCapability: String = "run"
+  protected def configuredSpmvInputReport: SpmvInputReportConfig
+
+  final def spmvInputReportConfig: SpmvInputReportConfig = configuredSpmvInputReport
+}
+
+/** Cuperflow 独立 RTL/Verilator 仿真构造。 */
+trait SpmvCuperflowSimulationConstruction extends AcceleratorHostConstruction {
   final override protected def configuredCapability: String = "run"
   protected def configuredSpmvInputReport: SpmvInputReportConfig
 

@@ -50,7 +50,7 @@ matching_mark() {
 valid_protocol_abi() {
   local scope=$1 board=${2:-} abi=$3
   case "$scope:$board:$abi" in
-    fpga:u55c:npc-fpga-runtime-v11|fpga:u55c:npc-fpga-runtime-v13-performance-monitor|fpga:u55c:spmv-resource-probe-v1|fpga:u55c:spmv-resource-probe-v2|fpga:u55c:spmv-input-u55c-windowed-v1|fpga:zcu102:npc-fpga-runtime-v7|npc::npc-dpi-v1|soc::ysyx-dpi-v1|spmv::spmv-input-windowed-v12) return 0 ;;
+    fpga:u55c:npc-fpga-runtime-v11|fpga:u55c:npc-fpga-runtime-v13-performance-monitor|fpga:u55c:spmv-resource-probe-v1|fpga:u55c:spmv-resource-probe-v2|fpga:u55c:spmv-input-u55c-windowed-v1|fpga:zcu102:npc-fpga-runtime-v7|npc::npc-dpi-v1|soc::ysyx-dpi-v1|spmv::spmv-input-windowed-v12|spmv::spmv-cuperflow-rtl-v1) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -1316,6 +1316,38 @@ profile_cache_valid() {
   capability=$(value "$file" CAPABILITY)
   target=$(value "$file" TARGET)
   if [[ $scope == spmv ]]; then
+    if [[ $(value "$file" ACCELERATOR_HOST_ABI) == spmv-cuperflow-rtl-v1 ]]; then
+      [[ $capability == run && $target == SPMV && $(value "$file" HOST_ABI) == none &&
+        $(value "$file" ACCELERATOR_HOST_KIND) == spmv &&
+        $(value "$file" PROTOCOL_ABI) == spmv-cuperflow-rtl-v1 &&
+        -z $(value "$file" XLEN) && -z $(value "$file" ISA_STRING) &&
+        -z $(value "$file" NEMU_PRESET) && -z $(value "$file" NEMU_BACKEND) &&
+        $(value "$file" SPMV_CUPERFLOW_HBM_PC_COUNT) == 16 &&
+        -n $(value "$file" SPMV_CUPERFLOW_HBM_BASE) &&
+        $(value "$file" SPMV_CUPERFLOW_HBM_BYTES) == 134217728 &&
+        $(value "$file" SPMV_CUPERFLOW_X_REGION_BYTES) == 67108864 &&
+        $(value "$file" SPMV_CUPERFLOW_AXI_ADDR_WIDTH) == 64 &&
+        $(value "$file" SPMV_CUPERFLOW_AXI_DATA_WIDTH) == 512 &&
+        $(value "$file" SPMV_CUPERFLOW_AXI_ID_WIDTH) == 4 &&
+        $(value "$file" SPMV_CUPERFLOW_MAX_OUTSTANDING_BURSTS) == 2 &&
+        $(value "$file" SPMV_CUPERFLOW_X_WINDOW_SIZE) == 8192 &&
+        $(value "$file" SPMV_CUPERFLOW_X_REPLICA_COUNT) == 4 &&
+        $(value "$file" SPMV_CUPERFLOW_X_ELEMENT_WIDTH) == 64 &&
+        $(value "$file" SPMV_CUPERFLOW_X_DECODER_LANES) == 8 &&
+        $(value "$file" SPMV_FP64_MUL_INTERFACE) == arithmetic-req-resp-v1 &&
+        $(value "$file" SPMV_FP64_MUL_LATENCY) == 4 &&
+        $(value "$file" SPMV_FP64_MUL_II) == 1 &&
+        $(value "$file" SPMV_FP64_MUL_RESPONSE_FIFO_DEPTH) == 4 &&
+        $(value "$file" SPMV_FP64_MUL_LANES) == 8 &&
+        $(value "$file" SPMV_FP64_MUL_CORE_COUNT) == 16 &&
+        $(value "$file" SPMV_FP64_MUL_TOTAL_LANES) == 128 &&
+        $(value "$file" SPMV_PERFORMANCE_HTML) =~ ^[01]$ &&
+        $(value "$file" SPMV_PIPELINE_HTML) =~ ^[01]$ &&
+        ($(value "$file" SPMV_PIPELINE_HTML) == 0 ||
+          $(value "$file" SPMV_PERFORMANCE_HTML) == 1) &&
+        -z $(value "$file" FPGA_BOARD) ]] || return 1
+      return 0
+    fi
     [[ $capability == run && $target == SPMV && $(value "$file" HOST_ABI) == none &&
       $(value "$file" ACCELERATOR_HOST_KIND) == spmv &&
       $(value "$file" ACCELERATOR_HOST_ABI) == spmv-input-report-v13 &&
@@ -1453,6 +1485,27 @@ final_construction_by_version() {
 verify_spmv_model_assets() {
   local directory=$1 profile="$1/profile.env" accelerator_abi
   accelerator_abi=$(value "$profile" ACCELERATOR_HOST_ABI)
+  if [[ $accelerator_abi == spmv-cuperflow-rtl-v1 ]]; then
+    [[ -f $profile && $(value "$profile" SCOPE) == spmv &&
+      $(value "$profile" HOST_ABI) == none &&
+      $(value "$profile" PROTOCOL_ABI) == spmv-cuperflow-rtl-v1 ]] || {
+      echo "构造不是独立 Cuperflow RTL ABI：$directory" >&2; return 1;
+    }
+    [[ ! -e $directory/abi/nemu && ! -e $directory/fpga ]] || {
+      echo "Cuperflow RTL 构造不能包含 NEMU 或 FPGA 资产：$directory" >&2; return 1;
+    }
+    local asset
+    for asset in \
+      abi/rtl/SpmvCuperflowInputTop.sv \
+      abi/verilator/VSpmvCuperflowInputTop.h \
+      abi/verilator/libVSpmvCuperflowInputTop.a \
+      abi/verilator/libverilated.a; do
+      [[ -s $directory/$asset ]] || {
+        echo "Cuperflow RTL 构造缺少资产：$directory/$asset" >&2; return 1;
+      }
+    done
+    return 0
+  fi
   [[ -f $profile && $(value "$profile" SCOPE) == spmv &&
     $(value "$profile" HOST_ABI) == none &&
     $accelerator_abi == spmv-input-report-v13 &&
@@ -1476,6 +1529,27 @@ verify_spmv_model_assets() {
 
 verify_spmv_host_assets() {
   local directory=$1 profile="$1/profile.env" host="$1/abi/spmv/host.env"
+  if [[ $(value "$profile" ACCELERATOR_HOST_ABI) == spmv-cuperflow-rtl-v1 ]]; then
+    [[ -x $directory/abi/spmv/spmv-host && -f $host && $(value "$host" HOST_FORMAT) == 15 ]] || {
+      echo "Cuperflow RTL 构造缺少可执行 host 或 host.env：$directory/abi/spmv" >&2; return 1;
+    }
+    local key
+    for key in CONFIG_FQCN ACCELERATOR_HOST_KIND ACCELERATOR_HOST_ABI PROTOCOL_ABI \
+      SPMV_CUPERFLOW_HBM_PC_COUNT SPMV_CUPERFLOW_HBM_BASE SPMV_CUPERFLOW_HBM_BYTES \
+      SPMV_CUPERFLOW_X_REGION_BYTES SPMV_CUPERFLOW_AXI_ADDR_WIDTH \
+      SPMV_CUPERFLOW_AXI_DATA_WIDTH SPMV_CUPERFLOW_AXI_ID_WIDTH \
+      SPMV_CUPERFLOW_MAX_OUTSTANDING_BURSTS SPMV_CUPERFLOW_X_WINDOW_SIZE \
+      SPMV_CUPERFLOW_X_REPLICA_COUNT SPMV_CUPERFLOW_X_ELEMENT_WIDTH \
+      SPMV_CUPERFLOW_X_DECODER_LANES SPMV_FP64_MUL_INTERFACE SPMV_FP64_MUL_PROVIDER \
+      SPMV_FP64_MUL_LATENCY SPMV_FP64_MUL_II SPMV_FP64_MUL_RESPONSE_FIFO_DEPTH \
+      SPMV_FP64_MUL_LANES SPMV_FP64_MUL_CORE_COUNT SPMV_FP64_MUL_TOTAL_LANES \
+      SPMV_PERFORMANCE_HTML SPMV_PIPELINE_HTML; do
+      [[ $(value "$host" "$key") == $(value "$profile" "$key") ]] || {
+        echo "Cuperflow RTL host 元数据与 profile 不匹配：$directory（$key）" >&2; return 1;
+      }
+    done
+    return 0
+  fi
   [[ -x $directory/abi/spmv/spmv-host && -f $host && $(value "$host" HOST_FORMAT) == 13 ]] || {
     echo "独立 SPMV 构造缺少可执行 host 或 host.env：$directory/abi/spmv" >&2; return 1;
   }
@@ -2292,17 +2366,20 @@ do_host_build_directory() {
 }
 
 do_spmv_simulation_host_build_directory() {
-  local directory=$1 profile="$1/profile.env" fqcn host_root host_stage log_stage failed_dir
+  local directory=$1 profile="$1/profile.env" fqcn host_root host_stage log_stage failed_dir accelerator_abi host_format
   local previous_host previous_logs host_lock_fd key
   [[ -f $directory/construction.env && -f $(version_tag_file "$directory") &&
     $(version_state_from_tag "$directory") == complete ]] || {
     echo "独立 SPMV build-host 需要已保存的完整构造：$directory" >&2; return 1;
   }
   verify_spmv_model_assets "$directory" || return 1
-  [[ $(value "$profile" ACCELERATOR_HOST_ABI) == spmv-input-report-v13 ]] || {
+  accelerator_abi=$(value "$profile" ACCELERATOR_HOST_ABI)
+  [[ $accelerator_abi == spmv-input-report-v13 || $accelerator_abi == spmv-cuperflow-rtl-v1 ]] || {
     echo "保存构造不是当前 SPMV 输入流水 ABI，不能只刷新 host；请先执行 make -C $npc_root rebuild version=$(version_index_from_tag "$directory")" >&2
     return 1
   }
+  host_format=13
+  [[ $accelerator_abi == spmv-cuperflow-rtl-v1 ]] && host_format=15
   fqcn=$(value "$profile" CONFIG_FQCN)
   host_root="$workspace/accelerator-sim/spmv"
   [[ -f $host_root/Makefile && -f $host_root/host.cpp ]] || {
@@ -2330,27 +2407,39 @@ do_spmv_simulation_host_build_directory() {
     echo "完整日志目录：$failed_dir" >&2
     return 1
   fi
-  [[ -x $host_stage/spmv-host && $(value "$host_stage/host.env" HOST_FORMAT) == 13 ]] || {
+  [[ -x $host_stage/spmv-host && $(value "$host_stage/host.env" HOST_FORMAT) == "$host_format" ]] || {
     rm -rf "$host_stage" "$log_stage"
     echo "新 SPMV host 资产不完整：$fqcn" >&2
     return 1
   }
-  for key in CONFIG_FQCN ACCELERATOR_HOST_KIND ACCELERATOR_HOST_ABI PROTOCOL_ABI \
-    SPMV_INPUT_A_READER_COUNT SPMV_INPUT_X_READER_COUNT SPMV_INPUT_HBM_CHANNEL_COUNT \
-    SPMV_INPUT_HBM_BASE SPMV_INPUT_HBM_BYTES SPMV_INPUT_HBM_CHANNEL_ALIGNMENT_BYTES \
-    SPMV_INPUT_AXI_ADDR_WIDTH SPMV_INPUT_AXI_DATA_WIDTH SPMV_INPUT_AXI_ID_WIDTH \
-    SPMV_INPUT_MAX_OUTSTANDING_BURSTS \
-    SPMV_INPUT_CONSUMER_COUNT SPMV_INPUT_X_BROADCAST \
-    SPMV_INPUT_CTRL_READER_COUNT SPMV_INPUT_CTRL_BROADCAST \
-    SPMV_INPUT_X_WINDOW_SIZE SPMV_INPUT_X_REPLICA_COUNT \
-    SPMV_INPUT_X_BANK_COUNT SPMV_INPUT_X_ELEMENT_WIDTH SPMV_INPUT_X_PORT_SCHEDULE \
-    SPMV_INPUT_X_WRITE_LANES SPMV_INPUT_X_OVERLAP_LANES \
-    SPMV_CUPER_SLOT_ABI SPMV_CUPER_SLOT_COLUMN_BITS SPMV_CUPER_SLOT_TAG_BITS \
-    SPMV_CUPER_SLOT_ROW_BITS \
-    SPMV_FP64_MUL_INTERFACE SPMV_FP64_MUL_LATENCY SPMV_FP64_MUL_II \
-    SPMV_FP64_MUL_RESPONSE_FIFO_DEPTH SPMV_FP64_MUL_LANES \
-    SPMV_FP64_MUL_CORE_COUNT SPMV_FP64_MUL_TOTAL_LANES \
-    SPMV_PERFORMANCE_HTML SPMV_PIPELINE_HTML; do
+  local -a host_keys
+  if [[ $accelerator_abi == spmv-cuperflow-rtl-v1 ]]; then
+    host_keys=(CONFIG_FQCN ACCELERATOR_HOST_KIND ACCELERATOR_HOST_ABI PROTOCOL_ABI \
+      SPMV_CUPERFLOW_HBM_PC_COUNT SPMV_CUPERFLOW_HBM_BASE SPMV_CUPERFLOW_HBM_BYTES \
+      SPMV_CUPERFLOW_X_REGION_BYTES SPMV_CUPERFLOW_AXI_ADDR_WIDTH \
+      SPMV_CUPERFLOW_AXI_DATA_WIDTH SPMV_CUPERFLOW_AXI_ID_WIDTH \
+      SPMV_CUPERFLOW_MAX_OUTSTANDING_BURSTS SPMV_CUPERFLOW_X_WINDOW_SIZE \
+      SPMV_CUPERFLOW_X_REPLICA_COUNT SPMV_CUPERFLOW_X_ELEMENT_WIDTH \
+      SPMV_CUPERFLOW_X_DECODER_LANES SPMV_FP64_MUL_INTERFACE SPMV_FP64_MUL_PROVIDER \
+      SPMV_FP64_MUL_LATENCY SPMV_FP64_MUL_II SPMV_FP64_MUL_RESPONSE_FIFO_DEPTH \
+      SPMV_FP64_MUL_LANES SPMV_FP64_MUL_CORE_COUNT SPMV_FP64_MUL_TOTAL_LANES \
+      SPMV_PERFORMANCE_HTML SPMV_PIPELINE_HTML)
+  else
+    host_keys=(CONFIG_FQCN ACCELERATOR_HOST_KIND ACCELERATOR_HOST_ABI PROTOCOL_ABI \
+      SPMV_INPUT_A_READER_COUNT SPMV_INPUT_X_READER_COUNT SPMV_INPUT_HBM_CHANNEL_COUNT \
+      SPMV_INPUT_HBM_BASE SPMV_INPUT_HBM_BYTES SPMV_INPUT_HBM_CHANNEL_ALIGNMENT_BYTES \
+      SPMV_INPUT_AXI_ADDR_WIDTH SPMV_INPUT_AXI_DATA_WIDTH SPMV_INPUT_AXI_ID_WIDTH \
+      SPMV_INPUT_MAX_OUTSTANDING_BURSTS SPMV_INPUT_CONSUMER_COUNT SPMV_INPUT_X_BROADCAST \
+      SPMV_INPUT_CTRL_READER_COUNT SPMV_INPUT_CTRL_BROADCAST SPMV_INPUT_X_WINDOW_SIZE \
+      SPMV_INPUT_X_REPLICA_COUNT SPMV_INPUT_X_BANK_COUNT SPMV_INPUT_X_ELEMENT_WIDTH \
+      SPMV_INPUT_X_PORT_SCHEDULE SPMV_INPUT_X_WRITE_LANES SPMV_INPUT_X_OVERLAP_LANES \
+      SPMV_CUPER_SLOT_ABI SPMV_CUPER_SLOT_COLUMN_BITS SPMV_CUPER_SLOT_TAG_BITS \
+      SPMV_CUPER_SLOT_ROW_BITS SPMV_FP64_MUL_INTERFACE SPMV_FP64_MUL_LATENCY \
+      SPMV_FP64_MUL_II SPMV_FP64_MUL_RESPONSE_FIFO_DEPTH SPMV_FP64_MUL_LANES \
+      SPMV_FP64_MUL_CORE_COUNT SPMV_FP64_MUL_TOTAL_LANES SPMV_PERFORMANCE_HTML \
+      SPMV_PIPELINE_HTML)
+  fi
+  for key in "${host_keys[@]}"; do
     [[ $(value "$host_stage/host.env" "$key") == $(value "$profile" "$key") ]] || {
       rm -rf "$host_stage" "$log_stage"
       echo "新 SPMV host 元数据与保存 profile 不匹配：$fqcn（$key）" >&2
@@ -2478,6 +2567,13 @@ do_accelerator_host_build() {
       }
       do_spmv_simulation_host_build_directory "$directory"
       ;;
+    spmv:spmv-cuperflow-rtl-v1)
+      [[ -n $directory ]] || {
+        echo "Cuperflow RTL host 必须绑定已保存的 Verilator 构造" >&2
+        return 1
+      }
+      do_spmv_simulation_host_build_directory "$directory"
+      ;;
     spmv:spmv-input-u55c-runtime-v1)
       [[ -n $directory ]] || {
         echo "U55C SPMV XRT host 必须绑定已保存 FPGA 构造" >&2
@@ -2509,6 +2605,7 @@ do_accelerator_run() {
     IFS='|' read -r fqcn _ <<< "$resolved"
     profile=$(profile_for "$fqcn")
     if [[ $(value "$profile" ACCELERATOR_HOST_ABI) == spmv-input-report-v13 ||
+          $(value "$profile" ACCELERATOR_HOST_ABI) == spmv-cuperflow-rtl-v1 ||
           $(value "$profile" ACCELERATOR_HOST_ABI) == spmv-input-u55c-runtime-v1 ]]; then
       directory="$root/$fqcn"
       if [[ ! -d $directory ]] || ! version_directory_is_valid "$directory"; then
@@ -2526,6 +2623,11 @@ do_accelerator_run() {
       make --no-print-directory -C "$host_root" run "mainargs=$mainargs"
       ;;
     spmv:spmv-input-report-v13)
+      verify_assets "$directory"
+      host="$directory/abi/spmv/spmv-host"
+      "$host" "$mainargs"
+      ;;
+    spmv:spmv-cuperflow-rtl-v1)
       verify_assets "$directory"
       host="$directory/abi/spmv/spmv-host"
       "$host" "$mainargs"
@@ -2569,6 +2671,14 @@ do_host_build() {
       spmv-input-report-v13)
         [[ -d $directory ]] || {
           echo "独立 SPMV build-host 找不到保存构造：$fqcn；请先执行 make -C $npc_root build config=$(config_short_name "$fqcn")" >&2
+          return 1
+        }
+        do_accelerator_host_build "$selected_profile" "$directory"
+        return
+        ;;
+      spmv-cuperflow-rtl-v1)
+        [[ -d $directory ]] || {
+          echo "Cuperflow RTL build-host 找不到保存构造：$fqcn；请先执行 make -C $npc_root build config=$(config_short_name "$fqcn")" >&2
           return 1
         }
         do_accelerator_host_build "$selected_profile" "$directory"
@@ -2674,7 +2784,7 @@ do_host_build_all() {
     accelerator_abi=$(value "$directory/profile.env" ACCELERATOR_HOST_ABI)
     (
       case "$accelerator_abi" in
-        spmv-input-report-v13) do_spmv_simulation_host_build_directory "$directory" ;;
+        spmv-input-report-v13|spmv-cuperflow-rtl-v1) do_spmv_simulation_host_build_directory "$directory" ;;
         spmv-input-u55c-runtime-v1) do_spmv_input_xrt_host_build_directory "$directory" ;;
         *) do_host_build_directory "$directory" ;;
       esac

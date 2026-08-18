@@ -21,16 +21,23 @@ object DescribeSpmvInputSimulationConfig extends App {
     case error: ReflectiveOperationException =>
       throw new IllegalArgumentException(s"无法构造 SPMV 配置 ${entry.className}：${error.getMessage}", error)
   }
-  val simulation = construction match {
-    case value: CDEConfig with SpmvInputSimulationConstruction with MakeTerminal => value
-    case _ => throw new IllegalArgumentException(s"${entry.className} 未挂载 SPMV 正式输入构造")
-  }
   implicit val parameters: Parameters = construction
-  val input = parameters(SpmvInputConfigKey).getOrElse(
-    throw new IllegalArgumentException(s"${entry.className} 缺少 SpmvInputConfigKey")
-  )
-  ConstructionProfile.write(
-    Path.of(args(0)),
-    SpmvInputSimulationProfile.values(entry, simulation, input, simulation.spmvInputReportConfig)
-  )
+  construction match {
+    case value: CDEConfig with SpmvCuperflowSimulationConstruction with MakeTerminal =>
+      val config = parameters(SpmvCuperflowConfigKey).getOrElse(
+        throw new IllegalArgumentException(s"${entry.className} 缺少 SpmvCuperflowConfigKey"))
+      ConstructionProfile.write(
+        Path.of(args(0)),
+        SpmvCuperflowSimulationProfile.values(entry, value, config,
+          value.spmvInputReportConfig))
+    case value: CDEConfig with SpmvInputSimulationConstruction with MakeTerminal =>
+      val input = parameters(SpmvInputConfigKey).getOrElse(
+        throw new IllegalArgumentException(s"${entry.className} 缺少 SpmvInputConfigKey")
+      )
+      ConstructionProfile.write(
+        Path.of(args(0)),
+        SpmvInputSimulationProfile.values(entry, value, input, value.spmvInputReportConfig))
+    case _ =>
+      throw new IllegalArgumentException(s"${entry.className} 未挂载 SPMV 正式输入构造")
+  }
 }

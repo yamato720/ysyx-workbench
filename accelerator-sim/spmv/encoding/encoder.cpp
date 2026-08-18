@@ -1,6 +1,8 @@
 #include "encoder.hpp"
 #include "cuper/report.hpp"
 #include "cuper/vector_report.hpp"
+#include "cuperflow/report.hpp"
+#include "cuperflow/vector_report.hpp"
 
 #include <fstream>
 #include <stdexcept>
@@ -12,6 +14,9 @@ EncodingFormat parseEncodingFormat(std::string_view name) {
   if (name == "cuper") {
     return EncodingFormat::Cuper;
   }
+  if (name == "cuperflow") {
+    return EncodingFormat::Cuperflow;
+  }
   throw std::invalid_argument("未知的 SpMV 编码格式: " + std::string(name));
 }
 
@@ -19,6 +24,8 @@ std::string_view encodingFormatName(EncodingFormat format) {
   switch (format) {
     case EncodingFormat::Cuper:
       return "cuper";
+    case EncodingFormat::Cuperflow:
+      return "cuperflow";
   }
   throw std::invalid_argument("无效的 SpMV EncodingFormat");
 }
@@ -27,6 +34,8 @@ EncodedMatrix encodeMatrix(const CsrMatrix& matrix, const EncodingOptions& optio
   switch (options.format) {
     case EncodingFormat::Cuper:
       return EncodedMatrix{options.format, cuper::encode(matrix, options.cuper)};
+    case EncodingFormat::Cuperflow:
+      return EncodedMatrix{options.format, cuperflow::encode(matrix, options.cuperflow)};
   }
   throw std::invalid_argument("无效的 SpMV EncodingFormat");
 }
@@ -35,6 +44,8 @@ EncodedVector encodeVector(const std::vector<double>& input, const EncodingOptio
   switch (options.format) {
     case EncodingFormat::Cuper:
       return EncodedVector{options.format, cuper::encodeVector(input, options.cuper)};
+    case EncodingFormat::Cuperflow:
+      return EncodedVector{options.format, cuperflow::encodeVector(input, options.cuperflow)};
   }
   throw std::invalid_argument("无效的 SpMV EncodingFormat");
 }
@@ -45,6 +56,11 @@ void writeHtmlReport(std::ostream& output, const EncodedMatrix& encoded,
     case EncodingFormat::Cuper:
       cuper::writeHtmlReport(output, std::get<cuper::CuperPackage>(encoded.package),
                              metadata.datasetName, metadata.sourcePath);
+      return;
+    case EncodingFormat::Cuperflow:
+      cuperflow::writeHtmlReport(
+          output, std::get<cuperflow::CuperflowPackage>(encoded.package),
+          metadata.datasetName, metadata.sourcePath);
       return;
   }
   throw std::invalid_argument("无效的 SpMV EncodingFormat");
@@ -85,6 +101,11 @@ void writeVectorHtmlReport(std::ostream& output, const EncodedVector& encoded,
     case EncodingFormat::Cuper:
       cuper::writeVectorHtmlReport(output,
           std::get<cuper::CuperVectorPackage>(encoded.package),
+          metadata.datasetName, metadata.sourcePath);
+      return;
+    case EncodingFormat::Cuperflow:
+      cuperflow::writeVectorHtmlReport(
+          output, std::get<cuperflow::CuperflowVectorPackage>(encoded.package),
           metadata.datasetName, metadata.sourcePath);
       return;
   }

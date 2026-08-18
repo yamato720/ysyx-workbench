@@ -2,6 +2,8 @@ package accelerators.spmv
 
 import _root_.circt.stage.ChiselStage
 import org.chipsalliance.cde.config.{Config => CDEConfig, Parameters}
+import accelerators.spmv.inputmul.pingpong.SpmvAxPingPongInputMulTop
+import accelerators.spmv.inputmul.preload.SpmvPreloadInputMulTop
 import npc.ConfigCatalog
 
 /** 按当前 NPC Config 选择 SPMV 输入参数并生成真实的输入层顶层。 */
@@ -31,7 +33,10 @@ object ElaborateSpmvInputTop extends App {
       s"total HBM ports=${input.totalHbmPortCount}"
   )
   ChiselStage.emitSystemVerilogFile(
-    new SpmvInputTop(input),
+    input.xPortSchedule match {
+      case SpmvXPortSchedule.Preload => new SpmvPreloadInputMulTop(input)
+      case SpmvXPortSchedule.PingPong => new SpmvAxPingPongInputMulTop(input)
+    },
     Array("--target-dir", output, "--split-verilog"),
     Array("--disable-annotation-unknown")
   )

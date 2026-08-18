@@ -12,6 +12,7 @@ SPMV_INPUT_LINK_DONE := $(SPMV_INPUT_WORK_DIR)/.link.complete
 SPMV_INPUT_TOP := SpmvInputKernel
 SPMV_INPUT_CHISEL_TOP := SpmvInputTop
 SPMV_INPUT_WRAPPER := $(CURDIR)/fpga/u55c/rtl/spmv/spmv-input-kernel.sv
+SPMV_INPUT_COMMON_RTL := $(CURDIR)/fpga/u55c/rtl/common/u55c-clocked-core.sv
 SPMV_INPUT_IP_TCL := $(CURDIR)/fpga/u55c/tcl/spmv/create-input-fp64-ip.tcl
 SPMV_INPUT_PACKAGE_TCL := $(CURDIR)/fpga/u55c/tcl/spmv/package-input-xo.tcl
 SPMV_INPUT_MANIFEST_TOOL := $(CURDIR)/fpga/common/scripts/manifest.sh
@@ -41,9 +42,11 @@ spmv-input-fpga-check:
 	@test "$(SPMV_INPUT_X_OVERLAP_LANES)" = 4 && test "$(SPMV_INPUT_X_WINDOW_SIZE)" = 8192
 	@test "$(SPMV_FP64_MUL_PROVIDER)" = xilinx-floating-point-v7.1
 	@test "$(SPMV_FP64_MUL_LATENCY)" = 12 && test "$(SPMV_FP64_MUL_II)" = 1
-	@test "$(FPGA_PLATFORM_CLOCK_MHZ)" = 300 && test "$(FPGA_CLOCK_MHZ)" = 300
+	@test "$(FPGA_PLATFORM_CLOCK_MHZ)" = 300
+	@case "$(FPGA_CLOCK_MHZ)" in 100|125|150|200|225|250|300) ;; *) echo 'SPMV core clock must be a supported U55C frequency' >&2; exit 2;; esac
+	@test "$(FPGA_CLOCK_MHZ)" -le "$(FPGA_PLATFORM_CLOCK_MHZ)"
 	@test "$(FPGA_PART)" = xcu55c-fsvh2892-2L-e && test "$(FPGA_VITIS_TARGET)" = hw
-	@test -f "$(SPMV_INPUT_WRAPPER)" && test -f "$(SPMV_INPUT_IP_TCL)" && test -f "$(SPMV_INPUT_PACKAGE_TCL)"
+	@test -f "$(SPMV_INPUT_WRAPPER)" && test -f "$(SPMV_INPUT_COMMON_RTL)" && test -f "$(SPMV_INPUT_IP_TCL)" && test -f "$(SPMV_INPUT_PACKAGE_TCL)"
 
 $(SPMV_INPUT_ELAB_DONE): FORCE spmv-input-fpga-check
 	@set -e; \
@@ -53,7 +56,12 @@ $(SPMV_INPUT_ELAB_DONE): FORCE spmv-input-fpga-check
 	cd "$(CURDIR)/chisel/ysyxSoC" && NPC_SCALA_CONFIG="$(CONFIG_FQCN)" \
 		mill -i ysyxsoc.runMain accelerators.spmv.fpga.ElaborateSpmvInputFpga --target-dir "$(SPMV_INPUT_RTL_DIR)"; \
 	test -f "$(SPMV_INPUT_RTL_DIR)/$(SPMV_INPUT_CHISEL_TOP).sv" && test -f "$(SPMV_INPUT_PARAMETER_MANIFEST)"; \
-	{ test "$(SPMV_INPUT_X_PORT_SCHEDULE)" = pingpong && printf '%s\n' '`define SPMV_INPUT_PINGPONG 1'; cat "$(SPMV_INPUT_WRAPPER)"; } > "$(SPMV_INPUT_RTL_DIR)/spmv-input-kernel.sv"; \
+	{ \
+		test "$(SPMV_INPUT_X_PORT_SCHEDULE)" = pingpong && printf '%s\n' '`define SPMV_INPUT_PINGPONG 1'; \
+		printf '%s\n' '`define SPMV_INPUT_PLATFORM_CLOCK_MHZ $(FPGA_PLATFORM_CLOCK_MHZ)'; \
+		printf '%s\n' '`define SPMV_INPUT_CORE_CLOCK_MHZ $(FPGA_CLOCK_MHZ)'; \
+		cat "$(SPMV_INPUT_COMMON_RTL)" "$(SPMV_INPUT_WRAPPER)"; \
+	} > "$(SPMV_INPUT_RTL_DIR)/spmv-input-kernel.sv"; \
 	"$(SPMV_INPUT_MANIFEST_TOOL)" verify "$(SPMV_INPUT_PARAMETER_MANIFEST)" \
 		CONFIG_FQCN=$(CONFIG_FQCN) SPMV_INPUT_HBM_MASTER_COUNT=$(SPMV_INPUT_HBM_MASTER_COUNT) \
 		SPMV_INPUT_A_READER_COUNT=$(SPMV_INPUT_A_READER_COUNT) SPMV_INPUT_X_READER_COUNT=$(SPMV_INPUT_X_READER_COUNT) \
@@ -84,7 +92,7 @@ $(SPMV_INPUT_PACKAGE_DONE): FORCE $(if $(filter 1,$(SPMV_INPUT_PHASE_PREREQUISIT
 	rm -rf "$(SPMV_INPUT_ARTIFACT_DIR)"; mkdir -p "$(SPMV_INPUT_ARTIFACT_DIR)"; \
 	vivado -mode batch -nojournal -nolog -source "$(SPMV_INPUT_PACKAGE_TCL)" -tclargs \
 		"$(SPMV_INPUT_WORK_DIR)/package" "$(FPGA_PART)" "$(SPMV_INPUT_TOP)" "$(SPMV_INPUT_SOURCE_MANIFEST)" \
-		"$(SPMV_INPUT_XO)" "$(FPGA_VIVADO_SYNTH_JOBS)" "$(FPGA_CLOCK_MHZ)" "$(SPMV_INPUT_HBM_MASTER_COUNT)"; \
+		"$(SPMV_INPUT_XO)" "$(FPGA_VIVADO_SYNTH_JOBS)" "$(FPGA_PLATFORM_CLOCK_MHZ)" "$(FPGA_CLOCK_MHZ)" "$(SPMV_INPUT_HBM_MASTER_COUNT)"; \
 	cp "$(SPMV_INPUT_XCI)" "$(SPMV_INPUT_ARTIFACT_DIR)/SpmvFp64MulXilinxCore.xci"; \
 	for asset in $(SPMV_INPUT_PACKAGE_ASSETS); do test -s "$(SPMV_INPUT_ARTIFACT_DIR)/$$asset"; done; touch "$@"
 
@@ -103,7 +111,7 @@ $(SPMV_INPUT_LINK_DONE): FORCE $(if $(filter 1,$(SPMV_INPUT_PHASE_PREREQUISITES)
 	rm -rf "$(SPMV_INPUT_VITIS_TEMP_DIR)" "$(SPMV_INPUT_VITIS_LOG_DIR)" "$(SPMV_INPUT_VITIS_REPORT_DIR)"; \
 	mkdir -p "$(SPMV_INPUT_VITIS_TEMP_DIR)" "$(SPMV_INPUT_VITIS_LOG_DIR)" "$(SPMV_INPUT_VITIS_REPORT_DIR)"; \
 	{ printf '%s\n' '[connectivity]'; for pc in $$(seq 0 18); do printf 'sp=SpmvInputKernel_1.m_axi_pc%02d:HBM[%d]\n' "$$pc" "$$pc"; done; \
-		printf '%s\n' '' '[clock]'; printf 'freqHz=300000000:SpmvInputKernel_1.ap_clk\n'; \
+		printf '%s\n' '' '[clock]'; printf 'freqHz=%s000000:SpmvInputKernel_1.ap_clk\n' "$(FPGA_PLATFORM_CLOCK_MHZ)"; \
 		printf '%s\n' '' '[vivado]' 'synth.jobs=$(FPGA_VIVADO_SYNTH_JOBS)' 'impl.jobs=$(FPGA_VIVADO_IMPL_JOBS)'; \
 	} > "$(SPMV_INPUT_VITIS_LINK_CONFIG)"; \
 	$(if $(filter unset,$(FPGA_VITIS_XRT_MODE)),env -u XILINX_XRT,) v++ --link --target "$(FPGA_VITIS_TARGET)" --platform "$(FPGA_PLATFORM)" \

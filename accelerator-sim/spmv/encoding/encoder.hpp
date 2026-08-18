@@ -1,6 +1,7 @@
 #pragma once
 
 #include "cuper/cuper.hpp"
+#include "cuperflow/cuperflow.hpp"
 
 #include <filesystem>
 #include <ostream>
@@ -12,15 +13,18 @@ namespace accelerator_sim::spmv::encoding {
 
 enum class EncodingFormat {
   Cuper,
+  Cuperflow,
 };
 
 struct EncodingOptions {
   EncodingFormat format = EncodingFormat::Cuper;
   cuper::CuperConfig cuper;
+  cuperflow::CuperflowConfig cuperflow;
 };
 
-using EncodingPackage = std::variant<cuper::CuperPackage>;
-using EncodedVectorPackage = std::variant<cuper::CuperVectorPackage>;
+using EncodingPackage = std::variant<cuper::CuperPackage, cuperflow::CuperflowPackage>;
+using EncodedVectorPackage =
+    std::variant<cuper::CuperVectorPackage, cuperflow::CuperflowVectorPackage>;
 
 struct EncodedMatrix {
   EncodingFormat format = EncodingFormat::Cuper;

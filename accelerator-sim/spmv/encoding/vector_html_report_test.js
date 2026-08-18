@@ -35,9 +35,40 @@ if (report.batchPointers.length !== report.stats.batchCount + 1 ||
       index > 0 && pointer < report.batchPointers[index - 1])) {
   throw new Error("Cuper X batchPointers 不满足累计边界语义");
 }
+const encodedHexDigits = report.config.encodedBits === 64 ? 16 : 8;
+const encodedBitsPattern = new RegExp(`^0x[0-9a-f]{${encodedHexDigits}}$`);
 if (report.elements.some((element) => element.length !== 12 ||
-    !/^0x[0-9a-f]{8}$/.test(element[10]))) {
+    !encodedBitsPattern.test(element[10]))) {
   throw new Error("Cuper X element 数据结构不完整");
+}
+if (report.channelXRanges !== undefined) {
+  const expectedRangeCount = report.config.sliceGroupCount;
+  if (report.channelXRanges.length !== report.config.coreCount ||
+      report.channelXRanges.flat().length !== expectedRangeCount ||
+      report.channelXRanges.some((ranges, channel) => ranges.some((range) =>
+        range.length !== 5 || range[0] % report.config.coreCount !== channel ||
+        range[2] > report.config.xRangeMaxElements || range[3] > range[4]))) {
+    throw new Error("Cuper X 没有形成互不重叠且不超过 8192 元素的 per-HBM range");
+  }
+}
+if (report.encodedXRanges !== undefined) {
+  if (report.encodedXRanges.length !== report.config.coreCount ||
+      report.encodedXRanges.flat().length !== report.config.sliceGroupCount ||
+      report.encodedXRanges.some((ranges) => ranges.some((range) =>
+        range.length !== 8 || range[3] !== range[4] + range[5] || range[6] > range[7]))) {
+    throw new Error("Cuperflow encoded X range 的 token 统计或边界错误");
+  }
+  const ranges = report.encodedXRanges.flat();
+  if (ranges.reduce((total, range) => total + range[3], 0) !== report.stats.encodedWordCount ||
+      ranges.reduce((total, range) => total + range[5], 0) !== report.stats.markerCount) {
+    throw new Error("Cuperflow encoded X range 与 marker 总数不一致");
+  }
+}
+const physicalSlots = report.stats.encodedPayloadBeats * report.config.lanesPerBeat;
+if (report.stats.encodedValueCount > report.stats.validElements ||
+    report.stats.encodedWordCount !== report.stats.encodedValueCount + report.stats.markerCount ||
+    physicalSlots < report.stats.encodedWordCount) {
+  throw new Error("Cuper X 利用率统计的 value、marker 或物理 slot 数量错误");
 }
 const valid = report.elements.filter((element) => !element[7]);
 if (valid.length !== report.stats.validElements ||
@@ -54,7 +85,9 @@ for (const id of [
     throw new Error(`Cuper X HTML 报告缺少 ${id}`);
   }
 }
-const coreOrder = ["PE_Param header", "Batch start", "X broadcast → local_X", "Batch end", "A × X"];
+const xStage = html.includes("HBM X range → local_X") ?
+  "HBM X range → local_X" : "X broadcast → local_X";
+const coreOrder = ["PE_Param header", "Batch start", xStage, "Batch end", "A × X"];
 let previous = -1;
 for (const stage of coreOrder) {
   const current = html.indexOf(stage);

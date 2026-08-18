@@ -177,22 +177,35 @@ dry_run() {
   esac
 
   if [[ $SCOPE == spmv ]]; then
-    printf 'module SpmvInputTop; endmodule\n' > \
-      "$stage/abi/rtl/SpmvInputTop.sv"
+    if [[ ${ACCELERATOR_HOST_ABI:-} == spmv-cuperflow-rtl-v1 ]]; then
+      printf 'module SpmvCuperflowInputTop; endmodule\n' > \
+        "$stage/abi/rtl/SpmvCuperflowInputTop.sv"
+    else
+      printf 'module SpmvInputTop; endmodule\n' > \
+        "$stage/abi/rtl/SpmvInputTop.sv"
+    fi
   elif [[ $CAPABILITY != synthesize-only && $CAPABILITY != bitstream-only ]] &&
     ! is_spmv_input_xrt_runtime; then
     printf 'dry-run\n' > "$stage/abi/rtl/placeholder.sv"
   fi
   if [[ $SCOPE == spmv ]]; then
-    printf 'dry-run header\n' > "$stage/abi/verilator/VSpmvInputTop.h"
-    printf 'dry-run model\n' > "$stage/abi/verilator/libVSpmvInputTop.a"
+    if [[ ${ACCELERATOR_HOST_ABI:-} == spmv-cuperflow-rtl-v1 ]]; then
+      printf 'dry-run header\n' > "$stage/abi/verilator/VSpmvCuperflowInputTop.h"
+      printf 'dry-run model\n' > "$stage/abi/verilator/libVSpmvCuperflowInputTop.a"
+    else
+      printf 'dry-run header\n' > "$stage/abi/verilator/VSpmvInputTop.h"
+      printf 'dry-run model\n' > "$stage/abi/verilator/libVSpmvInputTop.a"
+    fi
     printf 'dry-run runtime\n' > "$stage/abi/verilator/libverilated.a"
     printf '#!/usr/bin/env bash\necho "SPMV construction dry-run host"\n' > "$stage/abi/spmv/spmv-host"
     chmod +x "$stage/abi/spmv/spmv-host"
-    {
-      printf '%s\n' 'HOST_FORMAT=13' "CONFIG_FQCN=$CONFIG_FQCN" \
-        'ACCELERATOR_HOST_KIND=spmv' 'ACCELERATOR_HOST_ABI=spmv-input-report-v13' \
-        'PROTOCOL_ABI=spmv-input-windowed-v12'
+    if [[ ${ACCELERATOR_HOST_ABI:-} == spmv-cuperflow-rtl-v1 ]]; then
+      { printf '%s\n' 'HOST_FORMAT=15'; cat "$profile"; } > "$stage/abi/spmv/host.env"
+    else
+      {
+        printf '%s\n' 'HOST_FORMAT=13' "CONFIG_FQCN=$CONFIG_FQCN" \
+          'ACCELERATOR_HOST_KIND=spmv' 'ACCELERATOR_HOST_ABI=spmv-input-report-v13' \
+          'PROTOCOL_ABI=spmv-input-windowed-v12'
       printf 'SPMV_INPUT_A_READER_COUNT=%s\nSPMV_INPUT_X_READER_COUNT=%s\nSPMV_INPUT_CTRL_READER_COUNT=%s\n' \
         "$SPMV_INPUT_A_READER_COUNT" "$SPMV_INPUT_X_READER_COUNT" "$SPMV_INPUT_CTRL_READER_COUNT"
       printf 'SPMV_INPUT_HBM_CHANNEL_COUNT=%s\nSPMV_INPUT_HBM_BASE=%s\nSPMV_INPUT_HBM_BYTES=%s\nSPMV_INPUT_HBM_CHANNEL_ALIGNMENT_BYTES=%s\n' \
@@ -209,7 +222,8 @@ dry_run() {
         "$SPMV_FP64_MUL_INTERFACE" "$SPMV_FP64_MUL_LATENCY" "$SPMV_FP64_MUL_II" "$SPMV_FP64_MUL_RESPONSE_FIFO_DEPTH" "$SPMV_FP64_MUL_LANES" "$SPMV_FP64_MUL_CORE_COUNT" "$SPMV_FP64_MUL_TOTAL_LANES"
       printf 'SPMV_PERFORMANCE_HTML=%s\nSPMV_PIPELINE_HTML=%s\n' \
         "$SPMV_PERFORMANCE_HTML" "$SPMV_PIPELINE_HTML"
-    } > "$stage/abi/spmv/host.env"
+      } > "$stage/abi/spmv/host.env"
+    fi
   fi
   if [[ $SCOPE == fpga ]]; then
     local artifacts asset

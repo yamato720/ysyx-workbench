@@ -20,18 +20,29 @@ elaborate() {
     FPGA_WORK_DIR="$output" FPGA_SKIP_TOOL_VERSION_CHECK=1 >/dev/null
 }
 
+elaborate_spmv_input() {
+  local config=$1 output=$2 resolved profile
+  resolved=$($manager resolve "$npc_root" "$config" '')
+  profile=${resolved##*|}
+  make --no-print-directory -s -C "$npc_root" spmv-input-fpga-elaborate \
+    INTERNAL_CONSTRUCTION=1 config="$config" CONSTRUCTION_PROFILE="$profile" \
+    SPMV_INPUT_WORK_DIR="$output" FPGA_SKIP_TOOL_VERSION_CHECK=1 >/dev/null
+}
+
 zcu_soc="$work/zcu102-soc"
 zcu_npc="$work/zcu102-npc"
 u55c_soc="$work/u55c-soc"
 u55c_rv64_npc="$work/u55c-rv64-npc"
 u55c_performance_monitor="$work/u55c-performance-monitor"
 u55c_100mhz_performance_monitor="$work/u55c-100mhz-performance-monitor"
+u55c_spmv_input_250mhz="$work/u55c-spmv-input-250mhz"
 elaborate Zcu102YsyxSocFpgaConfig "$zcu_soc"
 elaborate Zcu102NpcFpgaConfig "$zcu_npc"
 elaborate U55cYsyxSocFpgaConfig "$u55c_soc"
 elaborate U55cRv64Npc300MHzFpgaConfig "$u55c_rv64_npc"
 elaborate U55cRv64Npc300MHzPerformanceMonitorFpgaConfig "$u55c_performance_monitor"
 elaborate U55cRv64Npc100MHzPerformanceMonitorFpgaConfig "$u55c_100mhz_performance_monitor"
+elaborate_spmv_input U55cSpmvInputPingPong250MHzFpgaConfig "$u55c_spmv_input_250mhz"
 
 mapfile -d '' -t zcu_soc_rtl < <(find "$zcu_soc/rtl" -type f \( -name '*.v' -o -name '*.sv' \) -print0 | sort -z)
 mapfile -d '' -t zcu_npc_rtl < <(find "$zcu_npc/rtl" -type f \( -name '*.v' -o -name '*.sv' \) -print0 | sort -z)
@@ -88,6 +99,17 @@ grep -Eq '\[255:0\].*io_trace_w_bits_data' "$u55c_performance_monitor/rtl/NpcFpg
 grep -Eq '\[7:0\].*io_trace_aw_bits_len' "$u55c_performance_monitor/rtl/NpcFpgaTop.sv" || {
   echo '性能监测 trace burst length 端口缺失' >&2; exit 1;
 }
+
+# 250 MHz SpMV 核心必须保持 300 MHz HBM shell，且包装后的 19 路 AR/R CDC 可
+# 被 Verilator 完整展开。Xilinx 原语和 FP64 IP 在此只以 blackbox 声明参与 lint。
+grep -qx '`define SPMV_INPUT_PLATFORM_CLOCK_MHZ 300' \
+  "$u55c_spmv_input_250mhz/rtl/spmv-input-kernel.sv"
+grep -qx '`define SPMV_INPUT_CORE_CLOCK_MHZ 250' \
+  "$u55c_spmv_input_250mhz/rtl/spmv-input-kernel.sv"
+verilator --lint-only --sv --top-module SpmvInputKernel -Wno-fatal -Wno-PINMISSING \
+  -Wno-TIMESCALEMOD -Wno-WIDTHTRUNC -Wno-WIDTHEXPAND -Wno-UNOPTFLAT -Wno-LATCH \
+  -Wno-CASEINCOMPLETE "$npc_root/fpga/common/tests/u55c-clocked-core-blackboxes.sv" \
+  "$u55c_spmv_input_250mhz/rtl/"*.sv >/dev/null
 
 verilator --binary --timing -Wno-fatal --top-module FpgaRuntimeTraceWriterTb \
   --Mdir "$work/runtime-trace-writer" \

@@ -1,6 +1,7 @@
 #include "golden.hpp"
 #include "encoding/encoder.hpp"
 #include "encoding/cuper/demand_schedule.hpp"
+#include "input/cuperflow_timing.hpp"
 #include "input/input_simulation.hpp"
 
 #include <algorithm>
@@ -479,7 +480,104 @@ int runCuperASmokeTest(const std::string& requested) {
   return 0;
 }
 
-int runEncoding(const std::string& formatName, const std::string& requested) {
+void printCuperflowAStats(const encoding::cuperflow::CuperflowPackage& package) {
+  const std::size_t channelCount = package.config.hbmChannelCount;
+  std::vector<std::uint64_t> channelMatrixSlots(channelCount, 0);
+  std::vector<std::uint64_t> peMatrixSlots(
+      encoding::cuperflow::totalPeCount(package.config), 0);
+  std::size_t maximumBatchBeatSpread = 0;
+  std::size_t worstBatch = 0;
+  std::size_t worstBatchMinimumBeats = 0;
+  std::size_t worstBatchMaximumBeats = 0;
+
+  for (std::size_t batch = 0; batch < package.stats.batchCount; ++batch) {
+    std::size_t minimumBeats = std::numeric_limits<std::size_t>::max();
+    std::size_t maximumBeats = 0;
+    for (std::size_t channel = 0; channel < channelCount; ++channel) {
+      const auto& pointers = package.channelBatchPointers[channel];
+      if (pointers.size() != package.stats.batchCount + 1U) {
+        throw std::logic_error("Cuperflow channel batch pointer 数量不一致");
+      }
+      const std::size_t begin = pointers[batch];
+      const std::size_t end = pointers[batch + 1U];
+      if (end < begin || end > package.matrixEntryMasks[channel].size()) {
+        throw std::logic_error("Cuperflow channel batch pointer 超出 mask 范围");
+      }
+      const std::size_t beats = end - begin;
+      minimumBeats = std::min(minimumBeats, beats);
+      maximumBeats = std::max(maximumBeats, beats);
+      for (std::size_t beat = begin; beat < end; ++beat) {
+        const std::uint8_t mask = package.matrixEntryMasks[channel][beat];
+        for (std::size_t lane = 0; lane < encoding::cuperflow::kLanesPerBeat; ++lane) {
+          if ((mask & static_cast<std::uint8_t>(1U << lane)) != 0U) {
+            ++channelMatrixSlots[channel];
+            ++peMatrixSlots[channel * encoding::cuperflow::kLanesPerBeat + lane];
+          }
+        }
+      }
+    }
+    const std::size_t spread = maximumBeats - minimumBeats;
+    if (spread > maximumBatchBeatSpread) {
+      maximumBatchBeatSpread = spread;
+      worstBatch = batch;
+      worstBatchMinimumBeats = minimumBeats;
+      worstBatchMaximumBeats = maximumBeats;
+    }
+  }
+
+  const auto writeList = [](const auto& values) {
+    for (std::size_t index = 0; index < values.size(); ++index) {
+      if (index != 0) {
+        std::cout << ',';
+      }
+      std::cout << values[index];
+    }
+  };
+  const auto percent = [](std::uint64_t numerator, std::uint64_t denominator) {
+    return denominator == 0 ? 0.0 : 100.0 * static_cast<double>(numerator) /
+        static_cast<double>(denominator);
+  };
+  const auto [minimumChannelSlots, maximumChannelSlots] = std::minmax_element(
+      channelMatrixSlots.begin(), channelMatrixSlots.end());
+  const auto [minimumPeSlots, maximumPeSlots] = std::minmax_element(
+      peMatrixSlots.begin(), peMatrixSlots.end());
+  const std::uint64_t channelBeatSpread =
+      package.stats.maximumMatrixBeatsPerChannel - package.stats.minimumMatrixBeatsPerChannel;
+  std::cout << "[spmv-encoding-a] channel_beats_min="
+            << package.stats.minimumMatrixBeatsPerChannel
+            << " channel_beats_max=" << package.stats.maximumMatrixBeatsPerChannel
+            << " channel_beat_spread=" << channelBeatSpread
+            << " channel_beat_spread_pct="
+            << std::fixed << std::setprecision(6)
+            << percent(channelBeatSpread, package.stats.minimumMatrixBeatsPerChannel)
+            << " hbm_matrix_slots_min=" << *minimumChannelSlots
+            << " hbm_matrix_slots_max=" << *maximumChannelSlots
+            << " hbm_matrix_slot_spread=" << (*maximumChannelSlots - *minimumChannelSlots)
+            << " pe_matrix_slots_min=" << *minimumPeSlots
+            << " pe_matrix_slots_max=" << *maximumPeSlots
+            << " pe_matrix_slot_spread=" << (*maximumPeSlots - *minimumPeSlots)
+            << " worst_batch=" << worstBatch
+            << " worst_batch_beats_min=" << worstBatchMinimumBeats
+            << " worst_batch_beats_max=" << worstBatchMaximumBeats
+            << " worst_batch_beat_spread=" << maximumBatchBeatSpread
+            << " worst_batch_beat_spread_pct="
+            << percent(maximumBatchBeatSpread, worstBatchMinimumBeats) << '\n';
+  std::vector<std::size_t> channelBeats;
+  channelBeats.reserve(channelCount);
+  for (std::size_t channel = 0; channel < channelCount; ++channel) {
+    channelBeats.push_back(package.matrixChannels[channel].size());
+  }
+  std::cout << "[spmv-encoding-a] hbm_beats=";
+  writeList(channelBeats);
+  std::cout << " hbm_matrix_slots=";
+  writeList(channelMatrixSlots);
+  std::cout << " pe_matrix_slots=";
+  writeList(peMatrixSlots);
+  std::cout << '\n';
+}
+
+int runEncoding(const std::string& formatName, const std::string& requested,
+                bool writeReports = true) {
   const fs::path dataRoot = resolveDataRoot();
   const std::vector<DatasetChoice> choices = discoverDatasets(dataRoot);
   const encoding::EncodingFormat format = encoding::parseEncodingFormat(formatName);
@@ -493,6 +591,7 @@ int runEncoding(const std::string& formatName, const std::string& requested) {
   }
 
   const DatasetChoice& choice = selectDataset(choices, requested);
+  const auto loadStart = std::chrono::steady_clock::now();
   const CsrMatrix matrix = loadMatrix(choice);
   const std::vector<double> input = readArray<double>(choice.path / "b.txt");
   if (input.size() != matrix.columns) {
@@ -500,20 +599,30 @@ int runEncoding(const std::string& formatName, const std::string& requested) {
   }
   encoding::EncodingOptions options;
   options.format = format;
-  const auto start = std::chrono::steady_clock::now();
+  const auto loadEnd = std::chrono::steady_clock::now();
+  const auto matrixStart = std::chrono::steady_clock::now();
   const encoding::EncodedMatrix encoded = encoding::encodeMatrix(matrix, options);
-  const encoding::EncodedVector encodedVector = encoding::encodeVector(input, options);
-  const auto end = std::chrono::steady_clock::now();
+  const auto matrixEnd = std::chrono::steady_clock::now();
+  const auto vectorStart = std::chrono::steady_clock::now();
+  const encoding::EncodedVector encodedVector = format == encoding::EncodingFormat::Cuperflow
+      ? encoding::EncodedVector{
+          format,
+          encoding::cuperflow::encodeVector(
+              input, std::get<encoding::cuperflow::CuperflowPackage>(encoded.package))}
+      : encoding::encodeVector(input, options);
+  const auto vectorEnd = std::chrono::steady_clock::now();
   const fs::path reportPath = resolveEncodingReportDirectory() /
       std::string(encoding::encodingFormatName(encoded.format)) / (choice.name + ".html");
   const fs::path vectorReportPath = resolveEncodingReportDirectory() /
       std::string(encoding::encodingFormatName(encoded.format)) / (choice.name + "-x.html");
   const fs::path demandSchedulePath = resolveEncodingReportDirectory() /
       std::string(encoding::encodingFormatName(encoded.format)) / (choice.name + "-demand.json");
-  encoding::writeVectorHtmlReport(vectorReportPath, encodedVector,
-      encoding::EncodingReportMetadata{choice.name, (choice.path / "b.txt").string()});
-  encoding::writeHtmlReport(reportPath, encoded,
-      encoding::EncodingReportMetadata{choice.name, choice.path.string()});
+  if (writeReports) {
+    encoding::writeVectorHtmlReport(vectorReportPath, encodedVector,
+        encoding::EncodingReportMetadata{choice.name, (choice.path / "b.txt").string()});
+    encoding::writeHtmlReport(reportPath, encoded,
+        encoding::EncodingReportMetadata{choice.name, choice.path.string()});
+  }
 
   if (format == encoding::EncodingFormat::Cuper) {
     const auto& package = std::get<encoding::cuper::CuperPackage>(encoded.package);
@@ -547,7 +656,14 @@ int runEncoding(const std::string& formatName, const std::string& requested) {
             demandSchedulePath.string() + ": " + error.message());
       }
     }
-    const double milliseconds = std::chrono::duration<double, std::milli>(end - start).count();
+    const double loadMilliseconds =
+        std::chrono::duration<double, std::milli>(loadEnd - loadStart).count();
+    const double matrixMilliseconds =
+        std::chrono::duration<double, std::milli>(matrixEnd - matrixStart).count();
+    const double vectorMilliseconds =
+        std::chrono::duration<double, std::milli>(vectorEnd - vectorStart).count();
+    const double milliseconds =
+        std::chrono::duration<double, std::milli>(vectorEnd - matrixStart).count();
     std::cout << "[spmv-encoding] format=" << encoding::encodingFormatName(encoded.format)
               << " scale=" << choice.name << " dataset=" << choice.path << '\n';
     std::cout << "[spmv-encoding] rows=" << package.rows
@@ -565,7 +681,10 @@ int runEncoding(const std::string& formatName, const std::string& requested) {
               << " matrix_slot_utilization=" << std::fixed << std::setprecision(6)
               << package.stats.matrixSlotUtilization()
               << " packed_bytes=" << package.stats.packedBytes
-              << " encode_ms=" << std::setprecision(3) << milliseconds << '\n';
+              << " load_ms=" << std::setprecision(3) << loadMilliseconds
+              << " a_encode_ms=" << matrixMilliseconds
+              << " x_encode_ms=" << vectorMilliseconds
+              << " encode_ms=" << milliseconds << '\n';
     std::cout << "[spmv-encoding-x] source=fp64 encoded=fp32"
               << " elements=" << vectorPackage.stats.validElements
               << " batches=" << vectorPackage.stats.batchCount
@@ -583,10 +702,70 @@ int runEncoding(const std::string& formatName, const std::string& requested) {
                 << " channels_started_before_x_complete="
                 << batch.planned.channelsStartedBeforeXComplete << '\n';
     }
+  } else {
+    const auto& package = std::get<encoding::cuperflow::CuperflowPackage>(encoded.package);
+    const auto& vectorPackage =
+        std::get<encoding::cuperflow::CuperflowVectorPackage>(encodedVector.package);
+    const double loadMilliseconds =
+        std::chrono::duration<double, std::milli>(loadEnd - loadStart).count();
+    const double matrixMilliseconds =
+        std::chrono::duration<double, std::milli>(matrixEnd - matrixStart).count();
+    const double vectorMilliseconds =
+        std::chrono::duration<double, std::milli>(vectorEnd - vectorStart).count();
+    const double milliseconds =
+        std::chrono::duration<double, std::milli>(vectorEnd - matrixStart).count();
+    std::cout << "[spmv-encoding] format=" << encoding::encodingFormatName(encoded.format)
+              << " scale=" << choice.name << " dataset=" << choice.path << '\n';
+    std::cout << "[spmv-encoding] rows=" << package.rows
+              << " columns=" << package.columns
+              << " nnz=" << package.nonzeros
+              << " batches=" << package.stats.batchCount
+              << " hbm_channels=" << package.config.hbmChannelCount
+              << " slice_groups=" << package.sliceGroupCount
+              << " load_ms=" << std::fixed << std::setprecision(3) << loadMilliseconds
+              << " a_encode_ms=" << matrixMilliseconds
+              << " x_encode_ms=" << vectorMilliseconds
+              << " encode_ms=" << milliseconds << '\n';
+    std::cout << "[spmv-encoding-a] matrix_slots=" << package.stats.matrixSlots
+              << " zero_fill_slots=" << package.stats.zeroFillSlots
+              << " matrix_slot_utilization=" << std::setprecision(6)
+              << package.stats.matrixSlotUtilization()
+              << " total_beats=" << package.stats.totalMatrixBeats
+              << " packed_bytes=" << package.stats.packedBytes << '\n';
+    printCuperflowAStats(package);
+    std::cout << "[spmv-encoding-x] source=fp64 encoded=fp64"
+              << " mode=" << (vectorPackage.flexibleXEncoding ? "flexible" : "dense")
+              << " elements=" << vectorPackage.stats.validElements
+              << " encoded_values=" << vectorPackage.stats.encodedValueCount
+              << " used_value_pct=" << std::fixed << std::setprecision(6)
+              << (vectorPackage.stats.validElements == 0 ? 0.0 :
+                  100.0 * static_cast<double>(vectorPackage.stats.encodedValueCount) /
+                      static_cast<double>(vectorPackage.stats.validElements))
+              << " ranges=" << vectorPackage.stats.rangeCount
+              << " payload_beats=" << vectorPackage.stats.payloadBeats
+              << " encoded_payload_beats=" << vectorPackage.stats.encodedPayloadBeats
+              << " encoded_payload_delta="
+              << (vectorPackage.stats.encodedPayloadBeats >= vectorPackage.stats.payloadBeats
+                  ? vectorPackage.stats.encodedPayloadBeats - vectorPackage.stats.payloadBeats
+                  : 0U)
+              << " encoded_words=" << vectorPackage.stats.encodedWordCount
+              << " token_lane_utilization="
+              << (vectorPackage.stats.encodedPayloadBeats == 0 ? 0.0 :
+                  100.0 * static_cast<double>(vectorPackage.stats.encodedWordCount) /
+                      static_cast<double>(vectorPackage.stats.encodedPayloadBeats *
+                          encoding::cuperflow::kVectorLanesPerBeat))
+              << " markers=" << vectorPackage.stats.markerCount
+              << " encoded_lane_padding_words="
+              << vectorPackage.stats.encodedLanePaddingWords
+              << " allocated_beats=" << vectorPackage.stats.allocatedBeats << '\n';
   }
-  std::cout << "[spmv-encoding] html=" << reportPath << '\n';
-  std::cout << "[spmv-encoding-x] html=" << vectorReportPath << '\n';
-  std::cout << "[spmv-demand] json=" << demandSchedulePath << '\n';
+  if (writeReports) {
+    std::cout << "[spmv-encoding] html=" << reportPath << '\n';
+    std::cout << "[spmv-encoding-x] html=" << vectorReportPath << '\n';
+  }
+  if (format == encoding::EncodingFormat::Cuper) {
+    std::cout << "[spmv-demand] json=" << demandSchedulePath << '\n';
+  }
   return 0;
 }
 #endif
@@ -934,6 +1113,10 @@ int runInputTransactions(const std::string& requested) {
 #endif
 #endif
 
+#if !defined(SPMV_INPUT_TRANSACTION_VERILATOR) && !defined(SPMV_INPUT_XRT)
+}  // namespace
+#endif
+
 int run(const std::string& requested) {
 #ifdef SPMV_INPUT_TRANSACTION_VERILATOR
   return runInputTransactions(requested);
@@ -959,6 +1142,12 @@ int run(const std::string& requested) {
 
 int main(int argc, char** argv) {
   try {
+    if (argc >= 2 && std::string(argv[1]) == "--cuperflow-timing") {
+      if (argc > 3) {
+        throw std::invalid_argument("用法: spmv-host --cuperflow-timing [dataset]");
+      }
+      return accelerator_sim::spmv::runCuperflowTiming(argc == 3 ? argv[2] : "");
+    }
 #ifdef SPMV_INPUT_XRT
     return accelerator_sim::spmv::runInputXrt(argc, argv);
 #else
@@ -968,13 +1157,25 @@ int main(int argc, char** argv) {
       }
       return accelerator_sim::spmv::runEncoding(argv[2], argc == 4 ? argv[3] : "");
     }
+    if (argc >= 2 && std::string(argv[1]) == "--encode-stats") {
+      if (argc < 3 || argc > 4) {
+        throw std::invalid_argument("用法: spmv-host --encode-stats <format> [dataset]");
+      }
+      return accelerator_sim::spmv::runEncoding(argv[2], argc == 4 ? argv[3] : "", false);
+    }
     if (argc >= 2 && std::string(argv[1]) == "--check-cuper-a") {
       if (argc > 3) {
         throw std::invalid_argument("用法: spmv-host --check-cuper-a [dataset]");
       }
       return accelerator_sim::spmv::runCuperASmokeTest(argc == 3 ? argv[2] : "");
     }
+#ifdef SPMV_CUPERFLOW_RTL_VERILATOR
+    // Cuperflow construction 的默认执行入口必须推进真实 Verilator RTL；编码工具选项
+    // 在上面的分支中保留，只有数据集运行路径切换到 RTL host。
+    return accelerator_sim::spmv::runCuperflowTiming(argc >= 2 ? argv[1] : "");
+#else
     return accelerator_sim::spmv::run(argc >= 2 ? argv[1] : "");
+#endif
 #endif
   } catch (const std::exception& error) {
     std::cerr << "spmv-host: " << error.what() << '\n';

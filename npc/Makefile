@@ -142,15 +142,16 @@ SOC_NEMU_INPUTS := $(SOC_SIM_VERILOG) $(SOC_PERIP_V) $(SOC_IP_PERIP_V) \
 # 独立 SPMV 仿真只生成自己的顶层与 Verilator 模型，不进入 NPC/NEMU 构造。
 SPMV_SIM_OUT ?= $(CURDIR)/generated-spmv-simulation
 SPMV_SIM_MODEL_DIR ?= $(obj_dir)/spmv-simulation
-SPMV_SIM_TOP := SpmvInputTop
+SPMV_SIM_TOP ?= $(if $(filter spmv-cuperflow-rtl-v1,$(ACCELERATOR_HOST_ABI)),SpmvCuperflowInputTop,SpmvInputTop)
+SPMV_SIM_ELABORATOR ?= $(if $(filter spmv-cuperflow-rtl-v1,$(ACCELERATOR_HOST_ABI)),accelerators.spmv.inputmul.cuperflow.ElaborateSpmvCuperflowInputTop,accelerators.spmv.ElaborateSpmvInputTop)
 
 spmv-sim-elaborate:
 	@set -e; \
 	rm -rf "$(SPMV_SIM_OUT)"; \
 	mkdir -p "$(SPMV_SIM_OUT)"; \
 	cd "$(CURDIR)"; \
-	NPC_SCALA_CONFIG="$(CONFIG_FQCN)" SPMV_ELABORATE_OUTPUT_DIR="$(SPMV_SIM_OUT)" \
-		sbt -Dnpc.config="$(CONFIG_FQCN)" "root/runMain accelerators.spmv.ElaborateSpmvInputTop"; \
+		NPC_SCALA_CONFIG="$(CONFIG_FQCN)" SPMV_ELABORATE_OUTPUT_DIR="$(SPMV_SIM_OUT)" \
+			sbt -Dnpc.config="$(CONFIG_FQCN)" "root/runMain $(SPMV_SIM_ELABORATOR)"; \
 	test -s "$(SPMV_SIM_OUT)/$(SPMV_SIM_TOP).sv"
 
 spmv-sim-verilator: $(if $(filter 1,$(CONSTRUCTION_PHASE_PREREQUISITES)),spmv-sim-elaborate)

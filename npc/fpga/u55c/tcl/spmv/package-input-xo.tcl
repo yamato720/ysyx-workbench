@@ -1,10 +1,16 @@
-if {$argc != 8} {
-  puts stderr "usage: package-input-xo.tcl PROJECT PART TOP SOURCE_MANIFEST XO SYNTH_JOBS CLOCK_MHZ PC_COUNT"
+if {$argc != 9} {
+  puts stderr "usage: package-input-xo.tcl PROJECT PART TOP SOURCE_MANIFEST XO SYNTH_JOBS PLATFORM_CLOCK_MHZ CORE_CLOCK_MHZ PC_COUNT"
   exit 2
 }
-lassign $argv project_dir part top source_manifest xo synth_jobs clock_mhz pc_count
+lassign $argv project_dir part top source_manifest xo synth_jobs platform_clock_mhz core_clock_mhz pc_count
 if {$part ne "xcu55c-fsvh2892-2L-e"} { error "SPMV input kernel requires xcu55c-fsvh2892-2L-e, got $part" }
-if {$clock_mhz != 300} { error "SPMV input kernel must use 300 MHz DATA_CLK, got $clock_mhz" }
+if {$platform_clock_mhz != 300} { error "SPMV input kernel requires 300 MHz DATA_CLK, got $platform_clock_mhz" }
+if {$core_clock_mhz ni {100 125 150 200 225 250 300}} {
+  error "SPMV input core clock must be one of 100, 125, 150, 200, 225, 250, 300 MHz, got $core_clock_mhz"
+}
+if {$core_clock_mhz > $platform_clock_mhz} {
+  error "SPMV input core clock $core_clock_mhz MHz exceeds DATA_CLK $platform_clock_mhz MHz"
+}
 if {$pc_count != 19} { error "SPMV input kernel requires 19 HBM masters, got $pc_count" }
 
 proc load_source_manifest {manifest} {
@@ -72,7 +78,7 @@ ipx::associate_bus_interfaces -busif s_axi_control -clock ap_clk $core
 ipx::associate_bus_interfaces -clock ap_clk -reset ap_rst_n $core
 set clock_interface [ipx::get_bus_interfaces ap_clk -of_objects $core]
 set clock_frequency [ipx::add_bus_parameter -quiet FREQ_HZ $clock_interface]
-set_property value [expr {$clock_mhz * 1000000}] $clock_frequency
+set_property value [expr {$platform_clock_mhz * 1000000}] $clock_frequency
 set_property value_resolve_type user $clock_frequency
 
 set memory_map [ipx::add_memory_map -quiet s_axi_control $core]

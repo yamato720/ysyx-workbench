@@ -3,9 +3,10 @@ package accelerators.spmv.fpga
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 import org.chipsalliance.cde.config.Parameters
-import accelerators.spmv.{SpmvInputConfig, SpmvInputConfigKey}
+import accelerators.spmv.{SpmvInputConfig, SpmvInputConfigKey, SpmvXPortSchedule}
+import accelerators.spmv.inputmul.pingpong.SpmvAxPingPongInputMulTop
+import accelerators.spmv.inputmul.preload.SpmvPreloadInputMulTop
 import npc.CdeConfigResolver
-import accelerators.spmv.SpmvInputTop
 
 /** 为 U55C 输入/乘法 runtime 生成不含仿真模型的 SPMV 顶层。 */
 object ElaborateSpmvInputFpga extends App {
@@ -26,7 +27,10 @@ object ElaborateSpmvInputFpga extends App {
       s"A=${input.aReaderCount}, X=${input.xReaderCount}, Ctrl=${input.ctrlReaderCount}, 输出目录=$output"
   )
   _root_.circt.stage.ChiselStage.emitSystemVerilogFile(
-    new SpmvInputTop(input),
+    input.xPortSchedule match {
+      case SpmvXPortSchedule.Preload => new SpmvPreloadInputMulTop(input)
+      case SpmvXPortSchedule.PingPong => new SpmvAxPingPongInputMulTop(input)
+    },
     Array("--target-dir", output, "--split-verilog"),
     Array("--disable-annotation-unknown")
   )

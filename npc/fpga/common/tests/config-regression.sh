@@ -13,6 +13,7 @@ source_manifest_tool="$npc_root/scripts/ip-source-manifest.sh"
 u55c_build_mk="$npc_root/fpga/common/build.mk"
 u55c_package_tcl="$npc_root/fpga/u55c/tcl/package-xo.tcl"
 u55c_wrapper="$npc_root/fpga/u55c/rtl/npc-u55c-kernel-wrapper.sv"
+u55c_clocked_core="$npc_root/fpga/u55c/rtl/common/u55c-clocked-core.sv"
 u55c_clock_verifier="$npc_root/fpga/u55c/scripts/verify-data-clock.sh"
 zcu102_link_tcl="$npc_root/fpga/zcu102/tcl/link.tcl"
 work=$(mktemp -d)
@@ -104,6 +105,7 @@ for name in U55cNpcFpgaConfig U55cRv64NpcFpgaConfig \
   U55cRv64Npc250MHzPerformanceMonitorFpgaConfig U55cRv64Npc300MHzPerformanceMonitorFpgaConfig \
   U55cSpmv32PcFp32X8192UramResourceProbeConfig \
   U55cSpmv32PcFp64X8192UramBitstreamConfig \
+  U55cSpmvInputPingPong250MHzFpgaConfig \
   U55cYsyxSocFpgaConfig \
   Zcu102NpcFpgaConfig Zcu102YsyxSocFpgaConfig; do
   grep -Eq "^${name}[[:space:]]" "$catalog" || fail "自动目录缺少 $name"
@@ -158,6 +160,21 @@ if grep -Eq '^(XLEN|ISA_STRING|NEMU_.*|PIPELINE|ICACHE_.*|DCACHE_.*|L2CACHE_.*)=
 fi
 make --no-print-directory -s -C "$npc_root" spmv-check INTERNAL_CONSTRUCTION=1 \
   config="$spmv_bitstream_config" CONSTRUCTION_PROFILE="$spmv_bitstream_profile"
+
+spmv_input_config=U55cSpmvInputPingPong250MHzFpgaConfig
+spmv_input_resolution=$($manager resolve "$npc_root" "$spmv_input_config" '')
+spmv_input_profile=${spmv_input_resolution##*|}
+for expected in \
+  CAPABILITY=run HOST_ABI=none ACCELERATOR_HOST_KIND=spmv \
+  ACCELERATOR_HOST_ABI=spmv-input-u55c-runtime-v1 PROTOCOL_ABI=spmv-input-u55c-windowed-v1 \
+  SPMV_XRT_KERNEL=SpmvInputKernel SPMV_INPUT_HBM_MASTER_COUNT=19 \
+  SPMV_INPUT_A_READER_COUNT=16 SPMV_INPUT_X_READER_COUNT=2 \
+  SPMV_INPUT_CTRL_READER_COUNT=1 SPMV_FP64_MUL_LATENCY=12 SPMV_FP64_MUL_II=1 \
+  FPGA_PLATFORM_CLOCK_MHZ=300 FPGA_CLOCK_MHZ=250; do
+  grep -qx "$expected" "$spmv_input_profile" || fail "SPMV 输入 250 MHz profile 缺少 $expected"
+done
+make --no-print-directory -s -C "$npc_root" spmv-input-fpga-check INTERNAL_CONSTRUCTION=1 \
+  config="$spmv_input_config" CONSTRUCTION_PROFILE="$spmv_input_profile"
 
 check_terminal() {
   local config=$1 expected_board=$2 expected_target=$3 expected_xlen=$4 expected_clock=$5 expected_xrt_mode expected_protocol_abi expected_capability=run expected_sdb=1 expected_trace=0 expected_integer_execute_stages=1 expected_serial_execute_stages=1 expected_register_initial_fetch_request=0 expected_separate_serial_integer_alu=0 expected_serial_execute_result_forwarding=1 expected_divider_non_blocking=0 expected_memory_data_width expected_cache_line_bytes resolved profile output
@@ -410,8 +427,9 @@ XCLBINUTIL="$fake_xclbinutil" "$u55c_clock_verifier" "$fake_xclbin" 300 || fail 
 if XCLBINUTIL="$fake_xclbinutil" "$u55c_clock_verifier" "$fake_xclbin" 250 >/dev/null 2>&1; then
   fail 'U55C DATA_CLK 校验器接受了错误 platform 频率'
 fi
-grep -q 'MMCME4_BASE' "$u55c_wrapper" || fail 'U55C wrapper 未生成慢核心物理时钟'
-grep -q 'xpm_fifo_async' "$u55c_wrapper" || fail 'U55C wrapper 未跨时钟域缓冲 AXI 通道'
+grep -q 'u55c_core_clock' "$u55c_wrapper" || fail 'U55C wrapper 未使用公共核心时钟组件'
+grep -q 'MMCME4_BASE' "$u55c_clocked_core" || fail 'U55C 公共组件未生成慢核心物理时钟'
+grep -q 'xpm_fifo_async' "$u55c_clocked_core" || fail 'U55C 公共组件未跨时钟域缓冲 AXI 通道'
 grep -q 'NPC_FPGA_PLATFORM_CLOCK_MHZ' "$u55c_package_tcl" || fail 'U55C XO 未固化 platform clock'
 grep -q 'NPC_FPGA_CORE_CLOCK_MHZ' "$u55c_package_tcl" || fail 'U55C XO 未固化 core clock'
 grep -q 'NPC_FPGA_CLOCKED_CORE' "$u55c_package_tcl" || fail 'U55C XO 未隔离性能监测时钟域'

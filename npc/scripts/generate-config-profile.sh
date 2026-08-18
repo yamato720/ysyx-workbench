@@ -88,6 +88,18 @@ awk -F= '
   $1 == "SPMV_CUPER_SLOT_ROW_BITS" { spmv_cuper_slot_row_bits=$2 }
   $1 == "SPMV_FP64_MUL_PROVIDER" { spmv_fp64_mul_provider=$2 }
   $1 == "SPMV_FP64_MUL_LATENCY" { spmv_fp64_mul_latency=$2 }
+  $1 == "SPMV_CUPERFLOW_HBM_PC_COUNT" { spmv_cuperflow_pc_count=$2 }
+  $1 == "SPMV_CUPERFLOW_HBM_BASE" { spmv_cuperflow_hbm_base=$2 }
+  $1 == "SPMV_CUPERFLOW_HBM_BYTES" { spmv_cuperflow_hbm_bytes=$2 }
+  $1 == "SPMV_CUPERFLOW_X_REGION_BYTES" { spmv_cuperflow_x_region_bytes=$2 }
+  $1 == "SPMV_CUPERFLOW_AXI_ADDR_WIDTH" { spmv_cuperflow_addr_width=$2 }
+  $1 == "SPMV_CUPERFLOW_AXI_DATA_WIDTH" { spmv_cuperflow_data_width=$2 }
+  $1 == "SPMV_CUPERFLOW_AXI_ID_WIDTH" { spmv_cuperflow_id_width=$2 }
+  $1 == "SPMV_CUPERFLOW_MAX_OUTSTANDING_BURSTS" { spmv_cuperflow_outstanding=$2 }
+  $1 == "SPMV_CUPERFLOW_X_WINDOW_SIZE" { spmv_cuperflow_window=$2 }
+  $1 == "SPMV_CUPERFLOW_X_REPLICA_COUNT" { spmv_cuperflow_replicas=$2 }
+  $1 == "SPMV_CUPERFLOW_X_ELEMENT_WIDTH" { spmv_cuperflow_element_width=$2 }
+  $1 == "SPMV_CUPERFLOW_X_DECODER_LANES" { spmv_cuperflow_decoder_lanes=$2 }
   $1 == "SPMV_PERFORMANCE_HTML" { spmv_performance_html=$2 }
   $1 == "SPMV_PIPELINE_HTML" { spmv_pipeline_html=$2 }
   seen[$1]++ { exit 1 }
@@ -96,7 +108,28 @@ awk -F= '
     if (!seen["PROFILE_FORMAT"] || !seen["CONFIG_SHORT_NAME"] || !seen["CONFIG_FQCN"] ||
         !seen["SCOPE"] || !seen["CAPABILITY"] || !seen["HOST_ABI"] ||
         !seen["PROTOCOL_ABI"] || !seen["TARGET"]) exit 1
-    if (scope == "spmv") {
+    if (scope == "spmv" && accelerator_host_abi == "spmv-cuperflow-rtl-v1") {
+      if (capability != "run" || target != "SPMV" || host_abi != "none" ||
+          accelerator_host_kind != "spmv" ||
+          !seen["SPMV_CUPERFLOW_HBM_PC_COUNT"] || !seen["SPMV_CUPERFLOW_HBM_BASE"] ||
+          !seen["SPMV_CUPERFLOW_HBM_BYTES"] || !seen["SPMV_CUPERFLOW_X_REGION_BYTES"] ||
+          !seen["SPMV_CUPERFLOW_AXI_ADDR_WIDTH"] || !seen["SPMV_CUPERFLOW_AXI_DATA_WIDTH"] ||
+          !seen["SPMV_CUPERFLOW_AXI_ID_WIDTH"] ||
+          !seen["SPMV_CUPERFLOW_MAX_OUTSTANDING_BURSTS"] ||
+          !seen["SPMV_CUPERFLOW_X_WINDOW_SIZE"] || !seen["SPMV_CUPERFLOW_X_REPLICA_COUNT"] ||
+          !seen["SPMV_CUPERFLOW_X_ELEMENT_WIDTH"] || !seen["SPMV_CUPERFLOW_X_DECODER_LANES"] ||
+          !seen["SPMV_FP64_MUL_INTERFACE"] || !seen["SPMV_FP64_MUL_PROVIDER"] ||
+          !seen["SPMV_FP64_MUL_LATENCY"] || !seen["SPMV_FP64_MUL_II"] ||
+          !seen["SPMV_FP64_MUL_RESPONSE_FIFO_DEPTH"] || !seen["SPMV_FP64_MUL_LANES"] ||
+          !seen["SPMV_FP64_MUL_CORE_COUNT"] || !seen["SPMV_FP64_MUL_TOTAL_LANES"] ||
+          !seen["SPMV_PERFORMANCE_HTML"] || !seen["SPMV_PIPELINE_HTML"] ||
+          seen["XLEN"] || seen["ISA_STRING"] || seen["NEMU_PRESET"] ||
+          seen["NEMU_BACKEND"] || seen["PIPELINE"] || seen["FPGA_BOARD"] ||
+          seen["SPMV_INPUT_A_READER_COUNT"] || seen["SPMV_INPUT_X_READER_COUNT"] ||
+          seen["SPMV_INPUT_HBM_CHANNEL_COUNT"]) exit 1
+      accelerator_only=1
+    }
+    if (scope == "spmv" && accelerator_host_abi != "spmv-cuperflow-rtl-v1") {
       if (capability != "run" || target != "SPMV" || host_abi != "none" ||
           !seen["ACCELERATOR_HOST_KIND"] || !seen["ACCELERATOR_HOST_ABI"] ||
           accelerator_host_kind != "spmv" || accelerator_host_abi != "spmv-input-report-v13" ||

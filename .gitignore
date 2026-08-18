@@ -29,6 +29,8 @@
 !/accelerator-sim/spmv/*.hpp
 !/accelerator-sim/spmv/input/
 !/accelerator-sim/spmv/input/**
+!/accelerator-sim/spmv/dataflow_sim/
+!/accelerator-sim/spmv/dataflow_sim/**
 !/accelerator-sim/spmv/encoding/
 !/accelerator-sim/spmv/encoding/**
 !init.sh

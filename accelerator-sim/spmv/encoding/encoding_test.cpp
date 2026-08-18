@@ -1,12 +1,15 @@
 #include "encoder.hpp"
 #include "cuper/demand_schedule.hpp"
+#include "cuperflow/demand_schedule.hpp"
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <functional>
 #include <iostream>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -128,6 +131,270 @@ std::vector<RestoredElement> expectedElements(const CsrMatrix& matrix) {
   }
   std::sort(expected.begin(), expected.end());
   return expected;
+}
+
+std::vector<RestoredElement> restoreCuperflow(
+    const cuperflow::CuperflowPackage& package,
+    const cuperflow::CuperflowDemandSchedule* schedule = nullptr) {
+  std::vector<RestoredElement> restored;
+  for (std::size_t batch = 0; batch < package.stats.batchCount; ++batch) {
+    for (std::size_t channel = 0; channel < package.matrixChannels.size(); ++channel) {
+      for (std::size_t group = 0; group < package.sliceGroupCount; ++group) {
+        const std::size_t groupSegment = batch * package.sliceGroupCount + group;
+        const std::size_t firstSlice = group * package.sliceGroupSize;
+        const std::size_t groupSliceCount = std::min(
+            package.sliceGroupSize, package.columnSliceCount - firstSlice);
+        for (std::size_t lane = 0; lane < cuperflow::kLanesPerBeat; ++lane) {
+          const auto range = package.channelLaneSliceGroupRanges[channel][groupSegment][lane];
+          const std::size_t begin = range.first;
+          const std::size_t end = range.second;
+          for (std::size_t beat = begin; beat < end; ++beat) {
+            if ((package.matrixEntryMasks[channel][beat] & (1U << lane)) == 0U) {
+              throw std::runtime_error("Cuperflow lane slice pointer 包含零填充 slot: channel=" +
+                  std::to_string(channel) + " group=" + std::to_string(group) +
+                  " lane=" + std::to_string(lane) + " beat=" + std::to_string(beat) +
+                  " begin=" + std::to_string(begin) + " end=" + std::to_string(end));
+            }
+            const cuperflow::DecodedCuperflowSlot slot =
+                cuperflow::decodeSlot(package.matrixChannels[channel][beat][lane]);
+            expect(slot.localColumn < groupSliceCount * package.config.sliceSize,
+                   "Cuperflow group column 超出所属 slice group");
+            const std::size_t physicalSlice = firstSlice +
+                slot.localColumn / package.config.sliceSize;
+            const std::size_t logicalSlice = schedule == nullptr ? physicalSlice :
+                schedule->batches[batch].pageOrder[physicalSlice];
+            const std::size_t physicalRow = cuperflow::physicalRowForBatchLocal(
+                batch, slot.localRow, package.config);
+            expect(physicalRow < package.physicalToOriginalRows.size(),
+                   "Cuperflow slot 的 physical row 超出重排映射");
+            std::uint32_t bits = 0;
+            static_assert(sizeof(bits) == sizeof(slot.value));
+            std::memcpy(&bits, &slot.value, sizeof(bits));
+            restored.push_back(RestoredElement{
+                package.physicalToOriginalRows[physicalRow],
+                logicalSlice * package.config.sliceSize +
+                    slot.localColumn % package.config.sliceSize, bits});
+          }
+        }
+      }
+    }
+  }
+  std::sort(restored.begin(), restored.end());
+  return restored;
+}
+
+void testCuperflowRowBatchesAndColumnSlices() {
+  const CsrMatrix matrix = makeMatrix(9000, 9000, {
+      {0, 0, 1.0}, {0, 63, 2.0}, {0, 64, 3.0}, {0, 4095, 4.0},
+      {8191, 1, 5.0}, {8191, 8192, 6.0}, {8192, 2, 7.0}, {8999, 8999, 8.0}});
+  EncodingOptions options;
+  options.format = EncodingFormat::Cuperflow;
+  const EncodedMatrix encoded = encodeMatrix(matrix, options);
+  const auto& package = std::get<cuperflow::CuperflowPackage>(encoded.package);
+  expect(package.stats.batchCount == 2, "Cuperflow batch 必须沿行方向划分");
+  expect(package.columnSliceCount == 141, "Cuperflow column-slice 数量错误");
+  expect(package.sliceGroupSize == 8 && package.sliceGroupCount == 18 &&
+         package.sliceGroupChannels.size() == package.sliceGroupCount &&
+         package.channelSliceGroups.size() == package.config.hbmChannelCount,
+         "Cuperflow slice group 默认宽度或数量错误");
+  for (std::size_t group = 0; group < package.sliceGroupCount; ++group) {
+    expect(package.sliceGroupChannels[group] == group % package.config.hbmChannelCount,
+           "Cuperflow slice group 没有轮转映射到 HBM");
+  }
+  for (std::size_t batch = 0; batch < package.stats.batchCount; ++batch) {
+    for (std::size_t channel = 0; channel < package.config.hbmChannelCount; ++channel) {
+      for (std::size_t group = 0; group < package.sliceGroupCount; ++group) {
+        const auto& ranges = package.channelLaneSliceGroupRanges[channel][
+            batch * package.sliceGroupCount + group];
+        for (const auto& range : ranges) {
+          expect(package.sliceGroupChannels[group] == channel || range.first == range.second,
+                 "Cuperflow 非 owner HBM 仍包含该 slice group 的 A 数据");
+        }
+      }
+    }
+  }
+  expect(package.stats.matrixSlots == matrix.values.size(),
+         "Cuperflow 矩阵 slot 数与 nnz 不一致");
+  expect(package.physicalToOriginalRows.size() == matrix.rows,
+         "Cuperflow row 重排映射长度错误");
+  expect(restoreCuperflow(package) == expectedElements(matrix),
+         "Cuperflow row batch/column slice 解包后与 CSR 不一致");
+  const cuperflow::CuperflowDemandSchedule schedule =
+      cuperflow::planXPageSchedule(package);
+  expect(schedule.batches.size() == package.stats.batchCount,
+         "Cuperflow X page 调度 batch 数量错误");
+  expect(schedule.sliceGroupSize == package.sliceGroupSize &&
+         schedule.sliceGroupCount == package.sliceGroupCount &&
+         schedule.sliceGroupChannels == package.sliceGroupChannels &&
+         schedule.channelSliceGroups == package.channelSliceGroups,
+         "Cuperflow X page 调度没有携带 slice group 几何");
+  const cuperflow::CuperflowPackage remapped =
+      cuperflow::remapLocalColumnsForXPageSchedule(package, schedule);
+  expect(restoreCuperflow(remapped, &schedule) == expectedElements(matrix),
+         "Cuperflow X page 重排后解包结果与 CSR 不一致");
+  expect(remapped.channelLaneSliceGroupRanges.size() == package.config.hbmChannelCount,
+         "Cuperflow X page 重排丢失 slice group range");
+  for (const auto& ranges : package.channelLaneSliceGroupRanges) {
+    expect(ranges.size() == package.stats.batchCount * package.sliceGroupCount,
+           "Cuperflow slice group range 形状错误");
+    for (const auto& rangeSet : ranges) {
+      for (std::size_t lane = 0; lane < cuperflow::kLanesPerBeat; ++lane) {
+        expect(rangeSet[lane].first <= rangeSet[lane].second,
+               "Cuperflow slice group range 非法");
+      }
+    }
+  }
+
+  options.cuperflow.sliceGroupSize = 32;
+  expectThrows([&matrix, &options]() { (void)encodeMatrix(matrix, options); },
+               "Cuperflow 未拒绝无法覆盖全部 HBM 的 slice group");
+  options.cuperflow.sliceGroupSize = 8;
+  const EncodedMatrix narrowGroupEncoded = encodeMatrix(matrix, options);
+  const auto& narrowGroup = std::get<cuperflow::CuperflowPackage>(narrowGroupEncoded.package);
+  expect(narrowGroup.sliceGroupSize == 8 && narrowGroup.sliceGroupCount == 18 &&
+         restoreCuperflow(narrowGroup) == expectedElements(matrix),
+         "Cuperflow 可配置的 slice group 破坏了 CSR round-trip");
+
+  std::vector<double> vectorInput(65536);
+  for (std::size_t column = 0; column < vectorInput.size(); ++column) {
+    vectorInput[column] = static_cast<double>(column);
+  }
+  const cuperflow::CuperflowVectorPackage vectorPackage =
+      cuperflow::encodeVector(vectorInput);
+  expect(vectorPackage.stats.rangeCount == 16 &&
+         vectorPackage.stats.maximumRangeElements == 4096 &&
+         vectorPackage.stats.payloadBeats == 8192 &&
+         vectorPackage.stats.allocatedBeats == 8192 &&
+         vectorPackage.channelXRanges.size() == 16,
+         "Cuperflow X 没有按 HBM 形成 4096 元素独占 range");
+  for (std::size_t column : {0U, 7U, 8U, 4095U, 4096U, 65535U}) {
+    std::uint64_t expected = 0;
+    std::memcpy(&expected, &vectorInput[column], sizeof(expected));
+    expect(vectorPackage.hbmBeats[column / cuperflow::kVectorLanesPerBeat]
+                                   [column % cuperflow::kVectorLanesPerBeat] == expected,
+           "Cuperflow X 没有保持 FP64 原始 bits");
+  }
+  for (std::size_t channel = 0; channel < vectorPackage.channelXRanges.size(); ++channel) {
+    expect(vectorPackage.channelXRanges[channel].size() == 1 &&
+           vectorPackage.channelXRanges[channel][0].sliceGroup == channel &&
+           vectorPackage.channelXRanges[channel][0].elementCount == 4096 &&
+           vectorPackage.channelHbmBeats[channel].size() == 512,
+           "Cuperflow per-HBM X payload 边界错误");
+  }
+}
+
+void testCuperflowRowReorder() {
+  std::vector<InputElement> elements;
+  for (std::uint32_t column = 0; column < 8; ++column) {
+    elements.push_back(InputElement{0, column, static_cast<double>(column + 1U)});
+  }
+  elements.push_back(InputElement{1, 15, -2.0});
+  const CsrMatrix matrix = makeMatrix(256, 16, std::move(elements));
+
+  EncodingOptions options;
+  options.format = EncodingFormat::Cuperflow;
+  const EncodedMatrix encoded = encodeMatrix(matrix, options);
+  const auto& package = std::get<cuperflow::CuperflowPackage>(encoded.package);
+  expect(package.config.rowReorder, "Cuperflow 默认应启用 row 重排");
+  expect(restoreCuperflow(package) == expectedElements(matrix),
+         "Cuperflow row 重排后无法恢复原始 CSR 行");
+  bool moved = false;
+  for (std::size_t physicalRow = 0;
+       physicalRow < package.physicalToOriginalRows.size(); ++physicalRow) {
+    moved = moved || package.physicalToOriginalRows[physicalRow] != physicalRow;
+  }
+  expect(moved,
+         "Cuperflow row 重排没有改变不均衡行的物理位置");
+
+  options.cuperflow.rowReorder = false;
+  const EncodedMatrix identityEncoded = encodeMatrix(matrix, options);
+  const auto& identity = std::get<cuperflow::CuperflowPackage>(identityEncoded.package);
+  bool identityRows = true;
+  for (std::size_t physicalRow = 0;
+       physicalRow < identity.physicalToOriginalRows.size(); ++physicalRow) {
+    identityRows = identityRows &&
+        identity.physicalToOriginalRows[physicalRow] == physicalRow;
+  }
+  expect(identityRows,
+         "Cuperflow 关闭 row 重排时映射不是 identity");
+  expect(restoreCuperflow(identity) == expectedElements(matrix),
+         "Cuperflow 关闭 row 重排后无法恢复原始 CSR 行");
+}
+
+void testCuperflowFlexibleXEncoding() {
+  const CsrMatrix matrix = makeMatrix(32, 64, {
+      {0, 1, 1.0}, {0, 2, 2.0}, {0, 6, 6.0}, {0, 7, 7.0}});
+  const cuperflow::CuperflowPackage matrixPackage = cuperflow::encode(matrix);
+  expect(matrixPackage.xUsedColumnsByGroup.size() == 1 &&
+         matrixPackage.xUsedColumnsByGroup[0] ==
+             std::vector<std::uint32_t>({1, 2, 6, 7}),
+         "Cuperflow A 遍历没有收集并去重 sliceGroup 列集合");
+
+  std::vector<double> input(64);
+  for (std::size_t column = 0; column < input.size(); ++column) {
+    input[column] = static_cast<double>(column) + 0.5;
+  }
+  const cuperflow::CuperflowVectorPackage vectorPackage =
+      cuperflow::encodeVector(input, matrixPackage);
+  expect(vectorPackage.flexibleXEncoding == cuperflow::kFlexibleXEncodingEnabled,
+         "Cuperflow 灵活 X 开关状态没有反映编译宏");
+
+  const auto& ranges = vectorPackage.channelXRanges[0];
+  expect(ranges.size() == 1 && ranges[0].sliceGroup == 0 &&
+         ranges[0].firstColumn == 0 && ranges[0].elementCount == 64,
+         "Cuperflow 灵活 X range 的逻辑地址区间错误");
+  const cuperflow::CuperflowXRange& range = ranges[0];
+  if (cuperflow::kFlexibleXEncodingEnabled) {
+    expect(range.encodedWordCount == 6 && range.valueCount == 4 &&
+           range.markerCount == 2 && range.beatEnd - range.beatBegin == 1 &&
+           vectorPackage.stats.markerCount == 2,
+           "Cuperflow 灵活 X 没有按跳跃列插入地址 marker");
+    const auto& beat = vectorPackage.channelHbmBeats[0][range.beatBegin];
+    expect(cuperflow::isXAddressMarker(beat[0]) &&
+           cuperflow::decodeXAddressMarker(beat[0]) == 1U &&
+           !cuperflow::isXAddressMarker(beat[1]) &&
+           !cuperflow::isXAddressMarker(beat[2]) &&
+           cuperflow::isXAddressMarker(beat[3]) &&
+           cuperflow::decodeXAddressMarker(beat[3]) == 6U &&
+           !cuperflow::isXAddressMarker(beat[4]) &&
+           !cuperflow::isXAddressMarker(beat[5]),
+           "Cuperflow X marker 的地址或 token 顺序错误");
+    expect(vectorPackage.stats.encodedPayloadBeats == 1 &&
+           vectorPackage.stats.encodedLanePaddingWords == 2,
+           "Cuperflow 灵活 X 的物理 beat 尾部统计错误");
+  } else {
+    expect(!vectorPackage.flexibleXEncoding && range.encodedWordCount == 64 &&
+           range.valueCount == 64 && range.markerCount == 0 &&
+           range.beatEnd - range.beatBegin == 8,
+           "关闭灵活 X 宏后没有回到连续满载路径");
+  }
+
+  expect(cuperflow::isXAddressMarker(cuperflow::makeXAddressMarker(8191)) &&
+         cuperflow::decodeXAddressMarker(cuperflow::makeXAddressMarker(8191)) == 8191U &&
+         !cuperflow::isXAddressMarker(0x3ff0000000000000ULL),
+         "Cuperflow 64-bit 地址 marker 位型错误");
+  expectThrows([]() { (void)cuperflow::makeXAddressMarker(8192); },
+               "Cuperflow 地址 marker 未拒绝超出 13-bit 的 BRAM 地址");
+  expectThrows([]() {
+    (void)cuperflow::encodeVector(std::vector<double>{1.0, std::numeric_limits<double>::quiet_NaN()});
+  }, "Cuperflow X 编码未拒绝 NaN 输入");
+  expectThrows([]() {
+    (void)cuperflow::encodeVector(std::vector<double>{1.0, std::numeric_limits<double>::infinity()});
+  }, "Cuperflow X 编码未拒绝 Inf 输入");
+
+  EncodedVector encoded{EncodingFormat::Cuperflow, vectorPackage};
+  std::ostringstream output;
+  writeVectorHtmlReport(output, encoded,
+      EncodingReportMetadata{"flex-x", "/tmp/flex-x.txt"});
+  const std::string html = output.str();
+  expect(html.find("\"flexibleX\":true") != std::string::npos ||
+         html.find("\"flexibleX\":false") != std::string::npos,
+         "Cuperflow X HTML 报告缺少灵活模式配置");
+  if (cuperflow::kFlexibleXEncodingEnabled) {
+    expect(html.find("encodedXRanges") != std::string::npos &&
+           html.find("\"markerCount\":2") != std::string::npos,
+           "Cuperflow X HTML 报告缺少 marker 统计");
+  }
 }
 
 std::vector<cuper::DecodedCuperSlot> slotsForPe(const cuper::CuperPackage& package,
@@ -522,6 +789,9 @@ int main() {
     accelerator_sim::spmv::encoding::testRoundTripAndZeroFill();
     accelerator_sim::spmv::encoding::testReorderWindow();
     accelerator_sim::spmv::encoding::testAccumulationContextEncoding();
+    accelerator_sim::spmv::encoding::testCuperflowRowBatchesAndColumnSlices();
+    accelerator_sim::spmv::encoding::testCuperflowRowReorder();
+    accelerator_sim::spmv::encoding::testCuperflowFlexibleXEncoding();
     accelerator_sim::spmv::encoding::testSlotV3Layout();
     accelerator_sim::spmv::encoding::testHtmlReport();
     accelerator_sim::spmv::encoding::testColumnBatches();

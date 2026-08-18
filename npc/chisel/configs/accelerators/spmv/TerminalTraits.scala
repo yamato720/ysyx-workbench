@@ -18,6 +18,16 @@ trait LocalSpmvInputTerminal extends SpmvInputSimulationConstruction with MakeTe
   final override val constructionTarget: String = "SPMV"
 }
 
+/** 不含 CPU/NEMU 的 Cuperflow RTL/Verilator 仿真终端。 */
+trait LocalSpmvCuperflowTerminal extends SpmvCuperflowSimulationConstruction with MakeTerminal {
+  override protected def configuredAcceleratorHost: npc.AcceleratorHostConfig =
+    SpmvAcceleratorHostConfig.CuperflowRtl
+  override protected def configuredSpmvInputReport: SpmvInputReportConfig =
+    SpmvInputReportConfig.PerformancePipeline
+  final override val constructionScope: String = "spmv"
+  final override val constructionTarget: String = "SPMV"
+}
+
 /** U55C SPMV 加速器的只综合终端，并提供独立软件 golden host。 */
 trait U55cSpmvSynthesisTerminal
     extends FpgaSynthesisConstruction with AcceleratorHostConstruction with MakeTerminal {

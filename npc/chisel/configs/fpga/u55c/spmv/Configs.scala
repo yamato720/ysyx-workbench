@@ -28,3 +28,9 @@ class U55cSpmvInputPingPongFpgaConfig extends CDEConfig(
   new WithSpmvInputConfig(SpmvInputConfig.Cuper16HbmPingPongU55c) ++
     new U55cSpmvBoardConfig
 ) with U55cSpmvInputRuntimeTerminal
+
+/** U55C 实机验证：300 MHz HBM shell、250 MHz 输入与 FP64 乘法核心。 */
+class U55cSpmvInputPingPong250MHzFpgaConfig extends CDEConfig(
+  new WithSpmvInputConfig(SpmvInputConfig.Cuper16HbmPingPongU55c) ++
+    new U55cSpmvBoardConfig(coreClockMHz = 250)
+) with U55cSpmvInputRuntimeTerminal
