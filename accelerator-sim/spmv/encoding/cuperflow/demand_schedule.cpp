@@ -178,28 +178,37 @@ CuperflowDemandSchedule planXPageSchedule(const CuperflowPackage& package,
     std::vector<ChannelDependencies> dependencies(package.config.hbmChannelCount);
     for (std::size_t channel = 0; channel < package.config.hbmChannelCount; ++channel) {
       const auto& laneSliceGroupRanges = package.channelLaneSliceGroupRanges[channel];
-      const std::size_t batchBegin = package.channelBatchPointers[channel][batch];
-      const std::size_t batchEnd = package.channelBatchPointers[channel][batch + 1U];
       if (laneSliceGroupRanges.size() != package.stats.batchCount * package.sliceGroupCount ||
-          package.matrixEntryMasks[channel].size() != package.matrixChannels[channel].size() ||
-          batchBegin > batchEnd || batchEnd > package.matrixChannels[channel].size()) {
+          package.matrixEntryMasks[channel].size() != package.matrixChannels[channel].size()) {
         throw std::invalid_argument("Cuperflow X page 调度发现非法 slice group range");
       }
-      dependencies[channel].resize(batchEnd - batchBegin);
       for (std::size_t group = 0; group < package.sliceGroupCount; ++group) {
         const std::size_t groupSegment = batch * package.sliceGroupCount + group;
         const std::size_t firstSlice = group * package.sliceGroupSize;
         const std::size_t groupSliceCount = std::min(
             package.sliceGroupSize, package.columnSliceCount - firstSlice);
+        std::size_t unionBegin = package.matrixChannels[channel].size();
+        std::size_t unionEnd = 0;
+        bool active = false;
         for (std::size_t lane = 0; lane < kLanesPerBeat; ++lane) {
           const auto range = laneSliceGroupRanges[groupSegment][lane];
-          if (range.first > range.second || range.second > package.matrixChannels[channel].size() ||
-              range.first < batchBegin || range.second > batchEnd) {
-            throw std::invalid_argument("Cuperflow X page 调度发现越过 batch 的 slice group range");
+          if (range.first > range.second || range.second > package.matrixChannels[channel].size()) {
+            throw std::invalid_argument("Cuperflow X page 调度发现越过 channel 的 slice group range");
           }
-          const std::size_t begin = range.first;
-          const std::size_t end = range.second;
-          for (std::size_t beat = begin; beat < end; ++beat) {
+          if (range.first != range.second) {
+            active = true;
+            unionBegin = std::min(unionBegin, static_cast<std::size_t>(range.first));
+            unionEnd = std::max(unionEnd, static_cast<std::size_t>(range.second));
+          }
+        }
+        if (!active) {
+          continue;
+        }
+        const std::size_t dest = dependencies[channel].size();
+        dependencies[channel].resize(dest + (unionEnd - unionBegin));
+        for (std::size_t lane = 0; lane < kLanesPerBeat; ++lane) {
+          const auto range = laneSliceGroupRanges[groupSegment][lane];
+          for (std::size_t beat = range.first; beat < range.second; ++beat) {
             if ((package.matrixEntryMasks[channel][beat] & (1U << lane)) == 0U) {
               throw std::logic_error("Cuperflow X page 调度发现 slice group 内有空 slot");
             }
@@ -209,10 +218,9 @@ CuperflowDemandSchedule planXPageSchedule(const CuperflowPackage& package,
               throw std::invalid_argument("Cuperflow X page 调度发现越界的 group column");
             }
             const std::size_t slice = firstSlice + localColumn / package.config.sliceSize;
-            if (std::find(dependencies[channel][beat - batchBegin].begin(),
-                          dependencies[channel][beat - batchBegin].end(), slice) ==
-                    dependencies[channel][beat - batchBegin].end()) {
-              dependencies[channel][beat - batchBegin].push_back(slice);
+            PageDependencies& pages = dependencies[channel][dest + (beat - unionBegin)];
+            if (std::find(pages.begin(), pages.end(), slice) == pages.end()) {
+              pages.push_back(slice);
             }
           }
         }
@@ -422,10 +430,7 @@ CuperflowPackage remapLocalColumnsForXPageSchedule(
             package.sliceGroupSize, package.columnSliceCount - firstSlice);
         for (std::size_t lane = 0; lane < kLanesPerBeat; ++lane) {
           const auto range = package.channelLaneSliceGroupRanges[channel][groupSegment][lane];
-          if (range.first > range.second || range.second > package.matrixChannels[channel].size() ||
-              (range.second - range.first) >
-                  package.channelBatchPointers[channel][batch + 1U] -
-                  package.channelBatchPointers[channel][batch]) {
+          if (range.first > range.second || range.second > package.matrixChannels[channel].size()) {
             throw std::invalid_argument("Cuperflow X page 重排发现非法 slice group range");
           }
           for (std::size_t beat = range.first; beat < range.second; ++beat) {

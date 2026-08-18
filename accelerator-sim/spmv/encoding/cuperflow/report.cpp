@@ -84,24 +84,13 @@ struct ContextHistory {
 std::size_t findLaneGroup(const CuperflowPackage& package, std::size_t channel,
                           std::size_t firstSegment, std::size_t groupCount,
                           std::size_t lane, std::size_t beat) {
-  std::size_t low = 0;
-  std::size_t high = groupCount;
-  while (low < high) {
-    const std::size_t middle = low + (high - low) / 2U;
-    if (package.channelLaneSliceGroupRanges[channel][firstSegment + middle][lane].second <= beat) {
-      low = middle + 1U;
-    } else {
-      high = middle;
+  for (std::size_t group = 0; group < groupCount; ++group) {
+    const auto range = package.channelLaneSliceGroupRanges[channel][firstSegment + group][lane];
+    if (range.first != range.second && range.first <= beat && beat < range.second) {
+      return group;
     }
   }
-  if (low >= groupCount) {
-    throw std::invalid_argument("Cuperflow HTML 报告无法为矩阵 slot 定位 slice group");
-  }
-  const auto range = package.channelLaneSliceGroupRanges[channel][firstSegment + low][lane];
-  if (range.first > beat || range.second <= beat) {
-    throw std::invalid_argument("Cuperflow HTML 报告无法为矩阵 slot 定位 slice group");
-  }
-  return low;
+  throw std::invalid_argument("Cuperflow HTML 报告无法为矩阵 slot 定位 slice group");
 }
 
 void validatePackage(const CuperflowPackage& package) {
@@ -197,29 +186,20 @@ void validatePackage(const CuperflowPackage& package) {
         }
       }
     }
-    for (std::size_t batch = 0; batch < package.stats.batchCount; ++batch) {
-      const std::size_t firstGroupSegment = batch * package.sliceGroupCount;
-      for (std::size_t lane = 0; lane < kLanesPerBeat; ++lane) {
-        if (package.sliceGroupCount == 0) {
-          continue;
-        }
-        const auto firstRange = laneSliceGroupRanges[firstGroupSegment][lane];
-        const auto lastRange = laneSliceGroupRanges[
-            firstGroupSegment + package.sliceGroupCount - 1U][lane];
-        if (firstRange.first != pointers[batch] || lastRange.second > pointers[batch + 1U]) {
-          throw std::invalid_argument("Cuperflow HTML 报告的 batch/lane group range 不连续");
-        }
-        for (std::size_t group = 1; group < package.sliceGroupCount; ++group) {
-          const auto previousRange = laneSliceGroupRanges[
-              firstGroupSegment + group - 1U][lane];
-          const auto currentRange = laneSliceGroupRanges[
-              firstGroupSegment + group][lane];
-          if (previousRange.second != currentRange.first) {
-            throw std::invalid_argument(
-                "Cuperflow HTML 报告的 slice group range 中间存在空洞");
-          }
-        }
+    if (package.channelGroupARanges.size() != package.config.hbmChannelCount) {
+      throw std::invalid_argument("Cuperflow HTML 报告缺少 group-major A 区间");
+    }
+    std::uint32_t covered = 0;
+    for (const CuperflowGroupARange& range : package.channelGroupARanges[channel]) {
+      if (range.aOffsetBeats != covered ||
+          range.aOffsetBeats + range.aBeats < range.aOffsetBeats ||
+          range.aOffsetBeats + range.aBeats > package.matrixChannels[channel].size()) {
+        throw std::invalid_argument("Cuperflow HTML 报告的 group A 区间必须按装载顺序紧密排列");
       }
+      covered = range.aOffsetBeats + range.aBeats;
+    }
+    if (covered != package.matrixChannels[channel].size()) {
+      throw std::invalid_argument("Cuperflow HTML 报告的 group A 区间未覆盖整个 channel");
     }
     if (package.matrixEntryMasks[channel].size() != package.matrixChannels[channel].size()) {
       throw std::invalid_argument("Cuperflow HTML 报告的矩阵 slot 带外掩码长度不一致");
@@ -257,19 +237,35 @@ void writeHtmlReport(std::ostream& output, const CuperflowPackage& package,
   std::uint64_t zeroFillSlots = 0;
   for (std::size_t batch = 0; batch < package.stats.batchCount; ++batch) {
     for (std::size_t channel = 0; channel < package.config.hbmChannelCount; ++channel) {
-      const std::size_t begin = package.channelBatchPointers[channel][batch];
-      const std::size_t end = package.channelBatchPointers[channel][batch + 1U];
-      for (std::size_t beat = begin; beat < end; ++beat) {
-        for (std::size_t lane = 0; lane < kLanesPerBeat; ++lane) {
-          const bool matrixEntry = (package.matrixEntryMasks[channel][beat] & (1U << lane)) != 0U;
-          if (!matrixEntry) {
-            ++channelZeroFill[channel];
-            ++batchZeroFill[batch];
-            ++zeroFillSlots;
-          } else {
-            ++channelMatrix[channel];
-            ++batchMatrix[batch];
-            ++matrixSlots;
+      for (std::size_t group = 0; group < package.sliceGroupCount; ++group) {
+        const auto& ranges =
+            package.channelLaneSliceGroupRanges[channel][batch * package.sliceGroupCount + group];
+        std::size_t begin = package.matrixChannels[channel].size();
+        std::size_t end = 0;
+        bool active = false;
+        for (const auto& range : ranges) {
+          if (range.first != range.second) {
+            active = true;
+            begin = std::min(begin, static_cast<std::size_t>(range.first));
+            end = std::max(end, static_cast<std::size_t>(range.second));
+          }
+        }
+        if (!active) {
+          continue;
+        }
+        for (std::size_t beat = begin; beat < end; ++beat) {
+          for (std::size_t lane = 0; lane < kLanesPerBeat; ++lane) {
+            const bool matrixEntry =
+                (package.matrixEntryMasks[channel][beat] & (1U << lane)) != 0U;
+            if (!matrixEntry) {
+              ++channelZeroFill[channel];
+              ++batchZeroFill[batch];
+              ++zeroFillSlots;
+            } else {
+              ++channelMatrix[channel];
+              ++batchMatrix[batch];
+              ++matrixSlots;
+            }
           }
         }
       }
@@ -373,9 +369,23 @@ void writeHtmlReport(std::ostream& output, const CuperflowPackage& package,
     std::vector<std::array<ContextHistory, kAccumulationContextCount>> contextHistory(
         totalPeCount(package.config));
     for (std::size_t channel = 0; channel < package.config.hbmChannelCount; ++channel) {
-      const std::size_t batchBegin = package.channelBatchPointers[channel][batch];
-      for (std::size_t beat = batchBegin;
-           beat < package.channelBatchPointers[channel][batch + 1U]; ++beat) {
+      for (std::size_t group = 0; group < package.sliceGroupCount; ++group) {
+        const auto& ranges = package.channelLaneSliceGroupRanges[channel][
+            batch * package.sliceGroupCount + group];
+        std::size_t batchBegin = package.matrixChannels[channel].size();
+        std::size_t batchEnd = 0;
+        bool active = false;
+        for (const auto& range : ranges) {
+          if (range.first != range.second) {
+            active = true;
+            batchBegin = std::min(batchBegin, static_cast<std::size_t>(range.first));
+            batchEnd = std::max(batchEnd, static_cast<std::size_t>(range.second));
+          }
+        }
+        if (!active) {
+          continue;
+        }
+      for (std::size_t beat = batchBegin; beat < batchEnd; ++beat) {
         for (std::size_t lane = 0; lane < kLanesPerBeat; ++lane) {
           const std::size_t pe = channel * kLanesPerBeat + lane;
           const std::uint64_t word = package.matrixChannels[channel][beat][lane];
@@ -461,6 +471,7 @@ void writeHtmlReport(std::ostream& output, const CuperflowPackage& package,
           }
           output << ']';
         }
+      }
       }
     }
   }

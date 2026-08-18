@@ -31,6 +31,45 @@ std::uint32_t decodeXAddressMarker(std::uint64_t word) {
   return static_cast<std::uint32_t>(word & kXAddressMarkerAddressMask);
 }
 
+std::uint64_t makeXMapMarker(bool last) {
+  return kXMapMarkerBase | (last ? kXMapMarkerLastMask : 0U);
+}
+
+bool isXMapMarker(std::uint64_t word) {
+  return (word & ~kXMapMarkerLastMask) == kXMapMarkerBase;
+}
+
+CuperflowVectorBeat packMapBeat(const CuperflowMapBeat& map) {
+  CuperflowVectorBeat beat{};
+  beat[0] = makeXMapMarker(map.last);
+  beat[1] = static_cast<std::uint64_t>(map.xBeats) |
+      (static_cast<std::uint64_t>(map.xWords) << 32U);
+  beat[2] = static_cast<std::uint64_t>(map.aOffsetBeats) |
+      (static_cast<std::uint64_t>(map.aBeats) << 32U);
+  beat[3] = static_cast<std::uint64_t>(map.firstBatch) |
+      (static_cast<std::uint64_t>(map.sliceGroup) << 16U) |
+      (static_cast<std::uint64_t>(map.xElements) << 32U) |
+      (map.last ? (std::uint64_t{1} << 48U) : 0U);
+  return beat;
+}
+
+CuperflowMapBeat unpackMapBeat(const CuperflowVectorBeat& beat) {
+  if (!isXMapMarker(beat[0])) {
+    throw std::invalid_argument("Cuperflow X beat 不是 map");
+  }
+  CuperflowMapBeat map;
+  map.xBeats = static_cast<std::uint32_t>(beat[1]);
+  map.xWords = static_cast<std::uint32_t>(beat[1] >> 32U);
+  map.aOffsetBeats = static_cast<std::uint32_t>(beat[2]);
+  map.aBeats = static_cast<std::uint32_t>(beat[2] >> 32U);
+  map.firstBatch = static_cast<std::uint16_t>(beat[3]);
+  map.sliceGroup = static_cast<std::uint16_t>(beat[3] >> 16U);
+  map.xElements = static_cast<std::uint16_t>(beat[3] >> 32U);
+  map.last = ((beat[0] & kXMapMarkerLastMask) != 0U) ||
+      (((beat[3] >> 48U) & 1U) != 0U);
+  return map;
+}
+
 namespace {
 
 constexpr std::size_t kCheckerCount = 8;
@@ -434,6 +473,9 @@ CuperflowPackage encode(const CsrMatrix& matrix, const CuperflowConfig& config) 
           config.hbmChannelCount,
           std::vector<std::array<std::pair<std::uint32_t, std::uint32_t>, kLanesPerBeat>>(
               groupSegmentCount));
+  using GroupLaneWords = std::array<std::vector<std::uint64_t>, kLanesPerBeat>;
+  std::vector<std::vector<GroupLaneWords>> batchGroupLanes(
+      batchCount, std::vector<GroupLaneWords>(groupCount));
   std::uint64_t matrixSlots = 0;
   const std::vector<std::size_t> physicalToOriginalRows =
       buildRowPermutation(matrix, config);
@@ -555,79 +597,90 @@ CuperflowPackage encode(const CsrMatrix& matrix, const CuperflowConfig& config) 
           static_cast<std::uint32_t>(scheduled.size());
     }
     for (std::size_t channel = 0; channel < config.hbmChannelCount; ++channel) {
-      std::vector<CuperflowBeat>& channelBeats = channels[channel];
-      const std::size_t channelBegin = channelBeats.size();
-      if (channelBegin > std::numeric_limits<std::uint32_t>::max()) {
-        throw std::overflow_error("Cuperflow per-HBM batch pointer 超过 uint32_t 范围");
-      }
-      channelBatchPointers[channel][batch] = static_cast<std::uint32_t>(channelBegin);
-
-      std::array<std::size_t, kLanesPerBeat> laneOffsets{};
+      std::array<std::size_t, kLanesPerBeat> cursors{};
       for (std::size_t slice = 0; slice < sliceCount; ++slice) {
         const std::size_t group = slice / groupSize;
-        const std::size_t groupSegment = batch * groupCount + group;
-        const bool firstSliceInGroup = slice % groupSize == 0;
-        const bool lastSliceInGroup = slice + 1U == sliceCount ||
-            (slice + 1U) % groupSize == 0;
         for (std::size_t lane = 0; lane < kLanesPerBeat; ++lane) {
-          if (firstSliceInGroup) {
-            if (laneOffsets[lane] > std::numeric_limits<std::uint32_t>::max() - channelBegin) {
-              throw std::overflow_error("Cuperflow slice group pointer 超过 uint32_t 范围");
-            }
-            channelLaneSliceGroupRanges[channel][groupSegment][lane].first =
-                static_cast<std::uint32_t>(channelBegin + laneOffsets[lane]);
-          }
+          const std::size_t pe = channel * kLanesPerBeat + lane;
           const std::size_t length = laneSliceLengths[channel * sliceCount + slice][lane];
-          if (length > std::numeric_limits<std::size_t>::max() - laneOffsets[lane]) {
-            throw std::overflow_error("Cuperflow lane stream 长度溢出");
+          const std::vector<ScheduledSlot>& stream = batchLaneStreams[pe];
+          if (cursors[lane] > stream.size() || length > stream.size() - cursors[lane]) {
+            throw std::logic_error("Cuperflow lane stream 短于 slice 长度表");
           }
-          laneOffsets[lane] += length;
-          if (lastSliceInGroup) {
-            if (laneOffsets[lane] > std::numeric_limits<std::uint32_t>::max() - channelBegin) {
-              throw std::overflow_error("Cuperflow slice group pointer 超过 uint32_t 范围");
+          const std::size_t groupFirstColumn = (group * groupSize) * config.sliceSize;
+          auto& dest = batchGroupLanes[batch][group][lane];
+          dest.reserve(dest.size() + length);
+          for (std::size_t index = 0; index < length; ++index) {
+            const ScheduledSlot& scheduled = stream[cursors[lane] + index];
+            if (!scheduled.occupied) {
+              throw std::logic_error("Cuperflow 无 padding 流包含空 slot");
             }
-            channelLaneSliceGroupRanges[channel][groupSegment][lane].second =
-                static_cast<std::uint32_t>(channelBegin + laneOffsets[lane]);
+            dest.push_back(packSlot(scheduled.element, scheduled.accumulationContext,
+                                    groupFirstColumn, firstRow));
           }
+          cursors[lane] += length;
         }
       }
-
-      const std::size_t batchBeats = *std::max_element(laneOffsets.begin(), laneOffsets.end());
-      if (batchBeats > std::numeric_limits<std::uint32_t>::max() - channelBegin) {
-        throw std::overflow_error("Cuperflow per-HBM batch pointer 超过 uint32_t 范围");
-      }
-      channelBeats.insert(channelBeats.end(), batchBeats, zeroFillBeat);
-      entryMasks[channel].insert(entryMasks[channel].end(), batchBeats, 0U);
       for (std::size_t lane = 0; lane < kLanesPerBeat; ++lane) {
-        const std::size_t pe = channel * kLanesPerBeat + lane;
-        for (std::size_t position = 0; position < batchLaneStreams[pe].size(); ++position) {
-          const ScheduledSlot& scheduled = batchLaneStreams[pe][position];
-          if (!scheduled.occupied) {
-            throw std::logic_error("Cuperflow 无 padding 流包含空 slot");
-          }
-          const std::size_t slice =
-              static_cast<std::size_t>(scheduled.element.column) / config.sliceSize;
-          const std::size_t group = slice / groupSize;
-          if (group > std::numeric_limits<std::size_t>::max() / groupSize ||
-              group * groupSize > sliceCount) {
-            throw std::logic_error("Cuperflow slot 的 slice group 超出范围");
-          }
-          const std::size_t groupFirstSlice = group * groupSize;
-          if (groupFirstSlice > std::numeric_limits<std::size_t>::max() / config.sliceSize) {
-            throw std::overflow_error("Cuperflow slice group 首列溢出");
-          }
-          const std::size_t groupFirstColumn = groupFirstSlice * config.sliceSize;
-          channelBeats[channelBegin + position][lane] =
-              packSlot(scheduled.element, scheduled.accumulationContext,
-                       groupFirstColumn, firstRow);
-          entryMasks[channel][channelBegin + position] |=
-              static_cast<std::uint8_t>(1U << lane);
-          ++matrixSlots;
+        if (cursors[lane] != batchLaneStreams[channel * kLanesPerBeat + lane].size()) {
+          throw std::logic_error("Cuperflow lane stream 未按 slice 长度表耗尽");
         }
       }
-      channelBatchPointers[channel][batch + 1U] =
-          static_cast<std::uint32_t>(channelBegin + batchBeats);
     }
+  }
+
+  std::vector<std::vector<CuperflowGroupARange>> channelGroupARanges(config.hbmChannelCount);
+  for (std::size_t channel = 0; channel < config.hbmChannelCount; ++channel) {
+    for (const std::size_t group : channelSliceGroups[channel]) {
+      const std::size_t groupStart = channels[channel].size();
+      bool any = false;
+      for (std::size_t batch = 0; batch < batchCount; ++batch) {
+        const GroupLaneWords& words = batchGroupLanes[batch][group];
+        std::size_t unionBeats = 0;
+        for (std::size_t lane = 0; lane < kLanesPerBeat; ++lane) {
+          unionBeats = std::max(unionBeats, words[lane].size());
+        }
+        const std::size_t dest = channels[channel].size();
+        const std::size_t groupSegment = batch * groupCount + group;
+        if (unionBeats == 0) {
+          continue;
+        }
+        any = true;
+        if (dest > std::numeric_limits<std::uint32_t>::max() ||
+            unionBeats > std::numeric_limits<std::uint32_t>::max() - dest) {
+          throw std::overflow_error("Cuperflow group-major A 指针超过 uint32_t 范围");
+        }
+        channels[channel].insert(channels[channel].end(), unionBeats, zeroFillBeat);
+        entryMasks[channel].insert(entryMasks[channel].end(), unionBeats, 0U);
+        for (std::size_t lane = 0; lane < kLanesPerBeat; ++lane) {
+          channelLaneSliceGroupRanges[channel][groupSegment][lane] = {
+              static_cast<std::uint32_t>(dest),
+              static_cast<std::uint32_t>(dest + words[lane].size())};
+          for (std::size_t index = 0; index < words[lane].size(); ++index) {
+            channels[channel][dest + index][lane] = words[lane][index];
+            entryMasks[channel][dest + index] |= static_cast<std::uint8_t>(1U << lane);
+            ++matrixSlots;
+          }
+        }
+      }
+      if (!any) {
+        continue;
+      }
+      if (groupStart > std::numeric_limits<std::uint32_t>::max() ||
+          channels[channel].size() - groupStart >
+              std::numeric_limits<std::uint32_t>::max()) {
+        throw std::overflow_error("Cuperflow group A 区间超过 uint32_t 范围");
+      }
+      channelGroupARanges[channel].push_back(CuperflowGroupARange{
+          group,
+          static_cast<std::uint32_t>(groupStart),
+          static_cast<std::uint32_t>(channels[channel].size() - groupStart)});
+    }
+    if (channels[channel].size() > std::numeric_limits<std::uint32_t>::max()) {
+      throw std::overflow_error("Cuperflow per-HBM A 长度超过 uint32_t 范围");
+    }
+    channelBatchPointers[channel][batchCount] =
+        static_cast<std::uint32_t>(channels[channel].size());
   }
   if (matrixSlots != matrix.values.size()) {
     throw std::logic_error("Cuperflow 编码后的矩阵 slot 数与输入 nnz 不一致");
@@ -670,6 +723,7 @@ CuperflowPackage encode(const CsrMatrix& matrix, const CuperflowConfig& config) 
   package.xUsedColumnsByGroup = std::move(xUsedColumnsByGroup);
   package.channelBatchPointers = std::move(channelBatchPointers);
   package.channelLaneSliceGroupRanges = std::move(channelLaneSliceGroupRanges);
+  package.channelGroupARanges = std::move(channelGroupARanges);
   package.matrixChannels = std::move(channels);
   package.matrixEntryMasks = std::move(entryMasks);
   package.stats.batchCount = batchCount;
@@ -765,84 +819,138 @@ CuperflowVectorPackage encodeVectorImpl(
       (matrixPackage->columns != input.size() ||
        matrixPackage->sliceGroupCount != groupCount ||
        matrixPackage->sliceGroupSize != groupSize ||
-       matrixPackage->xUsedColumnsByGroup.size() != groupCount)) {
+       matrixPackage->xUsedColumnsByGroup.size() != groupCount ||
+       matrixPackage->channelGroupARanges.size() != config.hbmChannelCount)) {
     throw std::invalid_argument("Cuperflow A/X package 的 sliceGroup 几何不一致");
   }
 
-  std::size_t maximumRangeElements = 0;
+  struct PendingGroup {
+    std::size_t group = 0;
+    std::size_t firstColumn = 0;
+    std::size_t rangeElements = 0;
+    std::uint32_t aOffsetBeats = 0;
+    std::uint32_t aBeats = 0;
+  };
+  std::vector<std::vector<PendingGroup>> pending(config.hbmChannelCount);
   for (std::size_t group = 0; group < groupCount; ++group) {
     const std::size_t firstSlice = group * groupSize;
     const std::size_t firstColumn = firstSlice * config.sliceSize;
     const std::size_t rangeElements = std::min(
         groupSize * config.sliceSize, input.size() - firstColumn);
     const std::size_t channel = group % config.hbmChannelCount;
-    std::vector<CuperflowVectorBeat>& channelBeats = package.channelHbmBeats[channel];
-    if (channelBeats.size() > std::numeric_limits<std::uint32_t>::max()) {
-      throw std::overflow_error("Cuperflow per-HBM X range pointer 超过 uint32_t 范围");
-    }
-    const std::size_t beatBegin = channelBeats.size();
-    std::size_t encodedWordCount = 0;
-    std::size_t valueCount = 0;
-    std::size_t markerCount = 0;
-    auto appendWord = [&channelBeats, &beatBegin, &encodedWordCount](std::uint64_t word) {
-      if (encodedWordCount % kVectorLanesPerBeat == 0U) {
-        channelBeats.emplace_back();
+    std::uint32_t aOffsetBeats = 0;
+    std::uint32_t aBeats = 0;
+    if (matrixPackage != nullptr) {
+      for (const CuperflowGroupARange& range : matrixPackage->channelGroupARanges[channel]) {
+        if (range.sliceGroup == group) {
+          aOffsetBeats = range.aOffsetBeats;
+          aBeats = range.aBeats;
+          break;
+        }
       }
-      channelBeats[beatBegin + encodedWordCount / kVectorLanesPerBeat]
-          [encodedWordCount % kVectorLanesPerBeat] = word;
-      ++encodedWordCount;
-    };
-
-    if (!flexible) {
-      for (std::size_t offset = 0; offset < rangeElements; ++offset) {
-        appendWord(doubleBits(input[firstColumn + offset]));
-        ++valueCount;
-      }
-    } else {
-      const std::vector<std::uint32_t>& usedColumns =
-          matrixPackage->xUsedColumnsByGroup[group];
-      std::uint32_t nextAddress = 0;
-      bool firstValue = true;
-      for (const std::uint32_t column : usedColumns) {
-        if (column < firstColumn ||
-            static_cast<std::size_t>(column) >= firstColumn + rangeElements) {
-          throw std::logic_error("Cuperflow A 使用列超出所属 X range");
-        }
-        const std::uint32_t localAddress = static_cast<std::uint32_t>(
-            static_cast<std::size_t>(column) - firstColumn);
-        if (firstValue || localAddress != nextAddress) {
-          appendWord(makeXAddressMarker(localAddress));
-          ++markerCount;
-        }
-        appendWord(doubleBits(input[column]));
-        ++valueCount;
-        if (localAddress == std::numeric_limits<std::uint32_t>::max()) {
-          throw std::overflow_error("Cuperflow X BRAM 地址递增溢出");
-        }
-        nextAddress = localAddress + 1U;
-        firstValue = false;
+      if (aBeats == 0) {
+        continue;
       }
     }
-    const std::size_t rangeBeats = divideRoundedUp(encodedWordCount, kVectorLanesPerBeat);
-    if (beatBegin + rangeBeats > std::numeric_limits<std::uint32_t>::max()) {
-      throw std::overflow_error("Cuperflow per-HBM X range pointer 超过 uint32_t 范围");
-    }
-    package.channelXRanges[channel].push_back(CuperflowXRange{
-        group, firstColumn, rangeElements, encodedWordCount, valueCount, markerCount,
-        static_cast<std::uint32_t>(beatBegin),
-        static_cast<std::uint32_t>(beatBegin + rangeBeats)});
-    maximumRangeElements = std::max(maximumRangeElements, rangeElements);
-    addEncodedStat(package.stats.encodedWordCount, encodedWordCount,
-                   "Cuperflow X token 数量溢出");
-    addEncodedStat(package.stats.encodedValueCount, valueCount,
-                   "Cuperflow X value 数量溢出");
-    addEncodedStat(package.stats.markerCount, markerCount,
-                   "Cuperflow X marker 数量溢出");
+    pending[channel].push_back(PendingGroup{
+        group, firstColumn, rangeElements, aOffsetBeats, aBeats});
   }
 
-  for (const std::vector<CuperflowVectorBeat>& channelBeats : package.channelHbmBeats) {
-    addEncodedStat(package.stats.encodedPayloadBeats, channelBeats.size(),
-                   "Cuperflow X encoded beat 数量溢出");
+  std::size_t maximumRangeElements = 0;
+  for (std::size_t channel = 0; channel < config.hbmChannelCount; ++channel) {
+    std::vector<CuperflowVectorBeat>& channelBeats = package.channelHbmBeats[channel];
+    if (matrixPackage != nullptr && pending[channel].empty()) {
+      channelBeats.push_back(packMapBeat(CuperflowMapBeat{0, 0, 0, 0, 0, 0, 0, true}));
+    }
+    for (std::size_t index = 0; index < pending[channel].size(); ++index) {
+      const PendingGroup& item = pending[channel][index];
+      const bool last = index + 1U == pending[channel].size();
+      std::vector<std::uint64_t> tokens;
+      std::size_t valueCount = 0;
+      std::size_t markerCount = 0;
+      if (!flexible) {
+        for (std::size_t offset = 0; offset < item.rangeElements; ++offset) {
+          tokens.push_back(doubleBits(input[item.firstColumn + offset]));
+          ++valueCount;
+        }
+      } else {
+        const std::vector<std::uint32_t>& usedColumns =
+            matrixPackage->xUsedColumnsByGroup[item.group];
+        std::uint32_t nextAddress = 0;
+        bool firstValue = true;
+        for (const std::uint32_t column : usedColumns) {
+          if (column < item.firstColumn ||
+              static_cast<std::size_t>(column) >= item.firstColumn + item.rangeElements) {
+            throw std::logic_error("Cuperflow A 使用列超出所属 X range");
+          }
+          const std::uint32_t localAddress = static_cast<std::uint32_t>(
+              static_cast<std::size_t>(column) - item.firstColumn);
+          if (firstValue || localAddress != nextAddress) {
+            tokens.push_back(makeXAddressMarker(localAddress));
+            ++markerCount;
+          }
+          tokens.push_back(doubleBits(input[column]));
+          ++valueCount;
+          if (localAddress == std::numeric_limits<std::uint32_t>::max()) {
+            throw std::overflow_error("Cuperflow X BRAM 地址递增溢出");
+          }
+          nextAddress = localAddress + 1U;
+          firstValue = false;
+        }
+      }
+      if (channelBeats.size() > std::numeric_limits<std::uint32_t>::max()) {
+        throw std::overflow_error("Cuperflow per-HBM X range pointer 超过 uint32_t 范围");
+      }
+      const bool emitMap = matrixPackage != nullptr;
+      const std::size_t mapBeat = channelBeats.size();
+      if (emitMap) {
+        if (tokens.size() > std::numeric_limits<std::uint32_t>::max() ||
+            item.rangeElements > std::numeric_limits<std::uint16_t>::max() ||
+            item.group > std::numeric_limits<std::uint16_t>::max()) {
+          throw std::overflow_error("Cuperflow map 字段超出 1-beat 位宽");
+        }
+        const std::uint32_t xBeats = static_cast<std::uint32_t>(
+            divideRoundedUp(tokens.size(), kVectorLanesPerBeat));
+        channelBeats.push_back(packMapBeat(CuperflowMapBeat{
+            xBeats, static_cast<std::uint32_t>(tokens.size()), item.aOffsetBeats,
+            item.aBeats, 0, static_cast<std::uint16_t>(item.group),
+            static_cast<std::uint16_t>(item.rangeElements), last}));
+      }
+      const std::size_t beatBegin = channelBeats.size();
+      for (std::size_t word = 0; word < tokens.size(); ++word) {
+        if (word % kVectorLanesPerBeat == 0U) {
+          channelBeats.emplace_back();
+        }
+        channelBeats.back()[word % kVectorLanesPerBeat] = tokens[word];
+      }
+      const std::size_t beatEnd = channelBeats.size();
+      if (beatEnd > std::numeric_limits<std::uint32_t>::max()) {
+        throw std::overflow_error("Cuperflow per-HBM X range pointer 超过 uint32_t 范围");
+      }
+      package.channelXRanges[channel].push_back(CuperflowXRange{
+          item.group, item.firstColumn, item.rangeElements, tokens.size(), valueCount,
+          markerCount,
+          emitMap ? static_cast<std::uint32_t>(mapBeat) :
+              std::numeric_limits<std::uint32_t>::max(),
+          static_cast<std::uint32_t>(beatBegin),
+          static_cast<std::uint32_t>(beatEnd),
+          item.aOffsetBeats, item.aBeats, last});
+      maximumRangeElements = std::max(maximumRangeElements, item.rangeElements);
+      addEncodedStat(package.stats.encodedWordCount, tokens.size(),
+                     "Cuperflow X token 数量溢出");
+      addEncodedStat(package.stats.encodedValueCount, valueCount,
+                     "Cuperflow X value 数量溢出");
+      addEncodedStat(package.stats.markerCount, markerCount,
+                     "Cuperflow X marker 数量溢出");
+    }
+  }
+
+  for (const auto& ranges : package.channelXRanges) {
+    for (const CuperflowXRange& range : ranges) {
+      addEncodedStat(package.stats.encodedPayloadBeats,
+                     static_cast<std::size_t>(range.beatEnd - range.beatBegin),
+                     "Cuperflow X encoded beat 数量溢出");
+    }
   }
   if (package.stats.encodedPayloadBeats >
       std::numeric_limits<std::uint64_t>::max() / kVectorLanesPerBeat) {

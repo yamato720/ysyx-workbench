@@ -347,8 +347,14 @@ void testCuperflowFlexibleXEncoding() {
   if (cuperflow::kFlexibleXEncodingEnabled) {
     expect(range.encodedWordCount == 6 && range.valueCount == 4 &&
            range.markerCount == 2 && range.beatEnd - range.beatBegin == 1 &&
-           vectorPackage.stats.markerCount == 2,
+           range.mapBeat != std::numeric_limits<std::uint32_t>::max() &&
+           range.aBeats != 0 && vectorPackage.stats.markerCount == 2,
            "Cuperflow 灵活 X 没有按跳跃列插入地址 marker");
+    const auto& mapBeat = vectorPackage.channelHbmBeats[0][range.mapBeat];
+    expect(cuperflow::isXMapMarker(mapBeat[0]) &&
+           cuperflow::unpackMapBeat(mapBeat).xBeats == 1 &&
+           cuperflow::unpackMapBeat(mapBeat).last,
+           "Cuperflow 灵活 X 没有在 token 前写入 1-beat map");
     const auto& beat = vectorPackage.channelHbmBeats[0][range.beatBegin];
     expect(cuperflow::isXAddressMarker(beat[0]) &&
            cuperflow::decodeXAddressMarker(beat[0]) == 1U &&

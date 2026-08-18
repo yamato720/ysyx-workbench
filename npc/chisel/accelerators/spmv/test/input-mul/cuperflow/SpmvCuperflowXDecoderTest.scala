@@ -14,6 +14,7 @@ class SpmvCuperflowXDecoderTest extends AnyFlatSpec {
     assert(SpmvCuperflowXAddressMarker.isMarkerBits(marker))
     assert(!SpmvCuperflowXAddressMarker.isMarkerBits(BigInt("3ff0000000000000", 16)))
     assert(!SpmvCuperflowXAddressMarker.isMarkerBits(marker | BigInt(0x4000)))
+    assert(SpmvCuperflowMapMarker.marker(true) != marker)
   }
 
   it should "展开 8 word/cycle 的 beat 输入、地址 prefix scan 和 packed 写请求" in {

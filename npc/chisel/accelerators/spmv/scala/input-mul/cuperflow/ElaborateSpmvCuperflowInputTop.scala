@@ -5,9 +5,8 @@ import accelerators.spmv.SpmvCuperflowConfig
 
 /** 独立生成 Cuperflow 严格预取输入模型的 SystemVerilog。
   *
-  * 该入口故意不挂入旧 Cuper transaction host：Cuperflow work 描述、单 PC X/A 分区和
-  * 16-PC preload barrier 都是新 ABI，host 侧 work 表尚未接入前不能复用旧的 A/X/Ctrl
-  * 三组端口协议。
+  * 该入口故意不挂入旧 Cuper transaction host：每条 HBM 自己解析 1-beat map，
+  * 再顺序装 X、连读 A。host 只负责装填 HBM 并拉 start。
   */
 object ElaborateSpmvCuperflowInputTop extends App {
   private val config = SpmvCuperflowConfig.Simulation

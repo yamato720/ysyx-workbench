@@ -94,23 +94,7 @@ static_assert(SPMV_CUPERFLOW_AXI_ADDR_WIDTH_FROZEN == 64 &&
     SPMV_CUPERFLOW_X_ELEMENT_WIDTH_FROZEN == 64,
     "Cuperflow RTL host 只支持当前 FP64/8192 配置");
 
-struct WorkPort {
-  CData* ready;
-  CData* valid;
-  CData* active;
-  CData* xLoad;
-  CData* batch;
-  SData* xWords;
-  SData* xElements;
-  IData* xOffsetBeats;
-  IData* xBeats;
-  IData* aOffsetBeats;
-  IData* aBeats;
-  CData* aValidSlotMask;
-  QData* productChecksumByPc;
-  std::array<IData*, kWordsPerBeat> aLaneOffsetBeats;
-  std::array<IData*, kWordsPerBeat> aLaneBeats;
-};
+
 
 struct HbmPort {
   CData* arReady;
@@ -212,40 +196,6 @@ struct WorkTiming {
   std::uint64_t rtlProductChecksum = 0;
 };
 
-#define CUPERFLOW_WORK_PORT(index) WorkPort{ \
-    &dut.io_work_##index##_ready, &dut.io_work_##index##_valid, \
-    &dut.io_work_##index##_bits_active, &dut.io_work_##index##_bits_xLoad, \
-    &dut.io_work_##index##_bits_batch, &dut.io_work_##index##_bits_xWords, \
-    &dut.io_work_##index##_bits_xElements, &dut.io_work_##index##_bits_xOffsetBeats, \
-    &dut.io_work_##index##_bits_xBeats, &dut.io_work_##index##_bits_aOffsetBeats, \
-    &dut.io_work_##index##_bits_aBeats, &dut.io_aValidSlotMask_##index, \
-    &dut.io_productChecksumByPc_##index, \
-    {{&dut.io_work_##index##_bits_aLaneOffsetBeats_0, \
-      &dut.io_work_##index##_bits_aLaneOffsetBeats_1, \
-      &dut.io_work_##index##_bits_aLaneOffsetBeats_2, \
-      &dut.io_work_##index##_bits_aLaneOffsetBeats_3, \
-      &dut.io_work_##index##_bits_aLaneOffsetBeats_4, \
-      &dut.io_work_##index##_bits_aLaneOffsetBeats_5, \
-      &dut.io_work_##index##_bits_aLaneOffsetBeats_6, \
-      &dut.io_work_##index##_bits_aLaneOffsetBeats_7}}, \
-    {{&dut.io_work_##index##_bits_aLaneBeats_0, \
-      &dut.io_work_##index##_bits_aLaneBeats_1, \
-      &dut.io_work_##index##_bits_aLaneBeats_2, \
-      &dut.io_work_##index##_bits_aLaneBeats_3, \
-      &dut.io_work_##index##_bits_aLaneBeats_4, \
-      &dut.io_work_##index##_bits_aLaneBeats_5, \
-      &dut.io_work_##index##_bits_aLaneBeats_6, \
-      &dut.io_work_##index##_bits_aLaneBeats_7}}}
-
-std::array<WorkPort, kPcCount> workPorts(VSpmvCuperflowInputTop& dut) {
-  return {{CUPERFLOW_WORK_PORT(0), CUPERFLOW_WORK_PORT(1), CUPERFLOW_WORK_PORT(2),
-      CUPERFLOW_WORK_PORT(3), CUPERFLOW_WORK_PORT(4), CUPERFLOW_WORK_PORT(5),
-      CUPERFLOW_WORK_PORT(6), CUPERFLOW_WORK_PORT(7), CUPERFLOW_WORK_PORT(8),
-      CUPERFLOW_WORK_PORT(9), CUPERFLOW_WORK_PORT(10), CUPERFLOW_WORK_PORT(11),
-      CUPERFLOW_WORK_PORT(12), CUPERFLOW_WORK_PORT(13), CUPERFLOW_WORK_PORT(14),
-      CUPERFLOW_WORK_PORT(15)}};
-}
-
 #define CUPERFLOW_HBM_PORT(index) HbmPort{ \
     &dut.io_hbm_##index##_ar_ready, &dut.io_hbm_##index##_ar_valid, \
     &dut.io_hbm_##index##_ar_bits_id, &dut.io_hbm_##index##_ar_bits_len, \
@@ -264,7 +214,6 @@ std::array<HbmPort, kPcCount> hbmPorts(VSpmvCuperflowInputTop& dut) {
       CUPERFLOW_HBM_PORT(15)}};
 }
 
-#undef CUPERFLOW_WORK_PORT
 #undef CUPERFLOW_HBM_PORT
 
 template <typename T>
@@ -430,118 +379,37 @@ void resetHbm(HbmModel& model, const std::vector<Beat>* xBeats, std::size_t xBeg
   model.bursts.clear();
 }
 
-const cf::CuperflowXRange& findXRange(const cf::CuperflowVectorPackage& package,
-                                      std::size_t owner, std::size_t group) {
-  for (const cf::CuperflowXRange& range : package.channelXRanges.at(owner)) {
-    if (range.sliceGroup == group) return range;
-  }
-  throw std::runtime_error("Cuperflow X package 缺少 sliceGroup range");
-}
-
-void fillAWork(const cf::CuperflowPackage& package, std::size_t batch, WorkTiming* work) {
-  for (std::size_t pc = 0; pc < kPcCount; ++pc) {
-    if (!work->groupActive[pc]) continue;
-    const std::size_t group = work->sliceGroups[pc];
-    if (group >= package.sliceGroupCount) {
-      throw std::runtime_error("Cuperflow wave 包含越界的 sliceGroup");
-    }
-    const std::size_t segment = batch * package.sliceGroupCount + group;
-    const auto& ranges = package.channelLaneSliceGroupRanges.at(pc).at(segment);
-    std::size_t begin = package.matrixChannels.at(pc).size();
-    std::size_t end = 0;
-    bool active = false;
-    for (std::size_t lane = 0; lane < kWordsPerBeat; ++lane) {
-      if (ranges[lane].first > ranges[lane].second ||
-          ranges[lane].second > package.matrixChannels[pc].size()) {
-        throw std::runtime_error("Cuperflow A lane range 越过 channel 尾部");
-      }
-      if (ranges[lane].first != ranges[lane].second) {
-        active = true;
-        begin = std::min(begin, static_cast<std::size_t>(ranges[lane].first));
-        end = std::max(end, static_cast<std::size_t>(ranges[lane].second));
-      }
-    }
-    if (!active) begin = end = 0;
-    work->aOffsetBeats[pc] = begin;
-    work->aBeats[pc] = end - begin;
-    for (std::size_t lane = 0; lane < kWordsPerBeat; ++lane) {
-      const bool laneActive = ranges[lane].first != ranges[lane].second;
-      work->aLaneOffsetBeats[pc][lane] = laneActive ?
-          ranges[lane].first - begin : 0;
-      work->aLaneBeats[pc][lane] = laneActive ?
-          ranges[lane].second - ranges[lane].first : 0;
-    }
-    work->physicalSlots[pc] = work->aBeats[pc] * kWordsPerBeat;
-    for (std::size_t beat = begin; beat < end; ++beat) {
-      const std::uint8_t mask = package.matrixEntryMasks.at(pc).at(beat);
-      for (std::size_t lane = 0; lane < kWordsPerBeat; ++lane) {
-        if (beat >= ranges[lane].first && beat < ranges[lane].second &&
-            (mask & static_cast<std::uint8_t>(1U << lane)) != 0U) {
-          ++work->usefulSlots[pc];
-        }
-      }
-    }
-  }
-}
-
 std::uint64_t fp64Bits(double value) {
   std::uint64_t bits = 0;
   std::memcpy(&bits, &value, sizeof(bits));
   return bits;
 }
 
-std::array<std::uint64_t, kPcCount> expectedWorkChecksums(
-    const cf::CuperflowPackage& package, const std::vector<double>& x,
-    const WorkTiming& work) {
-  std::array<std::uint64_t, kPcCount> checksums{};
-  for (std::size_t pc = 0; pc < kPcCount; ++pc) {
-    if (!work.groupActive[pc]) continue;
-    const std::size_t group = work.sliceGroups[pc];
-    if (group >= package.sliceGroupCount) {
-      throw std::runtime_error("Cuperflow golden 收到越界的 sliceGroup");
-    }
-    const std::size_t groupFirstColumn =
-        group * package.sliceGroupSize * package.config.sliceSize;
-    const std::size_t segment = work.batch * package.sliceGroupCount + group;
-    const auto& ranges = package.channelLaneSliceGroupRanges.at(pc).at(segment);
-    std::size_t begin = package.matrixChannels.at(pc).size();
-    std::size_t end = 0;
-    bool active = false;
-    for (const auto& range : ranges) {
-      if (range.first != range.second) {
-        active = true;
-        begin = std::min(begin, static_cast<std::size_t>(range.first));
-        end = std::max(end, static_cast<std::size_t>(range.second));
-      }
-    }
-    if (!active) continue;
-    for (std::size_t beat = begin; beat < end; ++beat) {
-      for (std::size_t lane = 0; lane < kWordsPerBeat; ++lane) {
-        if (beat < ranges[lane].first || beat >= ranges[lane].second) continue;
-        const cf::DecodedCuperflowSlot slot =
-            cf::decodeSlot(package.matrixChannels[pc][beat][lane]);
-        const std::size_t column = groupFirstColumn + slot.localColumn;
-        if (column >= x.size()) {
-          throw std::runtime_error("RTL golden 列号超出 X 范围：group=" +
-              std::to_string(group) + " batch=" + std::to_string(work.batch) +
-              " pc=" + std::to_string(pc) + " beat=" + std::to_string(beat) +
-              " lane=" + std::to_string(lane) + " localColumn=" +
-              std::to_string(slot.localColumn) + " groupFirstColumn=" +
-              std::to_string(groupFirstColumn) + " xSize=" + std::to_string(x.size()));
+std::uint64_t expectedPackageChecksum(const cf::CuperflowPackage& package,
+                                      const std::vector<double>& x) {
+  std::uint64_t checksum = 0;
+  for (std::size_t pc = 0; pc < package.matrixChannels.size(); ++pc) {
+    for (const cf::CuperflowGroupARange& group : package.channelGroupARanges[pc]) {
+      const std::size_t groupFirstColumn =
+          group.sliceGroup * package.sliceGroupSize * package.config.sliceSize;
+      for (std::size_t batch = 0; batch < package.stats.batchCount; ++batch) {
+        const std::size_t segment = batch * package.sliceGroupCount + group.sliceGroup;
+        const auto& ranges = package.channelLaneSliceGroupRanges[pc][segment];
+        for (std::size_t lane = 0; lane < kWordsPerBeat; ++lane) {
+          for (std::size_t beat = ranges[lane].first; beat < ranges[lane].second; ++beat) {
+            const cf::DecodedCuperflowSlot slot =
+                cf::decodeSlot(package.matrixChannels[pc][beat][lane]);
+            const std::size_t column = groupFirstColumn + slot.localColumn;
+            if (column >= x.size()) {
+              throw std::runtime_error("RTL golden 列号超出 X 范围");
+            }
+            checksum ^= fp64Bits(static_cast<double>(slot.value) * x[column]);
+          }
         }
-        checksums[pc] ^= fp64Bits(static_cast<double>(slot.value) * x[column]);
       }
     }
   }
-  return checksums;
-}
-
-std::uint64_t expectedWorkChecksum(const cf::CuperflowPackage& package,
-                                   const std::vector<double>& x,
-                                   const WorkTiming& work) {
-  const auto checksums = expectedWorkChecksums(package, x, work);
-  return std::accumulate(checksums.begin(), checksums.end(), std::uint64_t{0},
-      [](std::uint64_t lhs, std::uint64_t rhs) { return lhs ^ rhs; });
+  return checksum;
 }
 
 std::size_t xWriteCycles(const cf::CuperflowVectorPackage& package,
@@ -569,25 +437,6 @@ std::size_t xWriteCycles(const cf::CuperflowVectorPackage& package,
     cycles += (lineCount + 1U) / 2U;
   }
   return cycles;
-}
-
-void setWork(const WorkPort& port, std::size_t pc, const WorkTiming& work, bool valid) {
-  *port.valid = valid;
-  *port.active = work.aBeats.at(pc) != 0;
-  *port.xLoad = work.xLoaded.at(pc);
-  *port.batch = static_cast<CData>(work.batch);
-  *port.xWords = static_cast<SData>(work.xWords.at(pc));
-  *port.xElements = static_cast<SData>(work.xElements.at(pc));
-  *port.xOffsetBeats = static_cast<IData>(work.xOffsetBeats.at(pc));
-  *port.xBeats = static_cast<IData>(work.xBeats.at(pc));
-  *port.aOffsetBeats = static_cast<IData>(work.aOffsetBeats.at(pc));
-  *port.aBeats = static_cast<IData>(work.aBeats.at(pc));
-  for (std::size_t lane = 0; lane < kWordsPerBeat; ++lane) {
-    *port.aLaneOffsetBeats[lane] = static_cast<IData>(
-        work.aLaneOffsetBeats.at(pc)[lane]);
-    *port.aLaneBeats[lane] = static_cast<IData>(
-        work.aLaneBeats.at(pc)[lane]);
-  }
 }
 
 void writeHtmlText(std::ostream& output, std::string_view value) {
@@ -803,7 +652,6 @@ int runCuperflowTiming(const std::string& requestedDataset) {
   VerilatedContext context;
   context.commandArgs(0, static_cast<char**>(nullptr));
   VSpmvCuperflowInputTop dut(&context);
-  const auto workPortsArray = workPorts(dut);
   const auto hbmPortsArray = hbmPorts(dut);
   for (const HbmPort& port : hbmPortsArray) {
     *port.arReady = 0;
@@ -813,22 +661,7 @@ int runCuperflowTiming(const std::string& requestedDataset) {
     *port.rLast = 0;
     clearBeat(*port.rData);
   }
-  for (const WorkPort& port : workPortsArray) {
-    *port.valid = 0;
-    *port.active = 0;
-    *port.xLoad = 0;
-    *port.batch = 0;
-    *port.xWords = 0;
-    *port.xElements = 0;
-    *port.xOffsetBeats = 0;
-    *port.xBeats = 0;
-    *port.aOffsetBeats = 0;
-    *port.aBeats = 0;
-    for (std::size_t lane = 0; lane < kWordsPerBeat; ++lane) {
-      *port.aLaneOffsetBeats[lane] = 0;
-      *port.aLaneBeats[lane] = 0;
-    }
-  }
+  dut.io_start = 0;
   dut.clock = 0;
   dut.reset = 1;
   dut.eval();
@@ -840,255 +673,117 @@ int runCuperflowTiming(const std::string& requestedDataset) {
   }
   dut.reset = 0;
 
-  std::vector<WorkTiming> works;
-  std::vector<CycleRecord> cycles;
-  const std::size_t waveCount = (package.sliceGroupCount + kPcCount - 1U) / kPcCount;
-  works.reserve(waveCount * package.stats.batchCount);
-  std::uint64_t totalABeats = 0;
+  std::vector<std::vector<Beat>> xChannels(kPcCount);
+  std::array<HbmModel, kPcCount> models;
+  for (std::size_t pc = 0; pc < kPcCount; ++pc) {
+    xChannels[pc].resize(vectorPackage.channelHbmBeats[pc].size());
+    for (std::size_t beat = 0; beat < xChannels[pc].size(); ++beat) {
+      xChannels[pc][beat] = vectorPackage.channelHbmBeats[pc][beat];
+    }
+    resetHbm(models[pc],
+        xChannels[pc].empty() ? nullptr : &xChannels[pc],
+        0, xChannels[pc].size(),
+        SPMV_CUPERFLOW_HBM_BASE_FROZEN,
+        package.matrixChannels[pc].empty() ? nullptr : &package.matrixChannels[pc],
+        0, package.matrixChannels[pc].size(),
+        SPMV_CUPERFLOW_HBM_BASE_FROZEN + SPMV_CUPERFLOW_X_REGION_BYTES_FROZEN);
+  }
+
+  const std::uint64_t expectedChecksum = expectedPackageChecksum(package, x);
   std::uint64_t usefulSlots = 0;
   std::uint64_t physicalSlots = 0;
   std::uint64_t xSourceBeats = 0;
   std::uint64_t xWords = 0;
   std::uint64_t xMarkers = 0;
   std::uint64_t xWriteCyclesTotal = 0;
-  std::uint64_t rtlChecksum = 0;
-  std::uint64_t expectedChecksum = 0;
   std::size_t xLoadedGroups = 0;
-
-  for (std::size_t wave = 0; wave < waveCount; ++wave) {
-    for (std::size_t batch = 0; batch < package.stats.batchCount; ++batch) {
-      WorkTiming work;
-      work.index = works.size();
-      work.wave = wave;
-      work.batch = batch;
-      std::array<const cf::CuperflowXRange*, kPcCount> xRanges{};
-      for (std::size_t pc = 0; pc < kPcCount; ++pc) {
-        const std::size_t group = wave * kPcCount + pc;
-        if (group >= package.sliceGroupCount) continue;
-        if (package.sliceGroupChannels.at(group) != pc) {
-          throw std::runtime_error("Cuperflow sliceGroup 没有按 wave 分配给所属 HBM PC");
-        }
-        const cf::CuperflowXRange& range = findXRange(vectorPackage, pc, group);
-        work.groupActive[pc] = true;
-        work.sliceGroups[pc] = group;
-        work.xLoaded[pc] = batch == 0;
-        work.xElements[pc] = range.elementCount;
-        work.xWords[pc] = range.encodedWordCount;
-        work.xOffsetBeats[pc] = range.beatBegin;
-        work.xBeats[pc] = range.beatEnd - range.beatBegin;
-        work.xMarkers[pc] = range.markerCount;
-        work.xWriteCycles[pc] = xWriteCycles(vectorPackage, pc, range);
-        xRanges[pc] = &range;
-      }
-      fillAWork(package, batch, &work);
-      work.expectedProductChecksumByPc = expectedWorkChecksums(package, x, work);
-      work.expectedProductChecksum = expectedWorkChecksum(package, x, work);
-      expectedChecksum ^= work.expectedProductChecksum;
-      for (std::size_t pc = 0; pc < kPcCount; ++pc) {
-        totalABeats += work.aBeats[pc];
-        usefulSlots += work.usefulSlots[pc];
-        physicalSlots += work.physicalSlots[pc];
-        if (work.xLoaded[pc]) {
-          ++xLoadedGroups;
-          xSourceBeats += work.xBeats[pc];
-          xWords += work.xWords[pc];
-          xMarkers += work.xMarkers[pc];
-          xWriteCyclesTotal += work.xWriteCycles[pc];
-        }
-      }
-
-      std::array<HbmModel, kPcCount> models;
-      for (std::size_t pc = 0; pc < kPcCount; ++pc) {
-        const cf::CuperflowXRange* range = xRanges[pc];
-        const std::uint64_t aBase = SPMV_CUPERFLOW_HBM_BASE_FROZEN +
-            SPMV_CUPERFLOW_X_REGION_BYTES_FROZEN +
-            work.aOffsetBeats[pc] * kBeatBytes;
-        // 每条 HBM 只看见其所属 group 的独占 X payload；同一 wave 的 PC 从不镜像彼此的 X。
-        resetHbm(models[pc], work.xLoaded[pc] ? &vectorPackage.channelHbmBeats[pc] : nullptr,
-            range == nullptr ? 0U : range->beatBegin, range == nullptr ? 0U : range->beatEnd,
-            SPMV_CUPERFLOW_HBM_BASE_FROZEN +
-                (range == nullptr ? 0U : range->beatBegin) * kBeatBytes,
-            work.aBeats[pc] != 0 ? &package.matrixChannels[pc] : nullptr,
-            work.aOffsetBeats[pc], work.aOffsetBeats[pc] + work.aBeats[pc], aBase);
-      }
-
-      bool workPending = true;
-      bool completed = false;
-      const std::uint64_t workStartCycle = cycles.size();
-      for (std::uint64_t localCycle = 0; localCycle < 20000000ULL; ++localCycle) {
-        for (std::size_t pc = 0; pc < kPcCount; ++pc) {
-          setWork(workPortsArray[pc], pc, work, workPending);
-          driveHbm(const_cast<HbmPort&>(hbmPortsArray[pc]), models[pc]);
-        }
-
-        dut.eval();
-        CycleRecord record;
-        record.cycle = cycles.size();
-        record.globalXReady = dut.io_globalXReady != 0;
-        record.roundDone = dut.io_roundDone != 0;
-        std::array<bool, kPcCount> arFire{};
-        std::array<bool, kPcCount> rFire{};
-        bool allWorkFire = true;
-        for (std::size_t pc = 0; pc < kPcCount; ++pc) {
-          record.aValidSlotMask[pc] = *workPortsArray[pc].aValidSlotMask;
-          arFire[pc] = *hbmPortsArray[pc].arValid && *hbmPortsArray[pc].arReady;
-          rFire[pc] = *hbmPortsArray[pc].rValid && *hbmPortsArray[pc].rReady;
-          if (arFire[pc]) {
-            const HbmRegionKind kind = regionAtAddress(models[pc],
-                *hbmPortsArray[pc].arAddress);
-            if (kind == HbmRegionKind::x) {
-              record.xAr |= static_cast<std::uint16_t>(1U << pc);
-            } else {
-              record.aAr |= static_cast<std::uint16_t>(1U << pc);
-            }
-          }
-          if (rFire[pc]) {
-            if (models[pc].bursts.empty()) {
-              throw std::runtime_error("Cuperflow RTL R 握手时 HBM burst 队列为空");
-            }
-            if (models[pc].bursts.front().region == HbmRegionKind::x) {
-              record.xR |= static_cast<std::uint16_t>(1U << pc);
-            } else {
-              record.aR |= static_cast<std::uint16_t>(1U << pc);
-            }
-          }
-          if (workPending && !(*workPortsArray[pc].valid && *workPortsArray[pc].ready)) {
-            allWorkFire = false;
-          }
-        }
-        if (workPending && allWorkFire) {
-          workPending = false;
-          work.start = record.cycle;
-        }
-        for (std::size_t pc = 0; pc < kPcCount; ++pc) {
-          if (arFire[pc]) acceptAddress(hbmPortsArray[pc], models[pc]);
-        }
-        dut.clock = 1;
-        dut.eval();
-        dut.clock = 0;
-        dut.eval();
-        for (std::size_t pc = 0; pc < kPcCount; ++pc) {
-          if (rFire[pc]) consumeData(models[pc]);
-        }
-        cycles.push_back(record);
-        if (record.roundDone) {
-          work.done = record.cycle;
-          work.rtlProductChecksum = dut.io_productChecksum;
-          rtlChecksum ^= work.rtlProductChecksum;
-          if (work.rtlProductChecksum != work.expectedProductChecksum) {
-            std::uint64_t xReadBeats = 0;
-            std::uint64_t aReadBeats = 0;
-            for (std::size_t cycle = work.start; cycle < cycles.size(); ++cycle) {
-              xReadBeats += static_cast<std::uint64_t>(
-                  __builtin_popcount(cycles[cycle].xR));
-              aReadBeats += static_cast<std::uint64_t>(
-                  __builtin_popcount(cycles[cycle].aR));
-            }
-            std::ostringstream maskTrace;
-            for (std::size_t cycle = work.start; cycle < cycles.size(); ++cycle) {
-              if (cycles[cycle].aR == 0) continue;
-              if (maskTrace.tellp() != std::streampos(0)) maskTrace << ';';
-              maskTrace << 'c' << cycle << ':';
-              for (std::size_t pc = 0; pc < kPcCount; ++pc) {
-                if ((cycles[cycle].aR & (1U << pc)) != 0U) {
-                  maskTrace << 'p' << pc << '=' << static_cast<unsigned>(
-                      cycles[cycle].aValidSlotMask[pc]) << ' ';
-                }
-              }
-            }
-            std::ostringstream rtlPc;
-            for (std::size_t pc = 0; pc < kPcCount; ++pc) {
-              if (pc != 0) rtlPc << ',';
-              rtlPc << "p" << pc << "=0x" << std::hex
-                    << *workPortsArray[pc].productChecksumByPc << "/0x"
-                    << work.expectedProductChecksumByPc[pc] << std::dec;
-            }
-            throw std::runtime_error("Cuperflow RTL productChecksum 与 golden 不一致：work=" +
-                std::to_string(work.index) + " wave=" + std::to_string(work.wave) +
-                " batch=" + std::to_string(work.batch) + " rtl=0x" +
-                [&work] {
-                  std::ostringstream stream;
-                  stream << std::hex << work.rtlProductChecksum;
-                  return stream.str();
-                }() + " expected=0x" + [&work] {
-                  std::ostringstream stream;
-                  stream << std::hex << work.expectedProductChecksum;
-                  return stream.str();
-                }() + " x_r_beats=" + std::to_string(xReadBeats) +
-                " a_r_beats=" + std::to_string(aReadBeats) +
-                " expected_a_beats=" + std::to_string(
-                    std::accumulate(work.aBeats.begin(), work.aBeats.end(),
-                        std::uint64_t{0})) + " mask_pc0=" + maskTrace.str() +
-                " rtl_pc=" + rtlPc.str());
-          }
-          completed = true;
-          break;
-        }
-      }
-      if (!completed) {
-        throw std::runtime_error("Cuperflow RTL work 超过 20000000 周期未完成：work=" +
-            std::to_string(work.index));
-      }
-
-      work.xReady = work.start;
-      work.aBegin = work.start;
-      work.aEnd = work.start;
-      bool sawXInput = false;
-      for (std::size_t index = work.start; index <= work.done && index < cycles.size(); ++index) {
-        const CycleRecord& record = cycles[index];
-        if (record.xR != 0) {
-          if (!sawXInput) {
-            work.xInputBegin = record.cycle;
-            sawXInput = true;
-          }
-          work.xInputEnd = record.cycle + 1U;
-        }
-        if (record.globalXReady && work.xReady == work.start) {
-          work.xReady = record.cycle;
-        }
-        if (record.aR != 0) {
-          if (work.aBegin == work.start) work.aBegin = record.cycle;
-          work.aEnd = record.cycle + 1U;
-        }
-      }
-      if (!sawXInput) {
-        work.xInputBegin = work.start;
-        work.xInputEnd = work.start;
-      }
-      std::size_t maximumXWriteCycles = 0;
-      for (std::size_t pc = 0; pc < kPcCount; ++pc) {
-        if (work.xLoaded[pc]) {
-          maximumXWriteCycles = std::max(maximumXWriteCycles, work.xWriteCycles[pc]);
-        }
-      }
-      work.xWriteBegin = sawXInput ? work.xInputBegin + 1U : work.start;
-      work.xWriteEnd = work.xWriteBegin + maximumXWriteCycles;
-      const bool workHasA = std::any_of(work.aBeats.begin(), work.aBeats.end(),
-          [](std::uint64_t beats) { return beats != 0; });
-      if (!workHasA) {
-        // 空 work 没有真实的 A/FMUL 事件，只记录 barrier 后的空阶段边界，
-        // 让报告关系仍然单调且与有数据 work 使用同一套字段。
-        work.aRequest = work.xReady;
-        work.aBegin = work.aRequest + 1U;
-        work.aEnd = work.aBegin;
-      } else {
-        work.aRequest = work.aBegin == work.start ? work.start : work.aBegin - 1U;
-      }
-      work.mulRequestBegin = work.aBegin + 1U;
-      std::uint64_t maximumABeats = 0;
-      for (const std::uint64_t beats : work.aBeats) maximumABeats = std::max(maximumABeats, beats);
-      work.mulRequestEnd = work.mulRequestBegin + maximumABeats;
-      work.mulResponseBegin = work.mulRequestBegin + kMulLatency;
-      work.mulResponseEnd = work.mulRequestEnd + kMulLatency;
-      works.push_back(work);
-      (void)workStartCycle;
+  for (std::size_t pc = 0; pc < kPcCount; ++pc) {
+    for (const cf::CuperflowXRange& range : vectorPackage.channelXRanges[pc]) {
+      ++xLoadedGroups;
+      xSourceBeats += range.beatEnd - range.beatBegin;
+      xWords += range.encodedWordCount;
+      xMarkers += range.markerCount;
+      xWriteCyclesTotal += xWriteCycles(vectorPackage, pc, range);
+    }
+    for (const cf::CuperflowGroupARange& group : package.channelGroupARanges[pc]) {
+      physicalSlots += static_cast<std::uint64_t>(group.aBeats) * kWordsPerBeat;
     }
   }
+  usefulSlots = package.stats.matrixSlots;
 
-  if (rtlChecksum != expectedChecksum || totalABeats < package.stats.totalMatrixBeats ||
-      physicalSlots < usefulSlots || xLoadedGroups != package.sliceGroupCount) {
-    throw std::runtime_error("Cuperflow RTL 总 productChecksum/golden 或 beat 统计不一致");
+  std::vector<WorkTiming> works(1);
+  works[0].index = 0;
+  works[0].expectedProductChecksum = expectedChecksum;
+  std::vector<CycleRecord> cycles;
+  bool started = false;
+  bool completed = false;
+  for (std::uint64_t localCycle = 0; localCycle < 20000000ULL; ++localCycle) {
+    dut.io_start = !started ? 1 : 0;
+    for (std::size_t pc = 0; pc < kPcCount; ++pc) {
+      driveHbm(const_cast<HbmPort&>(hbmPortsArray[pc]), models[pc]);
+    }
+    dut.eval();
+    CycleRecord record;
+    record.cycle = cycles.size();
+    record.globalXReady = dut.io_done != 0;
+    record.roundDone = dut.io_done != 0;
+    std::array<bool, kPcCount> arFire{};
+    std::array<bool, kPcCount> rFire{};
+    for (std::size_t pc = 0; pc < kPcCount; ++pc) {
+      arFire[pc] = *hbmPortsArray[pc].arValid && *hbmPortsArray[pc].arReady;
+      rFire[pc] = *hbmPortsArray[pc].rValid && *hbmPortsArray[pc].rReady;
+      if (arFire[pc]) {
+        const HbmRegionKind kind = regionAtAddress(models[pc],
+            *hbmPortsArray[pc].arAddress);
+        if (kind == HbmRegionKind::x) {
+          record.xAr |= static_cast<std::uint16_t>(1U << pc);
+        } else {
+          record.aAr |= static_cast<std::uint16_t>(1U << pc);
+        }
+      }
+      if (rFire[pc]) {
+        if (models[pc].bursts.empty()) {
+          throw std::runtime_error("Cuperflow RTL R 握手时 HBM burst 队列为空");
+        }
+        if (models[pc].bursts.front().region == HbmRegionKind::x) {
+          record.xR |= static_cast<std::uint16_t>(1U << pc);
+        } else {
+          record.aR |= static_cast<std::uint16_t>(1U << pc);
+        }
+      }
+    }
+    for (std::size_t pc = 0; pc < kPcCount; ++pc) {
+      if (arFire[pc]) acceptAddress(hbmPortsArray[pc], models[pc]);
+    }
+    dut.clock = 1;
+    dut.eval();
+    dut.clock = 0;
+    dut.eval();
+    for (std::size_t pc = 0; pc < kPcCount; ++pc) {
+      if (rFire[pc]) consumeData(models[pc]);
+    }
+    if (!started) {
+      started = true;
+      works[0].start = record.cycle;
+    }
+    cycles.push_back(record);
+    if (dut.io_done != 0) {
+      works[0].done = record.cycle;
+      works[0].rtlProductChecksum = dut.io_productChecksum;
+      completed = true;
+      break;
+    }
   }
+  if (!completed) {
+    throw std::runtime_error("Cuperflow RTL 超过 20000000 周期未完成");
+  }
+  const std::uint64_t rtlChecksum = works[0].rtlProductChecksum;
+  if (rtlChecksum != expectedChecksum) {
+    throw std::runtime_error("Cuperflow RTL productChecksum 与 golden 不一致");
+  }
+  const std::size_t waveCount = 1;
+  const std::uint64_t totalABeats = package.stats.totalMatrixBeats;
+  (void)xLoadedGroups;
   const fs::path run = reportDirectory(datasetPath.filename().string());
   writeTimingReport(run / "performance.html", datasetPath.filename().string(), works, cycles,
       totalABeats, package.stats.totalMatrixBeats, usefulSlots, physicalSlots, xSourceBeats,
@@ -1103,7 +798,7 @@ int runCuperflowTiming(const std::string& requestedDataset) {
   const double utilization = physicalSlots == 0 ? 0.0 :
       100.0 * static_cast<double>(usefulSlots) / static_cast<double>(physicalSlots);
   std::cout << "[spmv-cuperflow-rtl] Verilator RTL simulation dataset=" << datasetPath
-      << " order=wave-major waves=" << waveCount << " groups=" << package.sliceGroupCount
+      << " order=map-x-a groups=" << package.sliceGroupCount
       << " batches=" << package.stats.batchCount << " works=" << works.size()
       << " cycles=" << cycles.size() << " a_beats=" << totalABeats
       << " physical_slots=" << physicalSlots << " useful_slots=" << usefulSlots

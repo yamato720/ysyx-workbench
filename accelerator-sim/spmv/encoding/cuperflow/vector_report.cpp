@@ -105,10 +105,10 @@ void validatePackage(const CuperflowVectorPackage& package) {
   std::uint64_t encodedValueCount = 0;
   std::uint64_t markerCount = 0;
   std::uint64_t encodedPayloadBeats = 0;
+  bool hasMaps = false;
   for (std::size_t channel = 0; channel < package.channelXRanges.size(); ++channel) {
     const auto& ranges = package.channelXRanges[channel];
     const auto& beats = package.channelHbmBeats[channel];
-    encodedPayloadBeats += beats.size();
     for (const CuperflowXRange& range : ranges) {
       if (range.sliceGroup >= groupCount || seenGroups[range.sliceGroup] ||
           range.sliceGroup % package.config.hbmChannelCount != channel) {
@@ -128,6 +128,14 @@ void validatePackage(const CuperflowVectorPackage& package) {
           range.valueCount > range.elementCount) {
         throw std::invalid_argument("Cuperflow X HTML 报告收到非法 per-HBM X range");
       }
+      if (range.mapBeat != std::numeric_limits<std::uint32_t>::max()) {
+        hasMaps = true;
+        if (range.mapBeat >= beats.size() || range.mapBeat + 1U != range.beatBegin ||
+            !isXMapMarker(beats[range.mapBeat][0])) {
+          throw std::invalid_argument("Cuperflow X HTML 报告的 map beat 必须紧挨 token 区间");
+        }
+      }
+      encodedPayloadBeats += range.beatEnd - range.beatBegin;
 
       bool markerNeedsValue = false;
       std::uint32_t nextAddress = 0;
@@ -165,7 +173,8 @@ void validatePackage(const CuperflowVectorPackage& package) {
       seenGroups[range.sliceGroup] = true;
     }
   }
-  if (!std::all_of(seenGroups.begin(), seenGroups.end(), [](bool seen) { return seen; })) {
+  if (!hasMaps &&
+      !std::all_of(seenGroups.begin(), seenGroups.end(), [](bool seen) { return seen; })) {
     throw std::invalid_argument("Cuperflow X HTML 报告的 per-HBM X range 不完整");
   }
   if (encodedWordCount != package.stats.encodedWordCount ||

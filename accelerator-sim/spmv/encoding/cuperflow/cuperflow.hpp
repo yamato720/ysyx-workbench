@@ -5,6 +5,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <utility>
 #include <vector>
 
@@ -67,6 +68,39 @@ std::uint64_t makeXAddressMarker(std::uint32_t address);
 bool isXAddressMarker(std::uint64_t word);
 std::uint32_t decodeXAddressMarker(std::uint64_t word);
 
+/**
+ * X 区里一张固定 1-beat 的 map。lane0 是与 ADDR 不同的 quiet NaN
+ *（opcode=010, magic=0x2b6b6）；其余 lane 按小端 uint32 对存放控制字。
+ *
+ *   lane0  MAP_NAN，bit0=last
+ *   lane1  xBeats[31:0] | xWords[63:32]
+ *   lane2  aOffsetBeats[31:0] | aBeats[63:32]
+ *   lane3  firstBatch[15:0] | sliceGroup[31:16] | xElements[47:32] | last[48]
+ *   lane4-7  保留 0
+ */
+constexpr std::uint32_t kXMapMarkerOpcode = 0b010;
+constexpr std::uint64_t kXMapMarkerMagic = 0x2b6b6;
+constexpr std::uint64_t kXMapMarkerLastMask = 1U;
+constexpr std::uint64_t kXMapMarkerBase =
+    (std::uint64_t{0x7ff} << 52U) |
+    (std::uint64_t{1} << 51U) |
+    (static_cast<std::uint64_t>(kXMapMarkerOpcode) << 48U) |
+    (kXMapMarkerMagic << 13U);
+
+struct CuperflowMapBeat {
+  std::uint32_t xBeats = 0;
+  std::uint32_t xWords = 0;
+  std::uint32_t aOffsetBeats = 0;
+  std::uint32_t aBeats = 0;
+  std::uint16_t firstBatch = 0;
+  std::uint16_t sliceGroup = 0;
+  std::uint16_t xElements = 0;
+  bool last = false;
+};
+
+std::uint64_t makeXMapMarker(bool last);
+bool isXMapMarker(std::uint64_t word);
+
 struct CuperflowConfig {
   /** A 矩阵使用的独立 HBM channel 数；每路固定有 8 个 slot lane。 */
   std::size_t hbmChannelCount = 16;
@@ -88,6 +122,15 @@ using CuperflowBeat = std::array<std::uint64_t, kLanesPerBeat>;
 using CuperflowVectorBeat = std::array<std::uint64_t, kVectorLanesPerBeat>;
 static_assert(sizeof(CuperflowBeat) == 64, "Cuperflow A beat 必须为 512 bit");
 static_assert(sizeof(CuperflowVectorBeat) == 64, "Cuperflow X beat 必须为 512 bit");
+
+CuperflowVectorBeat packMapBeat(const CuperflowMapBeat& map);
+CuperflowMapBeat unpackMapBeat(const CuperflowVectorBeat& beat);
+
+struct CuperflowGroupARange {
+  std::size_t sliceGroup = 0;
+  std::uint32_t aOffsetBeats = 0;
+  std::uint32_t aBeats = 0;
+};
 
 struct CuperflowEncodingStats {
   std::size_t batchCount = 0;
@@ -125,12 +168,13 @@ struct CuperflowPackage {
   std::vector<std::vector<std::size_t>> channelSliceGroups;
   /** A 遍历实际触及的列，按 sliceGroup 去重后供灵活 X 编码使用。 */
   std::vector<std::vector<std::uint32_t>> xUsedColumnsByGroup;
-  // 每个 HBM channel 独立的累计 row batch 边界，单位是该 channel 的 512-bit beat。
+  // 软件/报告用的 (rowBatch, sliceGroup, lane) 范围，指向 group-major 的 A 流。
+  // 同一 group 的全部 row batch 在 owner HBM 上连成一段；空 group 的范围为 [0,0)。
   std::vector<std::vector<std::uint32_t>> channelBatchPointers;
-  // 展平的 (rowBatch, sliceGroup) 范围。只有 group owner HBM 的范围可以非空；
-  // groupColumn 直接编码 group 内列偏移，因此 FPGA 只需读取这一张小指针表。
   std::vector<std::vector<std::array<std::pair<std::uint32_t, std::uint32_t>, kLanesPerBeat>>>
       channelLaneSliceGroupRanges;
+  /** 每个 PC 按装载顺序排列的非空 group A 区间；硬件 map 只引用这里。 */
+  std::vector<std::vector<CuperflowGroupARange>> channelGroupARanges;
   // lane 0 对应 512-bit beat 的 [63:0]，lane 7 对应 [511:448]。
   // 各 channel 只补齐自身 8 lanes，因此长度可以不同。
   std::vector<std::vector<CuperflowBeat>> matrixChannels;
@@ -169,8 +213,14 @@ struct CuperflowXRange {
   std::size_t encodedWordCount = 0;
   std::size_t valueCount = 0;
   std::size_t markerCount = 0;
+  /** 该 group 在 X 区的 map beat 下标；无 map 的回退路径为 UINT32_MAX。 */
+  std::uint32_t mapBeat = std::numeric_limits<std::uint32_t>::max();
+  /** X token 区间，不含开头的 map beat。 */
   std::uint32_t beatBegin = 0;
   std::uint32_t beatEnd = 0;
+  std::uint32_t aOffsetBeats = 0;
+  std::uint32_t aBeats = 0;
+  bool last = false;
 };
 
 /** Cuperflow X 的 per-HBM 布局及其 Core 本地存储映射。

@@ -35,6 +35,22 @@ object SpmvCuperflowXAddressMarker {
     (word & ~addressMask) == prefix
 }
 
+/** 与 host `makeXMapMarker` 共享的 1-beat map 标识。 */
+object SpmvCuperflowMapMarker {
+  val lastBit: Int = 0
+  val prefix: BigInt =
+    (BigInt(0x7ff) << 52) |
+      (BigInt(1) << 51) |
+      (BigInt(2) << 48) |
+      (BigInt(0x2b6b6) << 13)
+  val fixedPrefix: BigInt = prefix >> 1
+
+  def marker(last: Boolean): BigInt = prefix | (if (last) 1 else 0)
+
+  def isMarker(word: UInt): Bool =
+    word(63, 1) === fixedPrefix.U(63.W)
+}
+
 /** 每拍解析一个 512-bit X beat 的八路 Cuperflow marker decoder。
   *
   * marker 的地址依赖前一 token，因此八路并非八套互不相关的状态机，而是对同一 beat
