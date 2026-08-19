@@ -368,6 +368,17 @@ void testCuperflowFlexibleXEncoding() {
     expect(vectorPackage.stats.encodedPayloadBeats == 1 &&
            vectorPackage.stats.encodedLanePaddingWords == 2,
            "Cuperflow 灵活 X 的物理 beat 尾部统计错误");
+
+    const CsrMatrix denseFromZero = makeMatrix(8, 16, {
+        {0, 0, 1.0}, {0, 1, 1.0}, {0, 2, 1.0}, {0, 3, 1.0}});
+    const cuperflow::CuperflowVectorPackage densePackage =
+        cuperflow::encodeVector(std::vector<double>(16, 0.5),
+            cuperflow::encode(denseFromZero));
+    const cuperflow::CuperflowXRange& denseRange = densePackage.channelXRanges[0][0];
+    expect(denseRange.valueCount == 4 && denseRange.markerCount == 0 &&
+           !cuperflow::isXAddressMarker(
+               densePackage.channelHbmBeats[0][denseRange.beatBegin][0]),
+           "从本地地址 0 起的连续 X 不应再插入 origin marker");
   } else {
     expect(!vectorPackage.flexibleXEncoding && range.encodedWordCount == 64 &&
            range.valueCount == 64 && range.markerCount == 0 &&

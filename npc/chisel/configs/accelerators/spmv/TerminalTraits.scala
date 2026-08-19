@@ -57,3 +57,23 @@ trait U55cSpmvInputRuntimeTerminal
   final override val constructionScope: String = "fpga"
   final override val constructionTarget: String = "SPMV"
 }
+
+/** U55C Cuperflow 只综合终端；生成当前 map -> X -> A RTL 的 XO/DCP 与报告。 */
+trait U55cSpmvCuperflowSynthesisTerminal
+    extends FpgaSynthesisConstruction with AcceleratorHostConstruction with MakeTerminal {
+  override protected def configuredFpga: FpgaToolchainConfig = FpgaToolchainConfig.U55cBase
+  override protected def configuredAcceleratorHost: npc.AcceleratorHostConfig =
+    SpmvAcceleratorHostConfig.CuperflowFpga
+  final override val constructionScope: String = "fpga"
+  final override val constructionTarget: String = "SPMV"
+}
+
+/** U55C Cuperflow bitstream 终端；在 250 MHz profile 上执行 Vitis link。 */
+trait U55cSpmvCuperflowBitstreamTerminal
+    extends FpgaBitstreamConstruction with AcceleratorHostConstruction with MakeTerminal {
+  override protected def configuredFpga: FpgaToolchainConfig = FpgaToolchainConfig.U55cBase
+  override protected def configuredAcceleratorHost: npc.AcceleratorHostConfig =
+    SpmvAcceleratorHostConfig.CuperflowFpga
+  final override val constructionScope: String = "fpga"
+  final override val constructionTarget: String = "SPMV"
+}

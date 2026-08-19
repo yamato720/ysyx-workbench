@@ -5,20 +5,42 @@ import accelerators.spmv.SpmvCuperflowConfig
 import org.scalatest.flatspec.AnyFlatSpec
 
 class SpmvCuperflowLocalXTest extends AnyFlatSpec {
-  "Cuperflow local_X" should "展开两个 ping/pong bank 和每 bank 四份真双口 replica" in {
+  "Cuperflow local_X" should "默认展开四份真双口 replica 的单窗口" in {
     val config = SpmvCuperflowConfig.Simulation
     val chirrtl = ChiselStage.emitCHIRRTL(new SpmvCuperflowLocalX(config))
     val memories = "NpcOnChipMaskedTrueDualPortMemory".r.findAllMatchIn(chirrtl).size
 
+    assert(!config.xPingPong)
+    assert(config.xBankCount == 1)
     assert(chirrtl.contains("module SpmvCuperflowLocalX"))
-    assert(chirrtl.contains("loadBank"))
-    assert(chirrtl.contains("activate"))
-    assert(chirrtl.contains("activeBank"))
     assert(chirrtl.contains("writeIdle"))
     assert(chirrtl.contains("readColumn"))
     assert(chirrtl.contains("OnChipMaskedTrueDualPortMemory"))
     assert(chirrtl.contains("wmask"))
-    assert(memories >= 2 * config.xReplicaCount,
-      s"应有 2*${config.xReplicaCount} 个片上 RAM，实际为 $memories")
+    assert(chirrtl.contains("module SpmvCuperflowIssuedXWriteStage"))
+    assert(chirrtl.contains("issuedWrite_r0"))
+    assert(chirrtl.contains("issuedWrite_r3"))
+    assert(!chirrtl.contains("issuedWrite_b0_r0"))
+    assert(chirrtl.contains("DontTouchAnnotation"))
+    assert(memories >= config.xReplicaCount,
+      s"应有 ${config.xReplicaCount} 个片上 RAM，实际为 $memories")
+    val issuedStages = "issuedWrite_r[0-3]".r.findAllMatchIn(chirrtl).map(_.matched).toSet
+    assert(issuedStages.size == config.xReplicaCount,
+      s"每个物理 URAM 应有一份 issued 写级，实际为 $issuedStages")
+  }
+
+  it should "在 xPingPong 下展开两套 bank 和每 bank 四份 replica" in {
+    val config = SpmvCuperflowConfig.Simulation.copy(xPingPong = true)
+    val chirrtl = ChiselStage.emitCHIRRTL(new SpmvCuperflowLocalX(config))
+    val memories = "NpcOnChipMaskedTrueDualPortMemory".r.findAllMatchIn(chirrtl).size
+
+    assert(config.xBankCount == 2)
+    assert(chirrtl.contains("issuedWrite_b0_r0"))
+    assert(chirrtl.contains("issuedWrite_b1_r3"))
+    assert(memories >= config.xBankCount * config.xReplicaCount,
+      s"应有 ${config.xBankCount}*${config.xReplicaCount} 个片上 RAM，实际为 $memories")
+    val issuedStages = "issuedWrite_b[01]_r[0-3]".r.findAllMatchIn(chirrtl).map(_.matched).toSet
+    assert(issuedStages.size == config.xBankCount * config.xReplicaCount,
+      s"每个物理 URAM 应有一份 issued 写级，实际为 $issuedStages")
   }
 }

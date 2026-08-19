@@ -188,11 +188,8 @@ private[cuperflow] final class SpmvCuperflowLane(config: SpmvCuperflowConfig, pc
           xReaderDone := false.B
           aReaderDone := false.B
           aBeatIndex := 0.U
-          when(parsedXWords === 0.U && parsedABeats === 0.U) {
+          when(parsedXWords === 0.U) {
             state := Mux(parsedLast, stateComplete, stateRequestMap)
-          }.elsewhen(parsedXWords === 0.U) {
-            localX.io.activate := true.B
-            state := stateRequestA
           }.otherwise {
             state := stateRequestX
           }

@@ -18,7 +18,8 @@ object ElaborateSpmvCuperflowInputTop extends App {
 
   println(
     s"正在生成 Cuperflow 输入顶层... PC=${config.hbmPcCount}, " +
-      s"X/A 分区=${config.xRegionBytes}/${config.aRegionBytes} bytes, local_X=2x${config.xReplicaCount}"
+      s"X/A 分区=${config.xRegionBytes}/${config.aRegionBytes} bytes, " +
+      s"local_X=${config.xBankCount}x${config.xReplicaCount}"
   )
   ChiselStage.emitSystemVerilogFile(
     new SpmvCuperflowInputTop(config),

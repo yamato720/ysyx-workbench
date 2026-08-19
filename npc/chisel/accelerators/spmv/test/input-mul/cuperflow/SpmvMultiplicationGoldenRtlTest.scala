@@ -69,6 +69,7 @@ private[cuperflow] final class SpmvMultiplicationGoldenHarness(mode: SpmvGoldenM
     val xBeatLast = Input(Bool())
     val xRangeElements = Input(UInt(log2Ceil(cuperflowConfig.xWindowSize + 1).W))
     val xActivate = Input(Bool())
+    val xWriteIdle = Output(Bool())
     val xWriteValid = Input(Bool())
     val xWriteColumn = Input(UInt(log2Ceil(inputConfig.xWindowSize).W))
     val xWriteElements = Input(Vec(slotsPerBeat, UInt(64.W)))
@@ -118,6 +119,7 @@ private[cuperflow] final class SpmvMultiplicationGoldenHarness(mode: SpmvGoldenM
       localX.io.write <> decoder.io.write
       localX.io.loadBank := !localX.io.activeBank
       localX.io.activate := io.xActivate
+      io.xWriteIdle := !decoder.io.write.valid && localX.io.writeIdle
       localX.io.readEnable := mul.io.xReadEnable
       localX.io.readColumn := mul.io.xReadColumn
       mul.io.xReadData := localX.io.readData
@@ -126,6 +128,7 @@ private[cuperflow] final class SpmvMultiplicationGoldenHarness(mode: SpmvGoldenM
     case _ =>
       val localX = Module(new SpmvLocalX(inputConfig))
       io.xBeatReady := false.B
+      io.xWriteIdle := true.B
       localX.io.writeValid := io.xWriteValid
       localX.io.writeColumn := io.xWriteColumn
       localX.io.writeElements := io.xWriteElements
@@ -154,6 +157,7 @@ class SpmvMultiplicationGoldenRtlTest extends AnyFlatSpec {
       |  logic io_xBeatLast;
       |  logic [13:0] io_xRangeElements;
       |  logic io_xActivate;
+      |  wire  io_xWriteIdle;
       |  logic io_xWriteValid;
       |  logic [12:0] io_xWriteColumn;
       |  logic [63:0] io_xWriteElements_0;
@@ -373,7 +377,15 @@ class SpmvMultiplicationGoldenRtlTest extends AnyFlatSpec {
       |      io_xBeatData[0 +: 64] = xValues[6];
       |      io_xBeatData[64 +: 64] = xValues[7];
       |      send_x_beat(io_xBeatData, 4'd2, 1'b1);
-      |      repeat (3) @(posedge clock);
+      |      begin
+      |        integer drainTimeout;
+      |        drainTimeout = 0;
+      |        while (!io_xWriteIdle && drainTimeout < 32) begin
+      |          @(posedge clock);
+      |          drainTimeout = drainTimeout + 1;
+      |        end
+      |        if (!io_xWriteIdle) $fatal(1, "Cuperflow local-X write pipeline did not drain");
+      |      end
       |      @(negedge clock);
       |      io_xActivate = 1'b1;
       |      @(posedge clock);

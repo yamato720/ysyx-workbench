@@ -1,6 +1,7 @@
 package accelerators.spmv
 
 import org.chipsalliance.cde.config.{Config => CDEConfig, Field}
+import npc.ip.memory.OnChipMemoryPrimitive
 
 /** Cuperflow 输入模型的静态几何。
   *
@@ -21,7 +22,13 @@ final case class SpmvCuperflowConfig(
   maxOutstandingBursts: Int = 2,
   xWindowSize: Int = 8192,
   xReplicaCount: Int = 4,
+  /** 为 true 时 local-X 实例化两套窗口，写 inactive、activate 后读 active。 */
+  xPingPong: Boolean = false,
   xElementWidth: Int = 64,
+  /** local-X 物理 RAM 的原语；仿真使用行为模型，U55C 固定选择 UltraRAM。 */
+  xMemoryPrimitive: OnChipMemoryPrimitive = OnChipMemoryPrimitive.Auto,
+  /** local-X 内部单口返回的数据宽度，按半个 HBM beat 打包以适配 URAM。 */
+  xMemoryDataWidth: Int = 256,
   fp64MultiplyLatency: Int = 4,
   fp64MultiplyInitiationInterval: Int = 1,
   fp64MultiplyResponseFifoDepth: Int = 4,
@@ -45,8 +52,10 @@ final case class SpmvCuperflowConfig(
   require(xWindowSize == 8192,
     s"Cuperflow groupColumn/marker 当前固定支持 8192 个 FP64，实际为 $xWindowSize")
   require(xReplicaCount == 4,
-    s"Cuperflow 当前固定为每个 ping/pong bank 4 份 X replica，实际为 $xReplicaCount")
+    s"Cuperflow 当前固定为 4 份 X replica，实际为 $xReplicaCount")
   require(xElementWidth == 64, s"Cuperflow X 当前必须是 FP64，实际为 $xElementWidth")
+  require(xMemoryDataWidth == axiDataWidth / 2 && xMemoryDataWidth % xElementWidth == 0,
+    s"Cuperflow local-X RAM 必须使用半个 AXI beat且包含完整 FP64，实际为 $xMemoryDataWidth/$axiDataWidth")
   require(fp64MultiplyLatency >= 1 && fp64MultiplyInitiationInterval >= 1 &&
     fp64MultiplyResponseFifoDepth >= 1, "FP64 multiply 的 latency、II 和响应 FIFO 深度必须为正数")
 
@@ -55,6 +64,7 @@ final case class SpmvCuperflowConfig(
   val aRegionBytes: Long = hbmBytes - xRegionBytes
   val aRegionBase: Long = hbmBase + xRegionBytes
   val xMaxEncodedWords: Int = xWindowSize * 2
+  val xBankCount: Int = if (xPingPong) 2 else 1
 
   /** 把共享 Mixed-V3 FMUL 引擎的公共几何投影为旧输入引擎所需参数。 */
   val mulConfig: SpmvInputConfig = SpmvInputConfig(
@@ -80,10 +90,25 @@ final case class SpmvCuperflowConfig(
 
 object SpmvCuperflowConfig {
   val Simulation: SpmvCuperflowConfig = SpmvCuperflowConfig()
+
+  /** U55C FPGA provider；Vivado floating_point v7.1 Binary64 multiply 为 12 拍。 */
+  val U55c: SpmvCuperflowConfig = SpmvCuperflowConfig(
+    // FPGA kernel 的每个 m_axi 由 XRT pointer 提供基址，RTL 请求使用 BO 内偏移。
+    hbmBase = 0L,
+    xMemoryPrimitive = OnChipMemoryPrimitive.UltraRam,
+    fp64MultiplyLatency = 12,
+    fp64MulProvider = SpmvFp64MulProvider.XilinxFloatingPointV71
+  )
 }
 
 case object SpmvCuperflowConfigKey extends Field[Option[SpmvCuperflowConfig]](None)
 
 class WithSpmvCuperflowConfig(config: SpmvCuperflowConfig) extends CDEConfig((_, _, _) => {
   case SpmvCuperflowConfigKey => Some(config)
+})
+
+/** 打开 Cuperflow local-X 的第二套 ping/pong 窗口。必须叠在已有 Cuperflow Config 左侧。 */
+class WithSpmvCuperflowLocalXPingPongConfig extends CDEConfig((_, _, up) => {
+  case SpmvCuperflowConfigKey =>
+    up(SpmvCuperflowConfigKey).map(_.copy(xPingPong = true))
 })

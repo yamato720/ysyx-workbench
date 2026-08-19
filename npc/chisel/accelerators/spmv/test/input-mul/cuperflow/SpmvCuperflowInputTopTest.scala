@@ -34,5 +34,16 @@ class SpmvCuperflowInputTopTest extends AnyFlatSpec {
     assert(config.aRegionBytes == 4096)
     assert(config.xMaxEncodedWords == 16384)
     assert(config.mulConfig.aReaderCount == config.hbmPcCount)
+    assert(!config.xPingPong)
+    assert(config.xBankCount == 1)
+  }
+
+  it should "在 xPingPong 下仍展开独立 PC 且实例化双窗口 local-X" in {
+    val pingPong = config.copy(xPingPong = true)
+    val chirrtl = ChiselStage.emitCHIRRTL(new SpmvCuperflowInputTop(pingPong))
+    assert(pingPong.xBankCount == 2)
+    assert(chirrtl.contains("module SpmvCuperflowLocalX"))
+    assert(chirrtl.contains("issuedWrite_b0_r0"))
+    assert(chirrtl.contains("activate"))
   }
 }

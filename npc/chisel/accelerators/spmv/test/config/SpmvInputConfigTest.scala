@@ -49,6 +49,19 @@ class SpmvInputConfigTest extends AnyFlatSpec {
     assertThrows[IllegalArgumentException](SpmvInputConfig.Cuper16Hbm.copy(cuperSlotRowBits = 17))
   }
 
+  "WithSpmvCuperflowLocalXPingPongConfig" should "叠在已有 Cuperflow Config 左侧后打开双窗口" in {
+    implicit val parameters: Parameters =
+      new WithSpmvCuperflowLocalXPingPongConfig ++
+        new WithSpmvCuperflowConfig(SpmvCuperflowConfig.Simulation)
+    val config = parameters(SpmvCuperflowConfigKey).get
+    assert(!SpmvCuperflowConfig.Simulation.xPingPong)
+    assert(SpmvCuperflowConfig.Simulation.xBankCount == 1)
+    assert(config.xPingPong)
+    assert(config.xBankCount == 2)
+    assert(!(new SpmvCuperflowSimulationConfig)(SpmvCuperflowConfigKey).get.xPingPong)
+    assert((new SpmvCuperflowPingPongSimulationConfig)(SpmvCuperflowConfigKey).get.xPingPong)
+  }
+
   "SpmvInputReportConfig" should "要求流水页依赖性能主页" in {
     assert(SpmvInputReportConfig.PerformancePipeline.performanceHtml)
     assert(SpmvInputReportConfig.PerformancePipeline.pipelineHtml)

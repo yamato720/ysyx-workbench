@@ -12,7 +12,9 @@ import npc.{
 }
 import accelerators.spmv.{
   SpmvAcceleratorConfigKey,
+  SpmvCuperflowConfigKey,
   SpmvConstructionProfile,
+  SpmvCuperflowFpgaProfile,
   SpmvInputConfigKey,
   SpmvInputFpgaProfile,
   SpmvInputFpgaRuntimeConstruction
@@ -43,6 +45,28 @@ object DescribeSpmvConfig extends App {
     "FPGA_MAILBOX_BASE" -> s"0x${java.lang.Long.toUnsignedString(platform.mailboxBase, 16)}"
   ) ++ toolchain.profileValues
   construction match {
+    case synthesis: FpgaSynthesisConstruction with AcceleratorHostConstruction
+        if parameters(SpmvCuperflowConfigKey).nonEmpty =>
+      val cuperflow = parameters(SpmvCuperflowConfigKey).getOrElse(
+        throw new IllegalArgumentException(s"${entry.className} 缺少 SpmvCuperflowConfigKey")
+      )
+      require(platform.platformClockMHz == 300 && platform.clockMHz <= platform.platformClockMHz,
+        "U55C Cuperflow 必须保持 300 MHz DATA_CLK，核心频率不得超过它")
+      ConstructionProfile.write(
+        Path.of(args(0)),
+        SpmvCuperflowFpgaProfile.values(entry, synthesis, cuperflow, extra)
+      )
+    case bitstream: FpgaBitstreamConstruction with AcceleratorHostConstruction
+        if parameters(SpmvCuperflowConfigKey).nonEmpty =>
+      val cuperflow = parameters(SpmvCuperflowConfigKey).getOrElse(
+        throw new IllegalArgumentException(s"${entry.className} 缺少 SpmvCuperflowConfigKey")
+      )
+      require(platform.platformClockMHz == 300 && platform.clockMHz <= platform.platformClockMHz,
+        "U55C Cuperflow 必须保持 300 MHz DATA_CLK，核心频率不得超过它")
+      ConstructionProfile.write(
+        Path.of(args(0)),
+        SpmvCuperflowFpgaProfile.values(entry, bitstream, cuperflow, extra)
+      )
     case runtime: SpmvInputFpgaRuntimeConstruction =>
       val input = parameters(SpmvInputConfigKey).getOrElse(
         throw new IllegalArgumentException(s"${entry.className} 缺少 SpmvInputConfigKey")

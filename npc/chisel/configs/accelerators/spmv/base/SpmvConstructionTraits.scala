@@ -23,6 +23,11 @@ object SpmvAcceleratorHostConfig {
     kind = "spmv",
     abi = "spmv-cuperflow-rtl-v1"
   )
+
+  val CuperflowFpga: AcceleratorHostConfig = AcceleratorHostConfig(
+    kind = "spmv",
+    abi = "spmv-cuperflow-u55c-v1"
+  )
 }
 
 /** 独立于 NEMU 的本地 SPMV 正式输入与流水报告构造。 */

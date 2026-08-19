@@ -68,6 +68,12 @@ is_spmv_input_xrt_runtime() {
     ${ACCELERATOR_HOST_ABI:-} == spmv-input-u55c-runtime-v1 ]]
 }
 
+is_spmv_cuperflow_fpga_assets() {
+  [[ $SCOPE == fpga && $TARGET == SPMV &&
+    ( $CAPABILITY == synthesize-only || $CAPABILITY == bitstream-only ) &&
+    ${ACCELERATOR_HOST_ABI:-} == spmv-cuperflow-u55c-v1 ]]
+}
+
 run_phase() {
   local phase=$1 index=$2 total=$3
   shift 3
@@ -431,16 +437,34 @@ case "$CAPABILITY:$SCOPE" in
     refresh_host 5 5
     ;;
   synthesize-only:fpga)
-    run_root_phase elaborate 1 2 spmv-elaborate SPMV_WORK_DIR="$stage/fpga"
-    run_root_phase_visible ooc-synth 2 2 spmv-ooc-synth SPMV_WORK_DIR="$stage/fpga" \
-      SPMV_PHASE_PREREQUISITES=0
+    if is_spmv_cuperflow_fpga_assets; then
+      run_root_phase elaborate 1 3 spmv-cuperflow-fpga-elaborate SPMV_CUPERFLOW_WORK_DIR="$stage/fpga"
+      run_root_phase_visible ip 2 3 spmv-cuperflow-fpga-ip SPMV_CUPERFLOW_WORK_DIR="$stage/fpga" \
+        SPMV_CUPERFLOW_PHASE_PREREQUISITES=0
+      run_root_phase_visible package 3 3 spmv-cuperflow-fpga-package SPMV_CUPERFLOW_WORK_DIR="$stage/fpga" \
+        SPMV_CUPERFLOW_PHASE_PREREQUISITES=0
+    else
+      run_root_phase elaborate 1 2 spmv-elaborate SPMV_WORK_DIR="$stage/fpga"
+      run_root_phase_visible ooc-synth 2 2 spmv-ooc-synth SPMV_WORK_DIR="$stage/fpga" \
+        SPMV_PHASE_PREREQUISITES=0
+    fi
     ;;
 	  bitstream-only:fpga)
-	    run_root_phase elaborate 1 3 spmv-elaborate SPMV_WORK_DIR="$stage/fpga"
-	    run_root_phase_visible ooc-synth 2 3 spmv-ooc-synth SPMV_WORK_DIR="$stage/fpga" \
-	      SPMV_PHASE_PREREQUISITES=0
-	    run_root_phase_visible link 3 3 spmv-link SPMV_WORK_DIR="$stage/fpga" \
-	      SPMV_PHASE_PREREQUISITES=0
+	    if is_spmv_cuperflow_fpga_assets; then
+	      run_root_phase elaborate 1 4 spmv-cuperflow-fpga-elaborate SPMV_CUPERFLOW_WORK_DIR="$stage/fpga"
+	      run_root_phase_visible ip 2 4 spmv-cuperflow-fpga-ip SPMV_CUPERFLOW_WORK_DIR="$stage/fpga" \
+	        SPMV_CUPERFLOW_PHASE_PREREQUISITES=0
+	      run_root_phase_visible package 3 4 spmv-cuperflow-fpga-package SPMV_CUPERFLOW_WORK_DIR="$stage/fpga" \
+	        SPMV_CUPERFLOW_PHASE_PREREQUISITES=0
+	      run_root_phase_visible link 4 4 spmv-cuperflow-fpga-link SPMV_CUPERFLOW_WORK_DIR="$stage/fpga" \
+	        SPMV_CUPERFLOW_PHASE_PREREQUISITES=0
+	    else
+	      run_root_phase elaborate 1 3 spmv-elaborate SPMV_WORK_DIR="$stage/fpga"
+	      run_root_phase_visible ooc-synth 2 3 spmv-ooc-synth SPMV_WORK_DIR="$stage/fpga" \
+	        SPMV_PHASE_PREREQUISITES=0
+	      run_root_phase_visible link 3 3 spmv-link SPMV_WORK_DIR="$stage/fpga" \
+	        SPMV_PHASE_PREREQUISITES=0
+	    fi
 	    ;;
 	  *) echo "Config $CONFIG_FQCN 的能力/作用域不可构造：$CAPABILITY/$SCOPE" >&2; exit 2 ;;
 esac

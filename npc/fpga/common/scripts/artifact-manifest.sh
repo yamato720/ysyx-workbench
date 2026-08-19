@@ -242,6 +242,12 @@ verify_manifest() {
 	        [[ $platform != none && $asset_names == 'spmv-input.xclbin spmv-input.xo SpmvFp64MulXilinxCore.xci' ]] ||
 	          fail 'U55C SPMV input package must contain xclbin, XO, and FP64 XCI'
 	        ;;
+	      spmv-cuperflow-u55c-v1)
+	        [[ $platform != none &&
+	          ( $asset_names == 'spmv-cuperflow.xo SpmvFp64MulXilinxCore.xci' ||
+            $asset_names == 'spmv-cuperflow.xclbin spmv-cuperflow.xo SpmvFp64MulXilinxCore.xci' ) ]] ||
+	          fail 'U55C Cuperflow package must contain XO/XCI, and bitstream packages must also contain XCLBIN'
+	        ;;
 	      *)
 	        [[ $platform != none && $asset_names == "npc-$platform.xclbin" ]] ||
 	          fail 'U55C package must contain one platform-qualified xclbin'

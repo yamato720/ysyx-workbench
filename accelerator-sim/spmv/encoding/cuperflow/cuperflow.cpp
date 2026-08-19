@@ -877,7 +877,6 @@ CuperflowVectorPackage encodeVectorImpl(
         const std::vector<std::uint32_t>& usedColumns =
             matrixPackage->xUsedColumnsByGroup[item.group];
         std::uint32_t nextAddress = 0;
-        bool firstValue = true;
         for (const std::uint32_t column : usedColumns) {
           if (column < item.firstColumn ||
               static_cast<std::size_t>(column) >= item.firstColumn + item.rangeElements) {
@@ -885,7 +884,9 @@ CuperflowVectorPackage encodeVectorImpl(
           }
           const std::uint32_t localAddress = static_cast<std::uint32_t>(
               static_cast<std::size_t>(column) - item.firstColumn);
-          if (firstValue || localAddress != nextAddress) {
+          // map 清空后 decoder 从地址 0 起。首列若已是 0，再插 marker 会让后续
+          // 8-value beat 从 addr≡3 (mod 4) 起，256-bit half-line 一拍跨 3 行。
+          if (localAddress != nextAddress) {
             tokens.push_back(makeXAddressMarker(localAddress));
             ++markerCount;
           }
@@ -895,7 +896,6 @@ CuperflowVectorPackage encodeVectorImpl(
             throw std::overflow_error("Cuperflow X BRAM 地址递增溢出");
           }
           nextAddress = localAddress + 1U;
-          firstValue = false;
         }
       }
       if (channelBeats.size() > std::numeric_limits<std::uint32_t>::max()) {

@@ -3,11 +3,16 @@ package accelerators.spmv.fpga.u55c
 import org.chipsalliance.cde.config.{Config => CDEConfig}
 import accelerators.spmv.{
   SpmvAcceleratorConfig,
+  SpmvCuperflowConfig,
   SpmvInputConfig,
   U55cSpmvBitstreamTerminal,
+  U55cSpmvCuperflowBitstreamTerminal,
+  U55cSpmvCuperflowSynthesisTerminal,
   U55cSpmvInputRuntimeTerminal,
   U55cSpmvSynthesisTerminal,
   WithSpmvAcceleratorConfig,
+  WithSpmvCuperflowConfig,
+  WithSpmvCuperflowLocalXPingPongConfig,
   WithSpmvInputConfig
 }
 
@@ -34,3 +39,29 @@ class U55cSpmvInputPingPong250MHzFpgaConfig extends CDEConfig(
   new WithSpmvInputConfig(SpmvInputConfig.Cuper16HbmPingPongU55c) ++
     new U55cSpmvBoardConfig(coreClockMHz = 250)
 ) with U55cSpmvInputRuntimeTerminal
+
+/** 当前 Cuperflow map -> X -> A RTL 的 U55C 250 MHz 只综合入口。 */
+class U55cSpmvCuperflow250MHzSynthesisConfig extends CDEConfig(
+  new WithSpmvCuperflowConfig(SpmvCuperflowConfig.U55c) ++
+    new U55cSpmvBoardConfig(coreClockMHz = 250)
+) with U55cSpmvCuperflowSynthesisTerminal
+
+/** 当前 Cuperflow map -> X -> A RTL 的 U55C 250 MHz bitstream 入口。 */
+class U55cSpmvCuperflow250MHzBitstreamConfig extends CDEConfig(
+  new WithSpmvCuperflowConfig(SpmvCuperflowConfig.U55c) ++
+    new U55cSpmvBoardConfig(coreClockMHz = 250)
+) with U55cSpmvCuperflowBitstreamTerminal
+
+/** 同一 Cuperflow FPGA 通路，local-X 打开第二套 ping/pong 窗口。 */
+class U55cSpmvCuperflowPingPong250MHzSynthesisConfig extends CDEConfig(
+  new WithSpmvCuperflowLocalXPingPongConfig ++
+    new WithSpmvCuperflowConfig(SpmvCuperflowConfig.U55c) ++
+    new U55cSpmvBoardConfig(coreClockMHz = 250)
+) with U55cSpmvCuperflowSynthesisTerminal
+
+/** 同一 Cuperflow FPGA bitstream 通路，local-X 打开第二套 ping/pong 窗口。 */
+class U55cSpmvCuperflowPingPong250MHzBitstreamConfig extends CDEConfig(
+  new WithSpmvCuperflowLocalXPingPongConfig ++
+    new WithSpmvCuperflowConfig(SpmvCuperflowConfig.U55c) ++
+    new U55cSpmvBoardConfig(coreClockMHz = 250)
+) with U55cSpmvCuperflowBitstreamTerminal

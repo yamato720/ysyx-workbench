@@ -16,3 +16,9 @@ class SpmvInputPingPongSimulationConfig extends CDEConfig(
 class SpmvCuperflowSimulationConfig extends CDEConfig(
   new WithSpmvCuperflowConfig(SpmvCuperflowConfig.Simulation)
 ) with LocalSpmvCuperflowTerminal
+
+/** 同一 Cuperflow 数据通路，local-X 打开第二套 ping/pong 窗口。 */
+class SpmvCuperflowPingPongSimulationConfig extends CDEConfig(
+  new WithSpmvCuperflowLocalXPingPongConfig ++
+    new WithSpmvCuperflowConfig(SpmvCuperflowConfig.Simulation)
+) with LocalSpmvCuperflowTerminal

@@ -50,7 +50,7 @@ matching_mark() {
 valid_protocol_abi() {
   local scope=$1 board=${2:-} abi=$3
   case "$scope:$board:$abi" in
-    fpga:u55c:npc-fpga-runtime-v11|fpga:u55c:npc-fpga-runtime-v13-performance-monitor|fpga:u55c:spmv-resource-probe-v1|fpga:u55c:spmv-resource-probe-v2|fpga:u55c:spmv-input-u55c-windowed-v1|fpga:zcu102:npc-fpga-runtime-v7|npc::npc-dpi-v1|soc::ysyx-dpi-v1|spmv::spmv-input-windowed-v12|spmv::spmv-cuperflow-rtl-v1) return 0 ;;
+    fpga:u55c:npc-fpga-runtime-v11|fpga:u55c:npc-fpga-runtime-v13-performance-monitor|fpga:u55c:spmv-resource-probe-v1|fpga:u55c:spmv-resource-probe-v2|fpga:u55c:spmv-input-u55c-windowed-v1|fpga:u55c:spmv-cuperflow-u55c-v1|fpga:zcu102:npc-fpga-runtime-v7|npc::npc-dpi-v1|soc::ysyx-dpi-v1|spmv::spmv-input-windowed-v12|spmv::spmv-cuperflow-rtl-v1) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -731,6 +731,21 @@ construction_is_complete() {
     verify_host_assets "$directory" >/dev/null 2>&1
     return
   fi
+  if [[ $scope == fpga && $(value "$profile" ACCELERATOR_HOST_ABI) == spmv-cuperflow-u55c-v1 ]]; then
+    capability=$(value "$profile" CAPABILITY)
+    if [[ $capability == synthesize-only ]]; then
+      [[ -s $directory/fpga/artifacts/spmv-cuperflow.xo &&
+        -s $directory/fpga/artifacts/SpmvFp64MulXilinxCore.xci ]] || return 1
+    elif [[ $capability == bitstream-only ]]; then
+      [[ -s $directory/fpga/artifacts/spmv-cuperflow.xclbin &&
+        -s $directory/fpga/artifacts/spmv-cuperflow.xo &&
+        -s $directory/fpga/artifacts/SpmvFp64MulXilinxCore.xci ]] || return 1
+    else
+      return 1
+    fi
+    verify_fpga_artifacts "$directory" "$profile" >/dev/null 2>&1
+    return
+  fi
   if [[ $scope == fpga && $(value "$profile" ACCELERATOR_HOST_ABI) == spmv-input-u55c-runtime-v1 ]]; then
     [[ -s $directory/fpga/artifacts/spmv-input.xclbin &&
       -s $directory/fpga/artifacts/spmv-input.xo &&
@@ -840,6 +855,12 @@ mark_construction_complete() {
     capability=$(value "$profile" CAPABILITY)
     if [[ $board == u55c && $(value "$profile" ACCELERATOR_HOST_ABI) == spmv-input-u55c-runtime-v1 ]]; then
       artifact='fpga/artifacts/spmv-input.xclbin'
+    elif [[ $board == u55c && $(value "$profile" ACCELERATOR_HOST_ABI) == spmv-cuperflow-u55c-v1 ]]; then
+      case "$capability" in
+        synthesize-only) artifact='fpga/artifacts/spmv-cuperflow.xo' ;;
+        bitstream-only) artifact='fpga/artifacts/spmv-cuperflow.xclbin' ;;
+        *) echo "无法标记未知 Cuperflow FPGA capability：$capability" >&2; return 1 ;;
+      esac
     else
       case "$board:$capability" in
         u55c:synthesize-only) artifact='fpga/artifacts/spmv-resource-probe.xo' ;;
@@ -1410,6 +1431,33 @@ profile_cache_valid() {
       $(value "$file" SPMV_FP64_MUL_LATENCY) == 12 && $(value "$file" SPMV_FP64_MUL_II) == 1 &&
       -z $(value "$file" XLEN) && -z $(value "$file" NEMU_PRESET) &&
       -n $(value "$file" FPGA_PART) && -n $(value "$file" FPGA_PLATFORM) ]] || return 1
+    return 0
+  fi
+  if [[ $scope == fpga && $(value "$file" ACCELERATOR_HOST_ABI) == spmv-cuperflow-u55c-v1 ]]; then
+    [[ $capability =~ ^(synthesize-only|bitstream-only)$ && $target == SPMV && $board == u55c &&
+      $(value "$file" HOST_ABI) == none && $(value "$file" ACCELERATOR_HOST_KIND) == spmv &&
+      $(value "$file" PROTOCOL_ABI) == spmv-cuperflow-u55c-v1 &&
+      $(value "$file" SPMV_CUPERFLOW_XRT_KERNEL) == SpmvCuperflowKernel &&
+      $(value "$file" SPMV_CUPERFLOW_HBM_PC_COUNT) == 16 &&
+      $(value "$file" SPMV_CUPERFLOW_HBM_BASE) == 0x0 &&
+      $(value "$file" SPMV_CUPERFLOW_HBM_BYTES) == 134217728 &&
+      $(value "$file" SPMV_CUPERFLOW_X_REGION_BYTES) == 67108864 &&
+      $(value "$file" SPMV_CUPERFLOW_AXI_ADDR_WIDTH) == 64 &&
+      $(value "$file" SPMV_CUPERFLOW_AXI_DATA_WIDTH) == 512 &&
+      $(value "$file" SPMV_CUPERFLOW_AXI_ID_WIDTH) == 4 &&
+      $(value "$file" SPMV_CUPERFLOW_MAX_OUTSTANDING_BURSTS) == 2 &&
+      $(value "$file" SPMV_CUPERFLOW_X_WINDOW_SIZE) == 8192 &&
+      $(value "$file" SPMV_CUPERFLOW_X_REPLICA_COUNT) == 4 &&
+      $(value "$file" SPMV_CUPERFLOW_X_ELEMENT_WIDTH) == 64 &&
+      $(value "$file" SPMV_CUPERFLOW_X_DECODER_LANES) == 8 &&
+      $(value "$file" SPMV_FP64_MUL_PROVIDER) == xilinx-floating-point-v7.1 &&
+      $(value "$file" SPMV_FP64_MUL_LATENCY) == 12 &&
+      $(value "$file" SPMV_FP64_MUL_II) == 1 &&
+      $(value "$file" SPMV_FP64_MUL_LANES) == 8 &&
+      $(value "$file" SPMV_FP64_MUL_CORE_COUNT) == 16 &&
+      $(value "$file" SPMV_FP64_MUL_TOTAL_LANES) == 128 &&
+      -n $(value "$file" FPGA_PART) && -n $(value "$file" FPGA_PLATFORM) &&
+      $(value "$file" FPGA_CLOCK_MHZ) == 250 && $(value "$file" FPGA_PLATFORM_CLOCK_MHZ) == 300 ]] || return 1
     return 0
   fi
   case "$capability" in
