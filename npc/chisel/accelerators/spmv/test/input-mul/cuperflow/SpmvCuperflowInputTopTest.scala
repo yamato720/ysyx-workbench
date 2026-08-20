@@ -12,21 +12,17 @@ class SpmvCuperflowInputTopTest extends AnyFlatSpec {
     xRegionBytes = 4096
   )
 
-  "Cuperflow input top" should "展开每 PC 单 HBM 端口、map 控制和连续 X 装填器" in {
+  "Cuperflow input top" should "接受 L1 v6 slot，并将 rowLast/chunkMode 交给乘法响应路径" in {
     val chirrtl = ChiselStage.emitCHIRRTL(new SpmvCuperflowInputTop(config))
 
-    assert(chirrtl.contains("module SpmvCuperflowInputTop"))
-    assert(chirrtl.contains("module SpmvCuperflowLane"))
-    assert(chirrtl.contains("module SpmvCuperflowLocalX"))
-    assert(chirrtl.contains("module SpmvCuperflowIssuedXWriteStage"))
-    assert(!chirrtl.contains("module SpmvCuperflowXDecoder8"))
-    assert(chirrtl.contains("start"))
-    assert(chirrtl.contains("done"))
-    assert(chirrtl.contains("hbm :"))
-    assert(chirrtl.contains("SpmvMulEngine"))
-    assert(!chirrtl.contains("SpmvCtrlInput"))
-    assert(!chirrtl.contains("globalXReady"))
-    assert(!chirrtl.contains("roundDone"))
+    assert(config.slotAbi == "cuperflow-a-slot-v6")
+    assert(config.mulConfig.cuperSlotAbi == "cuperflow-a-slot-v6")
+    assert(config.mulConfig.cuperSlotRowBits == 13)
+    assert(chirrtl.contains("rowLast"))
+    assert(chirrtl.contains("chunkMode"))
+    assert(chirrtl.contains("SpmvCuperflowProductBeatJoin"))
+    assert(chirrtl.contains("beatSeq"))
+    assert(chirrtl.contains("laneValid"))
   }
 
   it should "固定单 PC 的 X/A 分区与连续 X 的最大 payload 容量" in {
@@ -39,12 +35,22 @@ class SpmvCuperflowInputTopTest extends AnyFlatSpec {
     assert(config.xBankCount == 1)
   }
 
-  it should "在 xPingPong 下仍展开独立 PC 且实例化双窗口 local-X" in {
+  it should "在 xPingPong 下保持同一 L1 v6 slot ABI" in {
     val pingPong = config.copy(xPingPong = true)
-    val chirrtl = ChiselStage.emitCHIRRTL(new SpmvCuperflowInputTop(pingPong))
     assert(pingPong.xBankCount == 2)
-    assert(chirrtl.contains("module SpmvCuperflowLocalX"))
-    assert(chirrtl.contains("issuedSequentialWrite_b0_r0"))
-    assert(chirrtl.contains("activate"))
+    assert(pingPong.mulConfig.cuperSlotAbi == "cuperflow-a-slot-v6")
+    assert(ChiselStage.emitCHIRRTL(new SpmvCuperflowInputTop(pingPong)).contains("SpmvMulEngine"))
+  }
+
+  it should "用同一 ProductBeat ABI 展开全部 1..16 PC 几何" in {
+    for (pcCount <- 1 to 16) {
+      val parameterized = config.copy(hbmPcCount = pcCount)
+      val chirrtl = ChiselStage.emitCHIRRTL(new SpmvCuperflowInputTop(parameterized))
+      assert(parameterized.mulConfig.aReaderCount == pcCount)
+      assert(chirrtl.contains("product"))
+      assert(chirrtl.contains("SpmvCuperflowProductBeatJoin"))
+    }
+    assertThrows[IllegalArgumentException](config.copy(hbmPcCount = 0))
+    assertThrows[IllegalArgumentException](config.copy(hbmPcCount = 17))
   }
 }

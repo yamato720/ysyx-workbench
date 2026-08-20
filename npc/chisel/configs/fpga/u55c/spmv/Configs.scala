@@ -52,6 +52,24 @@ class U55cSpmvCuperflow250MHzBitstreamConfig extends CDEConfig(
     new U55cSpmvBoardConfig(coreClockMHz = 250)
 ) with U55cSpmvCuperflowBitstreamTerminal
 
+/** 将 Cuperflow 缩至 8 个 HBM PC 的 250 MHz 时序收敛探针。 */
+class U55cSpmvCuperflow8Pc250MHzTimingProbeConfig extends CDEConfig(
+  new WithSpmvCuperflowConfig(SpmvCuperflowConfig.U55c.copy(hbmPcCount = 8)) ++
+    new U55cSpmvBoardConfig(coreClockMHz = 250)
+) with U55cSpmvCuperflowBitstreamTerminal
+
+/** 仅保留一个 HBM PC 的 250 MHz 时序隔离探针。 */
+class U55cSpmvCuperflow1Pc250MHzTimingProbeConfig extends CDEConfig(
+  new WithSpmvCuperflowConfig(SpmvCuperflowConfig.U55c.copy(hbmPcCount = 1)) ++
+    new U55cSpmvBoardConfig(coreClockMHz = 250)
+) with U55cSpmvCuperflowSynthesisTerminal
+
+/** 仅保留一个 HBM PC 的 250 MHz Cuperflow bitstream 入口。 */
+class U55cSpmvCuperflow1Pc250MHzBitstreamConfig extends CDEConfig(
+  new WithSpmvCuperflowConfig(SpmvCuperflowConfig.U55c.copy(hbmPcCount = 1)) ++
+    new U55cSpmvBoardConfig(coreClockMHz = 250)
+) with U55cSpmvCuperflowBitstreamTerminal
+
 /** 同一 Cuperflow FPGA 通路，local-X 打开第二套 ping/pong 窗口。 */
 class U55cSpmvCuperflowPingPong250MHzSynthesisConfig extends CDEConfig(
   new WithSpmvCuperflowLocalXPingPongConfig ++

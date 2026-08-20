@@ -14,7 +14,8 @@ HISPMV_PREPROCESS_BIN := $(BUILD_DIR)/hispmv-preprocess-benchmark
 ENCODING_SOURCES := encoding/encoder.cpp encoding/cuper/cuper.cpp encoding/cuper/demand_schedule.cpp \
 	encoding/cuper/report.cpp encoding/cuper/vector_report.cpp \
 	encoding/cuperflow/cuperflow.cpp encoding/cuperflow/demand_schedule.cpp \
-	encoding/cuperflow/report.cpp encoding/cuperflow/vector_report.cpp
+	encoding/cuperflow/product_beat_golden.cpp encoding/cuperflow/report.cpp \
+	encoding/cuperflow/vector_report.cpp
 HOST_SOURCES := host.cpp golden.cpp $(ENCODING_SOURCES)
 HOST_OBJECTS = $(addprefix $(BUILD_DIR)/,$(HOST_SOURCES:.cpp=.o))
 ENCODING_OBJECTS := $(addprefix $(BUILD_DIR)/,$(ENCODING_SOURCES:.cpp=.o))
@@ -40,7 +41,7 @@ CPPFLAGS += -DCUPERFLOW_TIMING_FP64_MUL_LATENCY=$(CUPERFLOW_TIMING_FP64_MUL_LATE
 
 SPMV_PROFILE_FILE ?= $(if $(strip $(CONSTRUCTION_PROFILE)),$(CONSTRUCTION_PROFILE),$(if $(strip $(CONSTRUCTION_DIR)),$(CONSTRUCTION_DIR)/profile.env,))
 spmv_profile_value = $(shell test -n "$(SPMV_PROFILE_FILE)" && test -f "$(SPMV_PROFILE_FILE)" && sed -n 's/^$(1)=//p' "$(SPMV_PROFILE_FILE)" | tail -n 1)
-SPMV_CUPERFLOW_RTL := $(if $(filter spmv-cuperflow-rtl-v3,$(call spmv_profile_value,ACCELERATOR_HOST_ABI)),1,)
+SPMV_CUPERFLOW_RTL := $(if $(filter spmv-cuperflow-rtl-v4,$(call spmv_profile_value,ACCELERATOR_HOST_ABI)),1,)
 
 ifeq ($(SPMV_CUPERFLOW_RTL),1)
 HOST_SOURCES += input/cuperflow_rtl_timing.cpp
@@ -157,6 +158,7 @@ CPPFLAGS += -DSPMV_CUPERFLOW_RTL_VERILATOR -I$(MODEL_DIR) -isystem $(VERILATOR_R
 	-DSPMV_CUPERFLOW_AXI_DATA_WIDTH_FROZEN=$(call spmv_profile_value,SPMV_CUPERFLOW_AXI_DATA_WIDTH) \
 	-DSPMV_CUPERFLOW_AXI_ID_WIDTH_FROZEN=$(call spmv_profile_value,SPMV_CUPERFLOW_AXI_ID_WIDTH) \
 	-DSPMV_CUPERFLOW_MAX_OUTSTANDING_BURSTS_FROZEN=$(call spmv_profile_value,SPMV_CUPERFLOW_MAX_OUTSTANDING_BURSTS) \
+	-DSPMV_CUPERFLOW_ROW_BATCH_SIZE_FROZEN=$(call spmv_profile_value,SPMV_CUPERFLOW_ROW_BATCH_SIZE) \
 	-DSPMV_CUPERFLOW_X_WINDOW_SIZE_FROZEN=$(call spmv_profile_value,SPMV_CUPERFLOW_X_WINDOW_SIZE) \
 	-DSPMV_CUPERFLOW_X_ELEMENT_WIDTH_FROZEN=$(call spmv_profile_value,SPMV_CUPERFLOW_X_ELEMENT_WIDTH) \
 	-DSPMV_CUPERFLOW_X_LOAD_LANES_FROZEN=$(call spmv_profile_value,SPMV_CUPERFLOW_X_LOAD_LANES) \
@@ -249,11 +251,11 @@ ifeq ($(SPMV_CUPERFLOW_RTL),1)
 	@{ \
 		printf '%s\n' 'HOST_FORMAT=15'; \
 		printf 'CONFIG_FQCN=%s\n' "$$(sed -n 's/^CONFIG_FQCN=//p' "$(SPMV_PROFILE_FILE)")"; \
-		printf '%s\n' 'ACCELERATOR_HOST_KIND=spmv' 'ACCELERATOR_HOST_ABI=spmv-cuperflow-rtl-v3' 'PROTOCOL_ABI=spmv-cuperflow-rtl-v3'; \
+		printf '%s\n' 'ACCELERATOR_HOST_KIND=spmv' 'ACCELERATOR_HOST_ABI=spmv-cuperflow-rtl-v4' 'PROTOCOL_ABI=spmv-cuperflow-l1-v0'; \
 		for key in SPMV_CUPERFLOW_HBM_PC_COUNT SPMV_CUPERFLOW_HBM_BASE SPMV_CUPERFLOW_HBM_BYTES SPMV_CUPERFLOW_X_REGION_BYTES \
 			SPMV_CUPERFLOW_AXI_ADDR_WIDTH SPMV_CUPERFLOW_AXI_DATA_WIDTH SPMV_CUPERFLOW_AXI_ID_WIDTH \
-			SPMV_CUPERFLOW_MAX_OUTSTANDING_BURSTS SPMV_CUPERFLOW_X_WINDOW_SIZE SPMV_CUPERFLOW_X_REPLICA_COUNT \
-			SPMV_CUPERFLOW_X_ELEMENT_WIDTH SPMV_CUPERFLOW_X_LOAD_LANES SPMV_CUPERFLOW_MAP_ABI SPMV_FP64_MUL_INTERFACE SPMV_FP64_MUL_PROVIDER \
+			SPMV_CUPERFLOW_MAX_OUTSTANDING_BURSTS SPMV_CUPERFLOW_ROW_BATCH_SIZE SPMV_CUPERFLOW_X_WINDOW_SIZE SPMV_CUPERFLOW_X_REPLICA_COUNT \
+			SPMV_CUPERFLOW_X_ELEMENT_WIDTH SPMV_CUPERFLOW_X_LOAD_LANES SPMV_CUPERFLOW_SLOT_ABI SPMV_CUPERFLOW_MAP_ABI SPMV_CUPERFLOW_BATCH_DESCRIPTOR_ABI SPMV_FP64_MUL_INTERFACE SPMV_FP64_MUL_PROVIDER \
 			SPMV_FP64_MUL_LATENCY SPMV_FP64_MUL_II SPMV_FP64_MUL_RESPONSE_FIFO_DEPTH SPMV_FP64_MUL_LANES \
 			SPMV_FP64_MUL_CORE_COUNT SPMV_FP64_MUL_TOTAL_LANES SPMV_PERFORMANCE_HTML SPMV_PIPELINE_HTML; do \
 			printf '%s=%s\n' "$$key" "$$(sed -n "s/^$$key=//p" "$(SPMV_PROFILE_FILE)" | tail -n 1)"; \
@@ -339,6 +341,11 @@ cuperflow-encoding-html-test: build-host
 		"$(SPMV_ENCODING_REPORT_DIR)/cuperflow/$${mainargs:-$(ENCODING_TEST_DATASET)}.html"
 	@node "$(CURDIR)/encoding/vector_html_report_test.js" \
 		"$(SPMV_ENCODING_REPORT_DIR)/cuperflow/$${mainargs:-$(ENCODING_TEST_DATASET)}-x.html"
+
+# V0 ABI 回归固定使用小型 n512 和完整 thermal2，分别覆盖常规与多 batch/wave 布局。
+cuperflow-v0-validator-test:
+	@$(MAKE) --no-print-directory cuperflow-encoding-html-test mainargs=n512
+	@$(MAKE) --no-print-directory cuperflow-encoding-html-test mainargs=thermal2
 
 cuperflow-timing:
 	@test "$(SPMV_CUPERFLOW_RTL)" = 1 || { \

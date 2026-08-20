@@ -28,4 +28,11 @@ class SpmvCuperflowXDecoderTest extends AnyFlatSpec {
     assert(chirrtl.contains("rangeElements"))
     assert(chirrtl.contains("error"))
   }
+
+  it should "冻结 GROUP_MAP lane3 的 sliceGroup/xElements 低 32-bit 排布" in {
+    assert(SpmvCuperflowMapFormat.sliceGroupLowBit == 0)
+    assert(SpmvCuperflowMapFormat.sliceGroupHighBit == 15)
+    assert(SpmvCuperflowMapFormat.xElementsLowBit == 16)
+    assert(SpmvCuperflowMapFormat.xElementsHighBit == 31)
+  }
 }

@@ -23,7 +23,8 @@ constexpr std::size_t kVectorPartitionFactor = 8;
 constexpr std::size_t kMaxXRangeElements = 8192;
 constexpr bool kFlexibleXEncodingEnabled = CUPERFLOW_ENABLE_FLEX_X != 0;
 
-/** Cuperflow A slot v5：`groupColumn[63:51] | segmentId[50:48] | localRow[47:32] | fp32[31:0]`。
+/** Cuperflow A slot v6：`groupColumn[63:51] | segmentId[50:48] | rowLast[47] |
+  * chunkMode[46:45] | localRow[44:32] | fp32[31:0]`。
   *
   * `localRow` 是当前 row batch 内的物理行标。work/product 中的 `batch` 与
   * `localRow` 共同恢复全局 physical row；HBM channel 只代表本轮独占的列 sliceGroup，
@@ -37,12 +38,59 @@ constexpr std::uint32_t kColumnBits = 13;
 constexpr std::uint32_t kTagBits = 3;
 constexpr std::size_t kMaxXSegments = std::size_t{1} << kTagBits;
 constexpr std::uint32_t kXSegmentCountBits = 14;
-constexpr std::uint32_t kRowBits = 16;
+constexpr std::uint32_t kRowBits = 13;
+constexpr std::uint32_t kCuperflowSlotVersion = 6;
+constexpr std::uint32_t kCuperflowMapVersion = 4;
+constexpr std::uint32_t kCuperflowBatchDescriptorVersion = 1;
+/** V0 统计使用的候选 FADD latency；它只用于 FIFO/ROB 容量分析，不代表 RTL 时序。 */
+constexpr std::uint32_t kAnalysisCandidateFaddLatency = 4;
 constexpr std::uint64_t kZeroFillSlot = 0;
+
+using CuperflowBeat = std::array<std::uint64_t, kLanesPerBeat>;
+using CuperflowVectorBeat = std::array<std::uint64_t, kVectorLanesPerBeat>;
+static_assert(sizeof(CuperflowBeat) == 64, "Cuperflow A beat 必须为 512 bit");
+static_assert(sizeof(CuperflowVectorBeat) == 64, "Cuperflow X beat 必须为 512 bit");
+
+/** 每个 A beat 内固定划分的 row partial 宽度。00/01/10 是 v6 的唯三合法编码。 */
+enum class CuperflowChunkMode : std::uint8_t {
+  Full8 = 0b00,
+  Two4 = 0b01,
+  Four2 = 0b10,
+};
+
+std::size_t slotsPerChunk(CuperflowChunkMode mode);
+
+/** A beat 的物理排布。
+  *
+  * RowRoundRobin 是 Cuperflow 的正式布局：同一物理行的完整八项先构成一个 beat，
+  * 然后按 batch-local row 0..rowBatchSize-1 轮转；下一轮才继续每行的后续八项。
+  * 短行尾部按照 `tailPacking` 切为不跨行的子块；同宽子块按行号拼入一个物理
+  * beat。默认 `pad3-1` 只使用 4、2 两种对齐粒度；`all-to-4` 对照策略会把全部
+  * 短尾补到四项。V0 不生成 1-slot chunk。空行不发射 beat。
+  *
+  * LaneStriped 仅保留给旧 X-page 局部列重排实验；它把八条 lane 流按相同位置横拼，
+  * 不适合作为后续行累加器的输入契约。
+  */
+enum class CuperflowAPacking {
+  RowRoundRobin,
+  LaneStriped,
+};
+
+/** RowRoundRobin 短行尾部的子块策略。
+  *
+  * Pad3To4And1To2 是正式默认值：3 项尾部补一项为 4，1 项尾部补一项为 2，L1
+  * 只需处理 8/4/2 对齐粒度。Compact421 仅为旧吞吐实验保留，slot v6 的
+  * RowRoundRobin 编码器必须拒绝它。PadAllTo4 把每个不足 4 项的尾部补到 4。
+  */
+enum class CuperflowTailPacking {
+  Compact421,
+  Pad3To4And1To2,
+  PadAllTo4,
+};
 
 /**
  * 为后续多段 `SEG_NAN` 方案保留的 FP64 地址 token。它是一个带固定 opcode 和 magic 的
- * quiet NaN，低 13 位保存当前 sliceGroup 内的 BRAM 地址。map ABI v3 的正式 payload
+ * quiet NaN，低 13 位保存当前 sliceGroup 内的 BRAM 地址。map ABI v4 的正式 payload
  * 不使用它，编码器和 RTL 都要求 markerCount 为零。
  */
 constexpr std::uint32_t kXAddressMarkerOpcode = 0b001;
@@ -63,10 +111,10 @@ std::uint32_t decodeXAddressMarker(std::uint64_t word);
  * X 区里一张固定 1-beat 的 map。lane0 是与 ADDR 不同的 quiet NaN
  *（opcode=010, magic=0x2b6b6）；其余 lane 按小端 uint32 对存放控制字。
  *
- *   lane0  MAP_NAN，bit0=last
+ *   lane0  MAP_NAN，包含 version 和 bit0=last
  *   lane1  xBeats[31:0] | xWords[63:32]
- *   lane2  aOffsetBeats[31:0] | aBeats[63:32]
- *   lane3  firstBatch[15:0] | sliceGroup[31:16] | xElements[47:32] | last[48]
+ *   lane2  batchDescriptorCount[31:0] | reserved[63:32]
+ *   lane3  sliceGroup[15:0] | xElements[31:16] | reserved[63:32]
  *   lane4  segment0[31:0] | segment1[63:32]
  *   lane5  segment2[31:0] | segment3[63:32]
  *   lane6  segment4[31:0] | segment5[63:32]
@@ -78,6 +126,8 @@ std::uint32_t decodeXAddressMarker(std::uint64_t word);
 constexpr std::uint32_t kXMapMarkerOpcode = 0b010;
 constexpr std::uint64_t kXMapMarkerMagic = 0x2b6b6;
 constexpr std::uint64_t kXMapMarkerLastMask = 1U;
+constexpr std::uint32_t kXMapMarkerVersionShift = 1;
+constexpr std::uint32_t kXMapMarkerVersionBits = 12;
 constexpr std::uint64_t kXMapMarkerBase =
     (std::uint64_t{0x7ff} << 52U) |
     (std::uint64_t{1} << 51U) |
@@ -102,9 +152,7 @@ inline bool operator!=(const CuperflowXSegment& lhs, const CuperflowXSegment& rh
 struct CuperflowMapBeat {
   std::uint32_t xBeats = 0;
   std::uint32_t xWords = 0;
-  std::uint32_t aOffsetBeats = 0;
-  std::uint32_t aBeats = 0;
-  std::uint16_t firstBatch = 0;
+  std::uint32_t batchDescriptorCount = 0;
   std::uint16_t sliceGroup = 0;
   /** 所有非空段长度之和，也就是顺序 payload 的 FP64 数量。 */
   std::uint16_t xElements = 0;
@@ -114,6 +162,41 @@ struct CuperflowMapBeat {
 
 std::uint64_t makeXMapMarker(bool last);
 bool isXMapMarker(std::uint64_t word);
+
+/** 一张固定 1-beat 的 BATCH_DESC，独立于 GROUP_MAP 出现。
+  *
+  * lane0  descriptor marker，包含 magic、version 和 `lastBatchInGroup`；
+  * lane1  batchId[31:0] | aOffsetBeats[63:32]；
+  * lane2  aBeats[31:0] | contributorOffsetWords[63:32]；
+  * lane3  contributorWordCount[31:0] | activeRowCount[63:32]；
+  * lane4..7 必须为零。
+  */
+constexpr std::uint32_t kBatchDescriptorMarkerOpcode = 0b011;
+constexpr std::uint64_t kBatchDescriptorMarkerMagic = 0x35ca7;
+constexpr std::uint64_t kBatchDescriptorMarkerLastMask = 1U;
+constexpr std::uint32_t kBatchDescriptorMarkerVersionShift = 1;
+constexpr std::uint32_t kBatchDescriptorMarkerVersionBits = 12;
+constexpr std::uint64_t kBatchDescriptorMarkerBase =
+    (std::uint64_t{0x7ff} << 52U) |
+    (std::uint64_t{1} << 51U) |
+    (static_cast<std::uint64_t>(kBatchDescriptorMarkerOpcode) << 48U) |
+    (kBatchDescriptorMarkerMagic << 13U);
+
+struct CuperflowBatchDescriptor {
+  std::uint32_t batchId = 0;
+  std::uint32_t aOffsetBeats = 0;
+  std::uint32_t aBeats = 0;
+  std::uint32_t contributorOffsetWords = 0;
+  std::uint32_t contributorWordCount = 0;
+  std::uint32_t activeRowCount = 0;
+  bool lastBatchInGroup = false;
+};
+
+std::uint64_t makeBatchDescriptorMarker(bool lastBatchInGroup);
+bool isBatchDescriptorMarker(std::uint64_t word);
+void validateBatchDescriptor(const CuperflowBatchDescriptor& descriptor);
+CuperflowVectorBeat packBatchDescriptor(const CuperflowBatchDescriptor& descriptor);
+CuperflowBatchDescriptor unpackBatchDescriptor(const CuperflowVectorBeat& beat);
 
 struct CuperflowConfig {
   /** A 矩阵使用的独立 HBM channel 数；每路固定有 8 个 slot lane。 */
@@ -130,12 +213,11 @@ struct CuperflowConfig {
   std::size_t reorderWindow = 0;
   /** 是否在每个 row batch 内按行 nnz 做 PE 负载均衡重排。 */
   bool rowReorder = true;
+  /** A beat 排布；默认以同 row beat 支持后续行累加。 */
+  CuperflowAPacking aPacking = CuperflowAPacking::RowRoundRobin;
+  /** RowRoundRobin 的短行尾部策略；默认采用 L1 友好的 3->4、1->2 对齐。 */
+  CuperflowTailPacking tailPacking = CuperflowTailPacking::Pad3To4And1To2;
 };
-
-using CuperflowBeat = std::array<std::uint64_t, kLanesPerBeat>;
-using CuperflowVectorBeat = std::array<std::uint64_t, kVectorLanesPerBeat>;
-static_assert(sizeof(CuperflowBeat) == 64, "Cuperflow A beat 必须为 512 bit");
-static_assert(sizeof(CuperflowVectorBeat) == 64, "Cuperflow X beat 必须为 512 bit");
 
 CuperflowVectorBeat packMapBeat(const CuperflowMapBeat& map);
 CuperflowMapBeat unpackMapBeat(const CuperflowVectorBeat& beat);
@@ -155,15 +237,73 @@ struct CuperflowEncodingStats {
   std::uint64_t matrixSlots = 0;
   /** 编码布局为固定 beat 补入的全零 slot 数量；它不改变硬件控制语义。 */
   std::uint64_t zeroFillSlots = 0;
+  /** 编码到 FP32 后为 +0/-0 而被删除的 CSR 项。 */
+  std::uint64_t droppedExplicitZeros = 0;
+  std::uint64_t full8ChunkCount = 0;
+  std::uint64_t two4ChunkCount = 0;
+  std::uint64_t four2ChunkCount = 0;
+  std::uint64_t rowPartial1BeatCount = 0;
+  std::uint64_t rowPartial2BeatCount = 0;
+  std::uint64_t rowPartial4BeatCount = 0;
+  std::uint64_t batchDescriptorCount = 0;
+  std::uint64_t emptyBatchCount = 0;
+  /** 同一 `(PC,batch,row)` 相邻 RowPartial 的 A beat 距离统计。 */
+  std::uint64_t chunkInterBeatDistanceCount = 0;
+  std::uint64_t chunkInterBeatDistanceTotal = 0;
+  std::uint64_t chunkInterBeatDistanceMinimum = 0;
+  std::uint64_t chunkInterBeatDistanceMaximum = 0;
+  std::uint64_t chunkInterBeatDistanceBelowFaddLatency = 0;
+  std::uint32_t candidateFaddLatency = kAnalysisCandidateFaddLatency;
+  /** `(wave,batch,row)` 16-PC contributor mask 的 popcount 直方图。 */
+  std::array<std::uint64_t, kLanesPerBeat * 2U + 1U> contributorPopcountHistogram{};
+  /** 用每个 PC 的真实 A beat 顺序回放得到的 completion ROB 峰值。 */
+  std::uint64_t completionRobPeak = 0;
+  /** 每个非空 A sliceGroup 恰好一次的 X payload 装载计划及其期望值。 */
+  std::uint64_t xPayloadLoadCount = 0;
+  std::uint64_t expectedXPayloadLoadCount = 0;
   std::uint64_t packedBytes = 0;
 
   double matrixSlotUtilization() const;
 };
 
+/** 单个 PC 的 V0 预处理负载。activeRows 是该 PC 在所有 group/batch 的 rowLast 总数。 */
+struct CuperflowPcL1Stats {
+  std::uint64_t aBeats = 0;
+  std::uint64_t effectiveSlots = 0;
+  std::uint64_t activeRows = 0;
+  std::uint64_t emptyBatches = 0;
+};
+
+inline bool operator==(const CuperflowPcL1Stats& lhs, const CuperflowPcL1Stats& rhs) {
+  return lhs.aBeats == rhs.aBeats && lhs.effectiveSlots == rhs.effectiveSlots &&
+      lhs.activeRows == rhs.activeRows && lhs.emptyBatches == rhs.emptyBatches;
+}
+
+inline bool operator!=(const CuperflowPcL1Stats& lhs, const CuperflowPcL1Stats& rhs) {
+  return !(lhs == rhs);
+}
+
+/** `(wave,batch)` 的横向规约前置条件统计。 */
+struct CuperflowWaveBatchL1Stats {
+  std::uint64_t activeRows = 0;
+  std::uint64_t maxPcProgressGap = 0;
+};
+
+inline bool operator==(const CuperflowWaveBatchL1Stats& lhs,
+                       const CuperflowWaveBatchL1Stats& rhs) {
+  return lhs.activeRows == rhs.activeRows &&
+      lhs.maxPcProgressGap == rhs.maxPcProgressGap;
+}
+
+inline bool operator!=(const CuperflowWaveBatchL1Stats& lhs,
+                       const CuperflowWaveBatchL1Stats& rhs) {
+  return !(lhs == rhs);
+}
+
 struct CuperflowPackage {
   /** 编码时采用的静态 HBM、row batch、column slice 和同一行调度参数。 */
   CuperflowConfig config;
-  /** 原始 CSR 矩阵维度；由 PE-local 16-bit 行标表达。 */
+  /** 原始 CSR 矩阵维度；由 batch + 13-bit localRow 表达物理行。 */
   std::size_t rows = 0;
   std::size_t columns = 0;
   /** 原始 CSR 的非零元数量，等于所有实际矩阵 slot 的总数。 */
@@ -176,6 +316,8 @@ struct CuperflowPackage {
   /** 实际采用的 slice group 宽度和数量；最后一个 group 可以不足该宽度。 */
   std::size_t sliceGroupSize = 0;
   std::size_t sliceGroupCount = 0;
+  /** 每个 wave 同时覆盖至多一个 sliceGroup/PC。 */
+  std::size_t contributorWaveCount = 0;
   /** slice group 到 HBM 的独占 A/X 映射；group g 归属 channel[g % hbmChannelCount]。 */
   std::vector<std::size_t> sliceGroupChannels;
   /** 每个 HBM 持有的 slice group 编号，按 X 装载顺序排列。 */
@@ -185,6 +327,8 @@ struct CuperflowPackage {
   /** 每个 sliceGroup 的连续 X 段计划；A slot 的 segmentId 直接索引此表。 */
   std::vector<std::vector<CuperflowXSegment>> xSegmentsByGroup;
   // 软件/报告用的 (rowBatch, sliceGroup, lane) 范围，指向 group-major 的 A 流。
+  // LaneStriped 时每个 lane 的有效 slot 连续；RowRoundRobin 时八个 lane 都登记本组
+  // 的完整 beat 区间，必须再用 matrixEntryMasks 过滤短行尾部空 slot。
   // 同一 group 的全部 row batch 在 owner HBM 上连成一段；空 group 的范围为 [0,0)。
   std::vector<std::vector<std::uint32_t>> channelBatchPointers;
   std::vector<std::vector<std::array<std::pair<std::uint32_t, std::uint32_t>, kLanesPerBeat>>>
@@ -198,6 +342,18 @@ struct CuperflowPackage {
     * 它不写入 HBM，RTL 也完全不读取它。
     */
   std::vector<std::vector<std::uint8_t>> matrixEntryMasks;
+  /** 每个 channel/group 的 BATCH_DESC 起始下标；UINT32_MAX 表示该 channel 不拥有 group。 */
+  std::vector<std::vector<std::uint32_t>> channelGroupDescriptorOffsets;
+  /** 每个 channel 依 group、batch 顺序排列的 BATCH_DESC。 */
+  std::vector<std::vector<CuperflowBatchDescriptor>> channelBatchDescriptors;
+  /** 每个 channel 的 1-bit active-row bitmap，按 descriptor 的 offset/count 寻址。 */
+  std::vector<std::vector<std::uint64_t>> channelContributorWords;
+  /** `(batch * contributorWaveCount + wave)` 的 row-major 16-bit contributor mask。 */
+  std::vector<std::vector<std::uint16_t>> contributorMasksByWaveBatch;
+  /** 每个 PC 的 A/slot/row 负载，长度固定为 hbmChannelCount。 */
+  std::vector<CuperflowPcL1Stats> pcL1Stats;
+  /** `(batch * contributorWaveCount + wave)` 的 active-row 与 PC progress 分布。 */
+  std::vector<CuperflowWaveBatchL1Stats> waveBatchL1Stats;
   CuperflowEncodingStats stats;
 };
 
@@ -244,6 +400,10 @@ struct CuperflowXRange {
   std::uint32_t beatEnd = 0;
   std::uint32_t aOffsetBeats = 0;
   std::uint32_t aBeats = 0;
+  std::uint32_t batchDescriptorCount = 0;
+  /** descriptor/bitmap 在 channelHbmBeats 中的闭开 beat 区间。 */
+  std::uint32_t descriptorBeatBegin = 0;
+  std::uint32_t descriptorBeatEnd = 0;
   bool last = false;
 };
 
@@ -279,7 +439,10 @@ struct DecodedCuperflowSlot {
   std::uint32_t localColumn = 0;
   /** 当前 map 的 X 段号；A 侧用它恢复顺序 payload 内的 local-X 地址。 */
   std::uint32_t segmentId = 0;
-  /** 16-bit PE-local 物理行标；slot 所在 PE 可将其反解为 physical row。 */
+  /** 当前 chunk 是否是该 PC 对本行的最终 partial。 */
+  bool rowLast = false;
+  CuperflowChunkMode chunkMode = CuperflowChunkMode::Full8;
+  /** 13-bit batch-local 物理行标。 */
   std::uint32_t localRow = 0;
   float value = 0.0F;
 };
@@ -301,6 +464,11 @@ std::size_t rowForPeLocal(std::size_t physicalPe, std::size_t localRow,
 std::size_t physicalRowForBatchLocal(std::size_t batch, std::size_t localRow,
                                      const CuperflowConfig& config);
 DecodedCuperflowSlot decodeSlot(std::uint64_t slot);
+/** 验证 slot、rowLast、active bitmap 和 descriptor 的完整 V0 package 合同。 */
+void validatePackage(const CuperflowPackage& package);
+/** 验证 GROUP_MAP/BATCH_DESC 没有让同一 sliceGroup 的 X payload 重复装载。 */
+void validateXPayloadLoads(const CuperflowPackage& matrixPackage,
+                           const CuperflowVectorPackage& vectorPackage);
 CuperflowPackage encode(const CsrMatrix& matrix, const CuperflowConfig& config = {});
 CuperflowVectorPackage encodeVector(const std::vector<double>& input,
                                 const CuperflowConfig& config = {});

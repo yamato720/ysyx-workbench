@@ -20,6 +20,8 @@ final case class SpmvCuperflowConfig(
   axiDataWidth: Int = 512,
   axiIdWidth: Int = 4,
   maxOutstandingBursts: Int = 2,
+  /** 与 Cuperflow slot v6 共用的 batch-local 行数上限。 */
+  rowBatchSize: Int = 8192,
   xWindowSize: Int = 8192,
   xReplicaCount: Int = 4,
   /** 为 true 时 local-X 实例化两套窗口，写 inactive、activate 后读 active。 */
@@ -34,8 +36,8 @@ final case class SpmvCuperflowConfig(
   fp64MultiplyResponseFifoDepth: Int = 4,
   fp64MulProvider: SpmvFp64MulProvider = SpmvFp64MulProvider.Simulation
 ) {
-  require(hbmPcCount > 0 && hbmPcCount <= 32 && hbmPcCount % 8 == 0,
-    s"Cuperflow HBM PC 数量必须是 1..32 内的 8 的倍数，实际为 $hbmPcCount")
+  require(hbmPcCount > 0 && hbmPcCount <= 16,
+    s"Cuperflow HBM PC 数量必须位于 1..16，实际为 $hbmPcCount")
   require(hbmBase >= 0 && hbmBytes > 0, "HBM 地址窗口必须为非空的非负区间")
   require(channelBaseAlignmentBytes > 0 &&
     (channelBaseAlignmentBytes & (channelBaseAlignmentBytes - 1)) == 0,
@@ -47,6 +49,8 @@ final case class SpmvCuperflowConfig(
   require(axiIdWidth > 0, s"HBM AXI ID 位宽必须为正数，实际为 $axiIdWidth")
   require(maxOutstandingBursts >= 2,
     s"满带宽 reader 至少需要两笔 outstanding burst，实际为 $maxOutstandingBursts")
+  require(rowBatchSize > 0 && rowBatchSize <= 8192,
+    s"Cuperflow slot v6 的 row batch 必须位于 1..8192，实际为 $rowBatchSize")
   require(xRegionBytes > 0 && xRegionBytes < hbmBytes && xRegionBytes % 64L == 0L,
     s"X 分区必须是 HBM 窗口内按 beat 对齐的非空真子区间，实际为 $xRegionBytes/$hbmBytes")
   require(xWindowSize == 8192,
@@ -65,8 +69,10 @@ final case class SpmvCuperflowConfig(
   val aRegionBase: Long = hbmBase + xRegionBytes
   val xMaxEncodedWords: Int = xWindowSize
   val xBankCount: Int = if (xPingPong) 2 else 1
-  /** map lane4-7 携带 8 个 X 段 descriptor，payload 是按段顺序的冻结格式。 */
-  val mapAbi: String = "cuperflow-map-multisegment-v3"
+  val slotAbi: String = "cuperflow-a-slot-v6"
+  /** map lane4-7 携带 8 个 X 段 descriptor，随后是独立 BATCH_DESC/bitmap 控制流。 */
+  val mapAbi: String = "cuperflow-map-multisegment-v4"
+  val batchDescriptorAbi: String = "cuperflow-batch-desc-v1"
 
   /** 把共享 Mixed-V3 FMUL 引擎的公共几何投影为旧输入引擎所需参数。 */
   val mulConfig: SpmvInputConfig = SpmvInputConfig(
@@ -85,6 +91,8 @@ final case class SpmvCuperflowConfig(
     fp64MultiplyLatency = fp64MultiplyLatency,
     fp64MultiplyInitiationInterval = fp64MultiplyInitiationInterval,
     fp64MultiplyResponseFifoDepth = fp64MultiplyResponseFifoDepth,
+    cuperSlotAbi = slotAbi,
+    cuperSlotRowBits = 13,
     xPortSchedule = SpmvXPortSchedule.Preload,
     fp64MulProvider = fp64MulProvider
   )
@@ -108,6 +116,14 @@ case object SpmvCuperflowConfigKey extends Field[Option[SpmvCuperflowConfig]](No
 class WithSpmvCuperflowConfig(config: SpmvCuperflowConfig) extends CDEConfig((_, _, _) => {
   case SpmvCuperflowConfigKey => Some(config)
 })
+
+/** 覆盖 Cuperflow 的 A HBM PC 数；同一值同时决定 RTL 端口、FMUL core 数和 host 编码通道数。 */
+class WithSpmvCuperflowPcCount(pcCount: Int) extends CDEConfig((_, _, up) => {
+  case SpmvCuperflowConfigKey => up(SpmvCuperflowConfigKey).map(_.copy(hbmPcCount = pcCount))
+}) {
+  require(pcCount >= 1 && pcCount <= 16,
+    s"Cuperflow HBM PC 数量必须位于 1..16，实际为 $pcCount")
+}
 
 /** 打开 Cuperflow local-X 的第二套 ping/pong 窗口。必须叠在已有 Cuperflow Config 左侧。 */
 class WithSpmvCuperflowLocalXPingPongConfig extends CDEConfig((_, _, up) => {

@@ -94,9 +94,13 @@ void validatePackage(const CuperflowVectorPackage& package) {
   const std::size_t sliceCount = columnSliceCount(package.columns, package.config);
   const std::size_t groupSize = effectiveSliceGroupSize(sliceCount, package.config);
   const std::size_t groupCount = (sliceCount + groupSize - 1U) / groupSize;
+  std::size_t rangeCount = 0;
+  for (const auto& ranges : package.channelXRanges) {
+    rangeCount += ranges.size();
+  }
   if (package.channelHbmBeats.size() != package.config.hbmChannelCount ||
       package.channelXRanges.size() != package.config.hbmChannelCount ||
-      package.stats.rangeCount != groupCount ||
+      package.stats.rangeCount != rangeCount ||
       package.stats.maximumRangeElements > kMaxXRangeElements) {
     throw std::invalid_argument("Cuperflow X HTML 报告的 per-HBM range 数量不一致");
   }

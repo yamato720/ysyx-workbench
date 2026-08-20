@@ -251,7 +251,10 @@ class SpmvMultiplicationGoldenRtlTest extends AnyFlatSpec {
       |    input [15:0] row,
       |    input [31:0] value
       |  );
-      |    slot = {column, tag, row, value};
+      |    if (MODE == 0)
+      |      slot = {column, tag, 1'b1, 2'b00, row[12:0], value};
+      |    else
+      |      slot = {column, tag, row, value};
       |  endfunction
       |
       |  logic [31:0] aValues [0:7];

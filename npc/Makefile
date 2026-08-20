@@ -144,8 +144,8 @@ SOC_NEMU_INPUTS := $(SOC_SIM_VERILOG) $(SOC_PERIP_V) $(SOC_IP_PERIP_V) \
 # 独立 SPMV 仿真只生成自己的顶层与 Verilator 模型，不进入 NPC/NEMU 构造。
 SPMV_SIM_OUT ?= $(CURDIR)/generated-spmv-simulation
 SPMV_SIM_MODEL_DIR ?= $(obj_dir)/spmv-simulation
-SPMV_SIM_TOP ?= $(if $(filter spmv-cuperflow-rtl-v3,$(ACCELERATOR_HOST_ABI)),SpmvCuperflowInputTop,SpmvInputTop)
-SPMV_SIM_ELABORATOR ?= $(if $(filter spmv-cuperflow-rtl-v3,$(ACCELERATOR_HOST_ABI)),accelerators.spmv.inputmul.cuperflow.ElaborateSpmvCuperflowInputTop,accelerators.spmv.ElaborateSpmvInputTop)
+SPMV_SIM_TOP ?= $(if $(filter spmv-cuperflow-rtl-v4,$(ACCELERATOR_HOST_ABI)),SpmvCuperflowInputTop,SpmvInputTop)
+SPMV_SIM_ELABORATOR ?= $(if $(filter spmv-cuperflow-rtl-v4,$(ACCELERATOR_HOST_ABI)),accelerators.spmv.inputmul.cuperflow.ElaborateSpmvCuperflowInputTop,accelerators.spmv.ElaborateSpmvInputTop)
 
 spmv-sim-elaborate:
 	@set -e; \

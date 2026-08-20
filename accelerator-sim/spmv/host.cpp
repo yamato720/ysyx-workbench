@@ -706,6 +706,7 @@ int runEncoding(const std::string& formatName, const std::string& requested,
     const auto& package = std::get<encoding::cuperflow::CuperflowPackage>(encoded.package);
     const auto& vectorPackage =
         std::get<encoding::cuperflow::CuperflowVectorPackage>(encodedVector.package);
+    encoding::cuperflow::validateXPayloadLoads(package, vectorPackage);
     const double loadMilliseconds =
         std::chrono::duration<double, std::milli>(loadEnd - loadStart).count();
     const double matrixMilliseconds =
@@ -732,6 +733,27 @@ int runEncoding(const std::string& formatName, const std::string& requested,
               << package.stats.matrixSlotUtilization()
               << " total_beats=" << package.stats.totalMatrixBeats
               << " packed_bytes=" << package.stats.packedBytes << '\n';
+    std::uint64_t contributorActiveRows = 0;
+    for (const auto& words : package.channelContributorWords) {
+      for (std::uint64_t word : words) {
+        contributorActiveRows += static_cast<std::uint64_t>(__builtin_popcountll(word));
+      }
+    }
+    std::cout << "[spmv-cuperflow-v0] slot_abi=cuperflow-a-slot-v6"
+              << " map_abi=cuperflow-map-multisegment-v4"
+              << " batch_descriptor_abi=cuperflow-batch-desc-v1"
+              << " row_batch_size=" << package.config.rowBatchSize
+              << " chunks_8=" << package.stats.full8ChunkCount
+              << " chunks_4=" << package.stats.two4ChunkCount
+              << " chunks_2=" << package.stats.four2ChunkCount
+              << " descriptors=" << package.stats.batchDescriptorCount
+              << " empty_batches=" << package.stats.emptyBatchCount
+              << " contributor_waves=" << package.contributorWaveCount
+              << " contributor_active_rows=" << contributorActiveRows
+              << " dropped_explicit_zeros=" << package.stats.droppedExplicitZeros
+              << " x_loads=" << package.stats.xPayloadLoadCount
+              << " expected_x_loads=" << package.stats.expectedXPayloadLoadCount
+              << " x_payload_load_assert=pass" << '\n';
     printCuperflowAStats(package);
     std::cout << "[spmv-encoding-x] source=fp64 encoded=fp64"
               << " mode=" << (vectorPackage.flexibleXEncoding ? "flexible" : "dense")

@@ -67,12 +67,14 @@ final case class SpmvInputConfig(
   fp64MultiplyResponseFifoDepth: Int = 4,
   /** 每个 512-bit Cuper A beat 同时送入乘法 IP 的 slot 数。 */
   fp64MultiplyLaneCount: Int = 8,
-  /** Cuper A slot v4 的 [63:51] 本地列号宽度。 */
+  /** Cuper A slot 的 [63:51] 本地列号宽度。 */
   cuperSlotColumnBits: Int = 13,
-  /** Cuper A slot v4 的 [50:48] 完整保留 tag 宽度，不参与当前乘法控制。 */
+  /** Cuper A slot 的 [50:48] X segment 标识宽度。 */
   cuperSlotTagBits: Int = 3,
-  /** Cuper A slot v4 的 [47:32] PE-local 行标宽度。 */
+  /** v4 为 16-bit PE-local 行标，L1 v6 为 13-bit batch-local 行标。 */
   cuperSlotRowBits: Int = 16,
+  /** 乘法顶层消费的 Cuper A slot ABI。 */
+  cuperSlotAbi: String = "cuper-a-slot-v4",
   /** local_X 写端口和 A 读端口的物理复用策略。 */
   xPortSchedule: SpmvXPortSchedule = SpmvXPortSchedule.Preload,
   /** FP64 乘法的实现提供者；U55C 必须选择可综合的 vendor IP。 */
@@ -113,13 +115,15 @@ final case class SpmvInputConfig(
     s"FP64 乘法 IP 响应 FIFO 深度必须为正数，实际为 $fp64MultiplyResponseFifoDepth")
   require(fp64MultiplyLaneCount == 8,
     s"当前 Cuper 512-bit A beat 固定包含 8 个乘法 slot，实际为 $fp64MultiplyLaneCount")
-  require(cuperSlotColumnBits == 13 && cuperSlotTagBits == 3 && cuperSlotRowBits == 16,
-    s"当前 Cuper slot v4 必须是 col/tag/localRow=13/3/16，实际为 " +
-      s"$cuperSlotColumnBits/$cuperSlotTagBits/$cuperSlotRowBits")
-  require(cuperSlotColumnBits + cuperSlotTagBits + cuperSlotRowBits + 32 == 64,
-    "Cuper slot v4 的列/tag/localRow/FP32 位域必须恰好填满 64 bit")
+  require(cuperSlotColumnBits == 13 && cuperSlotTagBits == 3 &&
+    Set(("cuper-a-slot-v4", 16), ("cuperflow-a-slot-v6", 13)).contains(cuperSlotAbi -> cuperSlotRowBits),
+    s"Cuper slot ABI 必须是 v4(13/3/16) 或 L1 v6(13/3/13)，实际为 " +
+      s"$cuperSlotAbi/$cuperSlotColumnBits/$cuperSlotTagBits/$cuperSlotRowBits")
+  require(cuperSlotAbi == "cuper-a-slot-v4" ||
+    cuperSlotColumnBits + cuperSlotTagBits + 1 + 2 + cuperSlotRowBits + 32 == 64,
+    "Cuper L1 slot v6 的列/tag/rowLast/chunkMode/localRow/FP32 位域必须恰好填满 64 bit")
   require(xWindowSize <= (1 << cuperSlotColumnBits),
-    s"X 窗口不能超过 Cuper slot v4 的列号容量，实际为 $xWindowSize")
+    s"X 窗口不能超过 Cuper slot 的列号容量，实际为 $xWindowSize")
 
   /** 一个 X HBM beat 携带的 FP64 元素数。 */
   val xElementsPerBeat: Int = axiDataWidth / xElementWidth

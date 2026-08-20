@@ -5,6 +5,7 @@ SPMV_CUPERFLOW_IP_DIR := $(SPMV_CUPERFLOW_WORK_DIR)/ip-generated
 SPMV_CUPERFLOW_ARTIFACT_DIR := $(SPMV_CUPERFLOW_WORK_DIR)/artifacts
 SPMV_CUPERFLOW_SOURCE_MANIFEST := $(SPMV_CUPERFLOW_WORK_DIR)/synthesis-sources.manifest
 SPMV_CUPERFLOW_PARAMETER_MANIFEST := $(SPMV_CUPERFLOW_RTL_DIR)/spmv-cuperflow-parameters.env
+SPMV_CUPERFLOW_PORT_MACROS := $(SPMV_CUPERFLOW_RTL_DIR)/spmv-cuperflow-ports.svh
 SPMV_CUPERFLOW_ELAB_DONE := $(SPMV_CUPERFLOW_WORK_DIR)/.elaboration.complete
 SPMV_CUPERFLOW_IP_DONE := $(SPMV_CUPERFLOW_WORK_DIR)/.ip.complete
 SPMV_CUPERFLOW_PACKAGE_DONE := $(SPMV_CUPERFLOW_WORK_DIR)/.package.complete
@@ -13,6 +14,7 @@ SPMV_CUPERFLOW_TOP := SpmvCuperflowKernel
 SPMV_CUPERFLOW_CHISEL_TOP := SpmvCuperflowInputTop
 SPMV_CUPERFLOW_WRAPPER := $(CURDIR)/fpga/u55c/rtl/spmv/spmv-cuperflow-kernel.sv
 SPMV_CUPERFLOW_COMMON_RTL := $(CURDIR)/fpga/u55c/rtl/common/u55c-clocked-core.sv
+SPMV_CUPERFLOW_PORT_MACRO_GENERATOR := $(CURDIR)/fpga/common/scripts/generate-cuperflow-port-macros.sh
 SPMV_CUPERFLOW_IP_TCL := $(CURDIR)/fpga/u55c/tcl/spmv/create-input-fp64-ip.tcl
 SPMV_CUPERFLOW_PACKAGE_TCL := $(CURDIR)/fpga/u55c/tcl/spmv/package-cuperflow-xo.tcl
 SPMV_CUPERFLOW_MANIFEST_TOOL := $(CURDIR)/fpga/common/scripts/manifest.sh
@@ -33,20 +35,21 @@ SPMV_CUPERFLOW_FINAL_ASSETS = $(if $(filter bitstream-only,$(CAPABILITY)),spmv-c
 spmv-cuperflow-fpga-check:
 	@test "$(CAPABILITY)" = synthesize-only || test "$(CAPABILITY)" = bitstream-only
 	@test "$(TARGET)" = SPMV && test "$(FPGA_BOARD)" = u55c
-	@test "$(HOST_ABI)" = none && test "$(ACCELERATOR_HOST_ABI)" = spmv-cuperflow-u55c-v3
-	@test "$(PROTOCOL_ABI)" = spmv-cuperflow-u55c-v3 && test "$(SPMV_CUPERFLOW_XRT_KERNEL)" = SpmvCuperflowKernel
-	@test "$(SPMV_CUPERFLOW_HBM_PC_COUNT)" = 16 && test "$(SPMV_CUPERFLOW_AXI_ADDR_WIDTH)" = 64
+	@test "$(HOST_ABI)" = none && test "$(ACCELERATOR_HOST_ABI)" = spmv-cuperflow-u55c-v4
+	@test "$(PROTOCOL_ABI)" = spmv-cuperflow-l1-v0 && test "$(SPMV_CUPERFLOW_XRT_KERNEL)" = SpmvCuperflowKernel
+	@test "$(SPMV_CUPERFLOW_HBM_PC_COUNT)" -ge 1 && test "$(SPMV_CUPERFLOW_HBM_PC_COUNT)" -le 16 && test "$(SPMV_CUPERFLOW_AXI_ADDR_WIDTH)" = 64
 	@test "$(SPMV_CUPERFLOW_AXI_DATA_WIDTH)" = 512 && test "$(SPMV_CUPERFLOW_AXI_ID_WIDTH)" = 4
 	@test "$(SPMV_CUPERFLOW_HBM_BASE)" = 0x0 && test "$(SPMV_CUPERFLOW_X_REGION_BYTES)" = 67108864
 	@test "$(SPMV_CUPERFLOW_X_WINDOW_SIZE)" = 8192 && test "$(SPMV_CUPERFLOW_X_REPLICA_COUNT)" = 4
-	@test "$(SPMV_CUPERFLOW_X_ELEMENT_WIDTH)" = 64 && test "$(SPMV_CUPERFLOW_X_STORAGE)" = ultra
+	@test "$(SPMV_CUPERFLOW_ROW_BATCH_SIZE)" = 8192 && test "$(SPMV_CUPERFLOW_X_ELEMENT_WIDTH)" = 64 && test "$(SPMV_CUPERFLOW_X_STORAGE)" = ultra
 	@test "$(SPMV_CUPERFLOW_X_MEMORY_DATA_WIDTH)" = 256 && test "$(SPMV_CUPERFLOW_X_LOAD_LANES)" = 8
-	@test "$(SPMV_CUPERFLOW_MAP_ABI)" = cuperflow-map-multisegment-v3
+	@test "$(SPMV_CUPERFLOW_SLOT_ABI)" = cuperflow-a-slot-v6
+	@test "$(SPMV_CUPERFLOW_MAP_ABI)" = cuperflow-map-multisegment-v4 && test "$(SPMV_CUPERFLOW_BATCH_DESCRIPTOR_ABI)" = cuperflow-batch-desc-v1
 	@test "$(SPMV_FP64_MUL_PROVIDER)" = xilinx-floating-point-v7.1
 	@test "$(SPMV_FP64_MUL_LATENCY)" = 12 && test "$(SPMV_FP64_MUL_II)" = 1
 	@test "$(FPGA_PLATFORM_CLOCK_MHZ)" = 300 && test "$(FPGA_CLOCK_MHZ)" = 250
 	@test "$(FPGA_PART)" = xcu55c-fsvh2892-2L-e && test "$(FPGA_VITIS_TARGET)" = hw
-	@test -f "$(SPMV_CUPERFLOW_WRAPPER)" && test -f "$(SPMV_CUPERFLOW_COMMON_RTL)"
+	@test -f "$(SPMV_CUPERFLOW_WRAPPER)" && test -f "$(SPMV_CUPERFLOW_COMMON_RTL)" && test -f "$(SPMV_CUPERFLOW_PORT_MACRO_GENERATOR)"
 	@test -f "$(SPMV_CUPERFLOW_IP_TCL)" && test -f "$(SPMV_CUPERFLOW_PACKAGE_TCL)"
 
 $(SPMV_CUPERFLOW_ELAB_DONE): FORCE spmv-cuperflow-fpga-check
@@ -57,9 +60,10 @@ $(SPMV_CUPERFLOW_ELAB_DONE): FORCE spmv-cuperflow-fpga-check
 	cd "$(CURDIR)/chisel/ysyxSoC" && NPC_SCALA_CONFIG="$(CONFIG_FQCN)" \
 		mill -i ysyxsoc.runMain accelerators.spmv.fpga.ElaborateSpmvCuperflowFpga --target-dir "$(SPMV_CUPERFLOW_RTL_DIR)"; \
 	test -f "$(SPMV_CUPERFLOW_RTL_DIR)/$(SPMV_CUPERFLOW_CHISEL_TOP).sv" && test -f "$(SPMV_CUPERFLOW_PARAMETER_MANIFEST)"; \
+	bash "$(SPMV_CUPERFLOW_PORT_MACRO_GENERATOR)" "$(SPMV_CUPERFLOW_HBM_PC_COUNT)" "$(SPMV_CUPERFLOW_PORT_MACROS)"; \
 	{ printf '%s\n' '`define SPMV_CUPERFLOW_PLATFORM_CLOCK_MHZ $(FPGA_PLATFORM_CLOCK_MHZ)'; \
 	  printf '%s\n' '`define SPMV_CUPERFLOW_CORE_CLOCK_MHZ $(FPGA_CLOCK_MHZ)'; \
-	  cat "$(SPMV_CUPERFLOW_COMMON_RTL)" "$(SPMV_CUPERFLOW_WRAPPER)"; \
+	  cat "$(SPMV_CUPERFLOW_PORT_MACROS)" "$(SPMV_CUPERFLOW_COMMON_RTL)" "$(SPMV_CUPERFLOW_WRAPPER)"; \
 	} > "$(SPMV_CUPERFLOW_RTL_DIR)/spmv-cuperflow-kernel.sv"; \
 	"$(SPMV_CUPERFLOW_MANIFEST_TOOL)" verify "$(SPMV_CUPERFLOW_PARAMETER_MANIFEST)" \
 		CONFIG_FQCN=$(CONFIG_FQCN) SPMV_CUPERFLOW_HBM_PC_COUNT=$(SPMV_CUPERFLOW_HBM_PC_COUNT) \
@@ -69,6 +73,7 @@ $(SPMV_CUPERFLOW_ELAB_DONE): FORCE spmv-cuperflow-fpga-check
 		SPMV_CUPERFLOW_AXI_DATA_WIDTH=$(SPMV_CUPERFLOW_AXI_DATA_WIDTH) \
 		SPMV_CUPERFLOW_AXI_ID_WIDTH=$(SPMV_CUPERFLOW_AXI_ID_WIDTH) \
 		SPMV_CUPERFLOW_MAX_OUTSTANDING_BURSTS=$(SPMV_CUPERFLOW_MAX_OUTSTANDING_BURSTS) \
+		SPMV_CUPERFLOW_ROW_BATCH_SIZE=$(SPMV_CUPERFLOW_ROW_BATCH_SIZE) \
 		SPMV_CUPERFLOW_X_WINDOW_SIZE=$(SPMV_CUPERFLOW_X_WINDOW_SIZE) \
 		SPMV_CUPERFLOW_X_REPLICA_COUNT=$(SPMV_CUPERFLOW_X_REPLICA_COUNT) \
 		SPMV_CUPERFLOW_X_PINGPONG=$(SPMV_CUPERFLOW_X_PINGPONG) \
@@ -77,7 +82,9 @@ $(SPMV_CUPERFLOW_ELAB_DONE): FORCE spmv-cuperflow-fpga-check
 		SPMV_CUPERFLOW_X_STORAGE=$(SPMV_CUPERFLOW_X_STORAGE) \
 		SPMV_CUPERFLOW_X_MEMORY_DATA_WIDTH=$(SPMV_CUPERFLOW_X_MEMORY_DATA_WIDTH) \
 		SPMV_CUPERFLOW_X_LOAD_LANES=$(SPMV_CUPERFLOW_X_LOAD_LANES) \
+		SPMV_CUPERFLOW_SLOT_ABI=$(SPMV_CUPERFLOW_SLOT_ABI) \
 		SPMV_CUPERFLOW_MAP_ABI=$(SPMV_CUPERFLOW_MAP_ABI) \
+		SPMV_CUPERFLOW_BATCH_DESCRIPTOR_ABI=$(SPMV_CUPERFLOW_BATCH_DESCRIPTOR_ABI) \
 		SPMV_FP64_MUL_PROVIDER=$(SPMV_FP64_MUL_PROVIDER) SPMV_FP64_MUL_LATENCY=$(SPMV_FP64_MUL_LATENCY) \
 		SPMV_FP64_MUL_II=$(SPMV_FP64_MUL_II); \
 	touch "$@"
@@ -137,7 +144,7 @@ $(SPMV_CUPERFLOW_LINK_DONE): FORCE $(if $(filter 1,$(SPMV_CUPERFLOW_PHASE_PREREQ
 	"$(SPMV_CUPERFLOW_SOURCE_MANIFEST_TOOL)" verify "$(SPMV_CUPERFLOW_SOURCE_MANIFEST)" "$(CURDIR)" synthesis; \
 	rm -rf "$(SPMV_CUPERFLOW_VITIS_TEMP_DIR)" "$(SPMV_CUPERFLOW_VITIS_LOG_DIR)" "$(SPMV_CUPERFLOW_VITIS_REPORT_DIR)"; \
 	mkdir -p "$(SPMV_CUPERFLOW_VITIS_TEMP_DIR)" "$(SPMV_CUPERFLOW_VITIS_LOG_DIR)" "$(SPMV_CUPERFLOW_VITIS_REPORT_DIR)"; \
-	{ printf '%s\n' '[connectivity]'; for pc in $$(seq 0 15); do printf 'sp=SpmvCuperflowKernel_1.m_axi_pc%02d:HBM[%d]\n' "$$pc" "$$pc"; done; \
+	{ printf '%s\n' '[connectivity]'; for pc in $$(seq 0 $$(( $(SPMV_CUPERFLOW_HBM_PC_COUNT) - 1 ))); do printf 'sp=SpmvCuperflowKernel_1.m_axi_pc%02d:HBM[%d]\n' "$$pc" "$$pc"; done; \
 		printf '%s\n' '' '[clock]'; printf 'freqHz=%s000000:SpmvCuperflowKernel_1.ap_clk\n' "$(FPGA_PLATFORM_CLOCK_MHZ)"; \
 		printf '%s\n' '' '[vivado]' 'synth.jobs=$(FPGA_VIVADO_SYNTH_JOBS)' 'impl.jobs=$(FPGA_VIVADO_IMPL_JOBS)'; \
 	} > "$(SPMV_CUPERFLOW_VITIS_LINK_CONFIG)"; \

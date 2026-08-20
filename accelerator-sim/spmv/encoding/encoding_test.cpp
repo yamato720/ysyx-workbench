@@ -1,6 +1,8 @@
 #include "encoder.hpp"
 #include "cuper/demand_schedule.hpp"
 #include "cuperflow/demand_schedule.hpp"
+#include "cuperflow/fixtures.hpp"
+#include "cuperflow/product_beat_golden.hpp"
 
 #include <algorithm>
 #include <array>
@@ -10,6 +12,7 @@
 #include <functional>
 #include <iostream>
 #include <limits>
+#include <numeric>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -140,6 +143,22 @@ std::vector<RestoredElement> expectedElements(const CsrMatrix& matrix) {
   return expected;
 }
 
+std::vector<RestoredElement> expectedCuperflowElements(const CsrMatrix& matrix) {
+  std::vector<RestoredElement> expected;
+  for (std::size_t row = 0; row < matrix.rows; ++row) {
+    for (std::size_t index = matrix.rowPointers[row];
+         index < matrix.rowPointers[row + 1U]; ++index) {
+      if (matrix.values[index] == 0.0) {
+        continue;
+      }
+      expected.push_back(RestoredElement{
+          row, matrix.columnIndices[index], floatBits(matrix.values[index])});
+    }
+  }
+  std::sort(expected.begin(), expected.end());
+  return expected;
+}
+
 std::vector<RestoredElement> restoreCuperflow(
     const cuperflow::CuperflowPackage& package,
     const cuperflow::CuperflowDemandSchedule* schedule = nullptr) {
@@ -157,10 +176,7 @@ std::vector<RestoredElement> restoreCuperflow(
           const std::size_t end = range.second;
           for (std::size_t beat = begin; beat < end; ++beat) {
             if ((package.matrixEntryMasks[channel][beat] & (1U << lane)) == 0U) {
-              throw std::runtime_error("Cuperflow lane slice pointer 包含零填充 slot: channel=" +
-                  std::to_string(channel) + " group=" + std::to_string(group) +
-                  " lane=" + std::to_string(lane) + " beat=" + std::to_string(beat) +
-                  " begin=" + std::to_string(begin) + " end=" + std::to_string(end));
+              continue;
             }
             const cuperflow::DecodedCuperflowSlot slot =
                 cuperflow::decodeSlot(package.matrixChannels[channel][beat][lane]);
@@ -235,11 +251,17 @@ void testCuperflowRowBatchesAndColumnSlices() {
          schedule.sliceGroupChannels == package.sliceGroupChannels &&
          schedule.channelSliceGroups == package.channelSliceGroups,
          "Cuperflow X page 调度没有携带 slice group 几何");
+  EncodingOptions stripedOptions = options;
+  stripedOptions.cuperflow.aPacking = cuperflow::CuperflowAPacking::LaneStriped;
+  const EncodedMatrix stripedEncoded = encodeMatrix(matrix, stripedOptions);
+  const auto& striped = std::get<cuperflow::CuperflowPackage>(stripedEncoded.package);
+  const cuperflow::CuperflowDemandSchedule stripedSchedule =
+      cuperflow::planXPageSchedule(striped);
   const cuperflow::CuperflowPackage remapped =
-      cuperflow::remapLocalColumnsForXPageSchedule(package, schedule);
-  expect(restoreCuperflow(remapped, &schedule) == expectedElements(matrix),
-         "Cuperflow X page 重排后解包结果与 CSR 不一致");
-  expect(remapped.channelLaneSliceGroupRanges.size() == package.config.hbmChannelCount,
+      cuperflow::remapLocalColumnsForXPageSchedule(striped, stripedSchedule);
+  expect(restoreCuperflow(remapped, &stripedSchedule) == expectedElements(matrix),
+      "Cuperflow X page 重排后解包结果与 CSR 不一致");
+  expect(remapped.channelLaneSliceGroupRanges.size() == striped.config.hbmChannelCount,
          "Cuperflow X page 重排丢失 slice group range");
   for (const auto& ranges : package.channelLaneSliceGroupRanges) {
     expect(ranges.size() == package.stats.batchCount * package.sliceGroupCount,
@@ -290,6 +312,383 @@ void testCuperflowRowBatchesAndColumnSlices() {
   }
 }
 
+void testCuperflowRowRoundRobinPacking() {
+  std::vector<InputElement> elements;
+  for (std::uint32_t column = 0; column < 9; ++column) {
+    elements.push_back(InputElement{0, column, static_cast<double>(column + 1U)});
+  }
+  elements.insert(elements.end(), {
+      {1, 16, 1.0}, {1, 17, 2.0}, {1, 18, 3.0}, {1, 19, 4.0}, {1, 20, 5.0}, {1, 21, 6.0},
+      {2, 24, 1.0}, {2, 25, 2.0}, {2, 26, 3.0}, {2, 27, 4.0},
+      {3, 32, 1.0}, {3, 33, 2.0}, {3, 34, 3.0},
+      {4, 36, 1.0}, {4, 37, 2.0}, {5, 40, 1.0},
+      {8191, 41, 1.0}, {8192, 48, 1.0}});
+  const CsrMatrix matrix = makeMatrix(8193, 64, std::move(elements));
+
+  EncodingOptions options;
+  options.format = EncodingFormat::Cuperflow;
+  options.cuperflow.rowReorder = false;
+  const EncodedMatrix encoded = encodeMatrix(matrix, options);
+  const auto& package = std::get<cuperflow::CuperflowPackage>(encoded.package);
+  expect(package.config.aPacking == cuperflow::CuperflowAPacking::RowRoundRobin,
+         "Cuperflow 默认 A 打包必须是 row-round-robin");
+  expect(package.stats.batchCount == 2 && package.sliceGroupCount == 1,
+         "Cuperflow row-round-robin 测试矩阵几何错误");
+
+  cuperflow::validatePackage(package);
+  std::array<std::size_t, 3> chunkCounts{};
+  for (std::size_t beat = 0; beat < package.matrixChannels[0].size(); ++beat) {
+    const std::uint8_t mask = package.matrixEntryMasks[0][beat];
+    for (std::size_t lane = 0; lane < cuperflow::kLanesPerBeat; ++lane) {
+      const std::uint64_t word = package.matrixChannels[0][beat][lane];
+      if ((mask & (std::uint8_t{1} << lane)) == 0U) {
+        expect(word == cuperflow::kZeroFillSlot,
+               "Cuperflow 8/4/2 尾包的无效 lane 必须以全零 slot 补齐");
+        continue;
+      }
+      const cuperflow::DecodedCuperflowSlot slot = cuperflow::decodeSlot(word);
+      expect(static_cast<unsigned>(slot.chunkMode) <=
+                 static_cast<unsigned>(cuperflow::CuperflowChunkMode::Four2),
+             "Cuperflow slot v6 不得生成 chunkMode=11");
+      ++chunkCounts[static_cast<std::size_t>(slot.chunkMode)];
+    }
+  }
+  expect(chunkCounts[0] != 0 && chunkCounts[1] != 0 && chunkCounts[2] != 0,
+         "Cuperflow row-round-robin 未覆盖完整 8、4+4、2+2+2+2 chunk");
+  expect(package.stats.full8ChunkCount != 0 && package.stats.two4ChunkCount != 0 &&
+             package.stats.four2ChunkCount != 0,
+         "Cuperflow V0 chunk 统计没有记录 8/4/2 边界");
+  expect(restoreCuperflow(package) == expectedElements(matrix),
+         "Cuperflow row-round-robin 无法恢复原始 CSR 矩阵");
+}
+
+void testCuperflowTailPackingVariants() {
+  const CsrMatrix matrix = makeMatrix(3, 64, {
+      {0, 0, 1.0}, {0, 1, 2.0}, {0, 2, 3.0},
+      {1, 8, 1.0}, {2, 16, 1.0}, {2, 17, 2.0},
+  });
+  const auto check = [&](cuperflow::CuperflowTailPacking packing,
+                         const std::array<std::uint8_t, 2>& expectedMasks) {
+    EncodingOptions options;
+    options.format = EncodingFormat::Cuperflow;
+    options.cuperflow.rowReorder = false;
+    options.cuperflow.tailPacking = packing;
+    const EncodedMatrix encoded = encodeMatrix(matrix, options);
+    const auto& package = std::get<cuperflow::CuperflowPackage>(encoded.package);
+    expect(package.config.tailPacking == packing,
+           "Cuperflow package 没有保留 row tail 打包策略");
+    expect(package.matrixEntryMasks[0].size() == expectedMasks.size(),
+           "Cuperflow row tail 策略产生了错误的 A beat 数量");
+    for (std::size_t beat = 0; beat < expectedMasks.size(); ++beat) {
+      expect(package.matrixEntryMasks[0][beat] == expectedMasks[beat],
+             "Cuperflow row tail 策略的内部 padding 位置错误");
+    }
+    expect(restoreCuperflow(package) == expectedElements(matrix),
+           "Cuperflow row tail 策略无法恢复原始 CSR 矩阵");
+  };
+
+  EncodingOptions defaultOptions;
+  defaultOptions.format = EncodingFormat::Cuperflow;
+  defaultOptions.cuperflow.rowReorder = false;
+  const EncodedMatrix defaultEncoded = encodeMatrix(matrix, defaultOptions);
+  const auto& defaultPackage = std::get<cuperflow::CuperflowPackage>(defaultEncoded.package);
+  expect(defaultPackage.config.tailPacking == cuperflow::CuperflowTailPacking::Pad3To4And1To2,
+         "Cuperflow 默认 row tail 策略必须是 pad3-1");
+  expect(defaultPackage.matrixEntryMasks[0] == std::vector<std::uint8_t>({0x07U, 0x0dU}),
+         "Cuperflow 默认 pad3-1 的内部 padding 位置错误");
+
+  expectThrows([&]() {
+    EncodingOptions compactOptions;
+    compactOptions.format = EncodingFormat::Cuperflow;
+    compactOptions.cuperflow.rowReorder = false;
+    compactOptions.cuperflow.tailPacking = cuperflow::CuperflowTailPacking::Compact421;
+    (void)encodeMatrix(matrix, compactOptions);
+  }, "Cuperflow slot v6 未拒绝会产生 1-slot chunk 的 Compact421");
+  check(cuperflow::CuperflowTailPacking::Pad3To4And1To2, {{0x07U, 0x0dU}});
+  check(cuperflow::CuperflowTailPacking::PadAllTo4, {{0x17U, 0x03U}});
+}
+
+void testCuperflowV0Protocol() {
+  const CsrMatrix matrix = makeMatrix(8193, 64, {
+      {0, 0, 1.0}, {0, 1, 2.0}, {0, 2, 3.0},
+      {1, 8, 4.0}, {1, 9, 5.0},
+      {8192, 16, 6.0},
+  });
+  EncodingOptions options;
+  options.format = EncodingFormat::Cuperflow;
+  options.cuperflow.rowReorder = false;
+  const EncodedMatrix encoded = encodeMatrix(matrix, options);
+  const auto& package = std::get<cuperflow::CuperflowPackage>(encoded.package);
+  cuperflow::validatePackage(package);
+  expect(package.stats.batchDescriptorCount == 2 &&
+             package.channelBatchDescriptors[0].size() == 2,
+         "Cuperflow V0 没有为每个 batch 写入 descriptor");
+  const auto& first = package.channelBatchDescriptors[0][0];
+  const auto& second = package.channelBatchDescriptors[0][1];
+  expect(first.batchId == 0 && first.activeRowCount == 8192 &&
+             first.contributorWordCount == 128 && !first.lastBatchInGroup &&
+             second.batchId == 1 && second.activeRowCount == 1 &&
+             second.contributorWordCount == 1 && second.lastBatchInGroup,
+         "Cuperflow V0 BATCH_DESC 的完整/短 batch 字段错误");
+  const cuperflow::CuperflowVectorBeat packed = cuperflow::packBatchDescriptor(first);
+  expect(cuperflow::isBatchDescriptorMarker(packed[0]) &&
+             cuperflow::unpackBatchDescriptor(packed).activeRowCount == 8192,
+         "Cuperflow V0 BATCH_DESC pack/unpack round-trip 失败");
+  expectThrows([&]() {
+    auto corrupt = packed;
+    corrupt[5] = 1U;
+    (void)cuperflow::unpackBatchDescriptor(corrupt);
+  }, "Cuperflow V0 BATCH_DESC 未拒绝 reserved 位");
+
+  std::vector<double> x(64, 0.25);
+  const cuperflow::CuperflowVectorPackage vectorPackage =
+      cuperflow::encodeVector(x, package);
+  cuperflow::validateXPayloadLoads(package, vectorPackage);
+  const cuperflow::CuperflowXRange& range = vectorPackage.channelXRanges[0][0];
+  const cuperflow::CuperflowMapBeat map =
+      cuperflow::unpackMapBeat(vectorPackage.channelHbmBeats[0][range.mapBeat]);
+  expect(map.batchDescriptorCount == 2 && range.batchDescriptorCount == 2 &&
+             range.descriptorBeatEnd - range.descriptorBeatBegin == 19,
+         "Cuperflow V0 控制流没有按 [DESC][bitmap] 写入两个 batch");
+  expect(cuperflow::unpackBatchDescriptor(
+             vectorPackage.channelHbmBeats[0][range.descriptorBeatBegin]).batchId == 0 &&
+             cuperflow::unpackBatchDescriptor(
+                 vectorPackage.channelHbmBeats[0][range.descriptorBeatBegin + 17U]).batchId == 1,
+         "Cuperflow V0 descriptor/bitmap 的控制流顺序错误");
+  expectThrows([&]() {
+    auto corrupt = vectorPackage.channelHbmBeats[0][range.mapBeat];
+    corrupt[2] |= std::uint64_t{1} << 32U;
+    (void)cuperflow::unpackMapBeat(corrupt);
+  }, "Cuperflow V0 GROUP_MAP 未拒绝 reserved 位");
+  expectThrows([&]() {
+    auto corrupt = vectorPackage.channelHbmBeats[0][range.mapBeat];
+    corrupt[4] |= std::uint64_t{1} << 27U;
+    (void)cuperflow::unpackMapBeat(corrupt);
+  }, "Cuperflow V0 GROUP_MAP 未拒绝 segment descriptor reserved 位");
+  expectThrows([&]() {
+    (void)cuperflow::unpackBatchDescriptor(
+        vectorPackage.channelHbmBeats[0][range.mapBeat]);
+  }, "Cuperflow V0 未拒绝 map/descriptor opcode 混淆");
+
+  auto invalidBitmap = package;
+  invalidBitmap.channelContributorWords[0][first.contributorOffsetWords] ^= 1U;
+  expectThrows([&]() { cuperflow::validatePackage(invalidBitmap); },
+               "Cuperflow V0 package validator 未发现 bitmap/rowLast 不一致");
+  auto invalidSlot = package;
+  bool corruptedSlot = false;
+  for (std::size_t beat = 0; beat < invalidSlot.matrixChannels[0].size() && !corruptedSlot;
+       ++beat) {
+    const std::uint8_t mask = invalidSlot.matrixEntryMasks[0][beat];
+    for (std::size_t lane = 0; lane < cuperflow::kLanesPerBeat; ++lane) {
+      if ((mask & (std::uint8_t{1} << lane)) != 0U) {
+        invalidSlot.matrixChannels[0][beat][lane] |= std::uint64_t{0x3} << 45U;
+        corruptedSlot = true;
+        break;
+      }
+    }
+  }
+  expect(corruptedSlot, "Cuperflow V0 负向 slot 测试没有找到有效 lane");
+  expectThrows([&]() { cuperflow::validatePackage(invalidSlot); },
+               "Cuperflow V0 package validator 未拒绝 chunkMode=11");
+
+  const CsrMatrix multiPc = makeMatrix(1, 1024, {
+      {0, 0, 1.0}, {0, 64, 2.0},
+  });
+  const EncodedMatrix multiPcEncoded = encodeMatrix(multiPc, options);
+  const auto& multiPcPackage =
+      std::get<cuperflow::CuperflowPackage>(multiPcEncoded.package);
+  expect(multiPcPackage.sliceGroupCount == 16 && multiPcPackage.contributorWaveCount == 1 &&
+             multiPcPackage.contributorMasksByWaveBatch[0].size() == 1 &&
+             multiPcPackage.contributorMasksByWaveBatch[0][0] == 0x0003U,
+         "Cuperflow V0 没有将两个 PC 的 rowLast bitmap 转置为同一 wave 的 16-bit mask");
+  cuperflow::validatePackage(multiPcPackage);
+
+  const CsrMatrix emptyBatch = makeMatrix(8193, 64, {{0, 0, 1.0}});
+  const EncodedMatrix emptyBatchEncoded = encodeMatrix(emptyBatch, options);
+  const auto& emptyBatchPackage =
+      std::get<cuperflow::CuperflowPackage>(emptyBatchEncoded.package);
+  expect(emptyBatchPackage.channelBatchDescriptors[0].size() == 2 &&
+             emptyBatchPackage.channelBatchDescriptors[0][1].aBeats == 0 &&
+             emptyBatchPackage.channelBatchDescriptors[0][1].lastBatchInGroup &&
+             emptyBatchPackage.stats.emptyBatchCount == 1,
+         "Cuperflow V0 空 batch 没有通过 BATCH_DESC 推进 epoch");
+  cuperflow::validatePackage(emptyBatchPackage);
+
+  const CsrMatrix explicitZero = makeMatrix(1, 8, {
+      {0, 0, 0.0}, {0, 1, -0.0}, {0, 2, 1.0},
+      {0, 3, std::numeric_limits<double>::quiet_NaN()},
+  });
+  const EncodedMatrix zeroEncoded = encodeMatrix(explicitZero, options);
+  const auto& zeroPackage = std::get<cuperflow::CuperflowPackage>(zeroEncoded.package);
+  expect(zeroPackage.stats.droppedExplicitZeros == 2 && zeroPackage.nonzeros == 2 &&
+             zeroPackage.stats.matrixSlots == 2,
+         "Cuperflow V0 没有 canonicalize 显式 FP32 正负零");
+  cuperflow::validatePackage(zeroPackage);
+}
+
+void testCuperflowV0Fixtures() {
+  for (const cuperflow::fixtures::V0Fixture& fixture : cuperflow::fixtures::v0()) {
+    const std::string prefix = "Cuperflow V0 fixture '" + fixture.name + "': ";
+    const cuperflow::CuperflowPackage package =
+        cuperflow::encode(fixture.matrix, fixture.config);
+    std::vector<double> input(fixture.matrix.columns);
+    for (std::size_t column = 0; column < input.size(); ++column) {
+      input[column] = 0.25 + static_cast<double>(column);
+    }
+    const cuperflow::CuperflowVectorPackage vectorPackage =
+        cuperflow::encodeVector(input, package);
+    cuperflow::validatePackage(package);
+    cuperflow::validateXPayloadLoads(package, vectorPackage);
+    expect(restoreCuperflow(package) == expectedCuperflowElements(fixture.matrix),
+           prefix + "slot round-trip 与冻结的显式零规则不一致");
+
+    const auto& stats = package.stats;
+    expect(stats.rowPartial1BeatCount + stats.rowPartial2BeatCount +
+               stats.rowPartial4BeatCount == stats.totalMatrixBeats,
+           prefix + "RowPartial beat 统计未覆盖全部 A beat");
+    const std::uint64_t pcBeats = std::accumulate(
+        package.pcL1Stats.begin(), package.pcL1Stats.end(), std::uint64_t{0},
+        [](std::uint64_t sum, const cuperflow::CuperflowPcL1Stats& pc) {
+          return sum + pc.aBeats;
+        });
+    const std::uint64_t pcSlots = std::accumulate(
+        package.pcL1Stats.begin(), package.pcL1Stats.end(), std::uint64_t{0},
+        [](std::uint64_t sum, const cuperflow::CuperflowPcL1Stats& pc) {
+          return sum + pc.effectiveSlots;
+        });
+    expect(pcBeats == stats.totalMatrixBeats && pcSlots == stats.matrixSlots,
+           prefix + "per-PC A beat 或有效 slot 汇总错误");
+    expect(package.waveBatchL1Stats.size() ==
+               stats.batchCount * package.contributorWaveCount,
+           prefix + "(wave,batch) L1 统计长度错误");
+    expect(stats.xPayloadLoadCount == vectorPackage.stats.rangeCount &&
+               stats.expectedXPayloadLoadCount == vectorPackage.stats.rangeCount,
+           prefix + "BATCH_DESC 改变了每 group 一次的 X payload 计划");
+
+    switch (fixture.kind) {
+      case cuperflow::fixtures::V0FixtureKind::Full8:
+        expect(stats.full8ChunkCount == 3U, prefix + "未保留完整 8-slot chunk");
+        break;
+      case cuperflow::fixtures::V0FixtureKind::Tail44:
+        expect(stats.two4ChunkCount == 2U && stats.rowPartial2BeatCount == 1U,
+               prefix + "未形成两个 4-slot RowPartial 的共享 beat");
+        break;
+      case cuperflow::fixtures::V0FixtureKind::Tail2222:
+        expect(stats.four2ChunkCount == 4U && stats.rowPartial4BeatCount == 1U,
+               prefix + "未形成四个 2-slot RowPartial 的共享 beat");
+        break;
+      case cuperflow::fixtures::V0FixtureKind::Pad3And1:
+        expect(stats.zeroFillSlots == 12U && stats.two4ChunkCount == 1U &&
+                   stats.four2ChunkCount == 1U,
+               prefix + "3->4 / 1->2 的物理 padding 或 chunkMode 错误");
+        break;
+      case cuperflow::fixtures::V0FixtureKind::EmptyPcRow:
+        expect(package.contributorWaveCount == 1U &&
+                   package.contributorMasksByWaveBatch[0][0] == 0x0003U,
+               prefix + "部分 PC 空贡献的 mask 错误");
+        break;
+      case cuperflow::fixtures::V0FixtureKind::EmptyBatch:
+        expect(package.channelBatchDescriptors[0][1].aBeats == 0U &&
+                   package.channelBatchDescriptors[0][1].lastBatchInGroup,
+               prefix + "空 batch 未写出推进 epoch 的 descriptor");
+        break;
+      case cuperflow::fixtures::V0FixtureKind::LastShortBatch:
+        expect(package.channelBatchDescriptors[0][1].activeRowCount == 1U,
+               prefix + "最后短 batch 的有效行数错误");
+        break;
+      case cuperflow::fixtures::V0FixtureKind::SameLocalRowNextBatch:
+        expect(package.contributorMasksByWaveBatch[0][0] == 0x0001U &&
+                   package.contributorMasksByWaveBatch[1][0] == 0x0001U,
+               prefix + "相同 localRow 跨 batch 发生 epoch 别名");
+        break;
+      case cuperflow::fixtures::V0FixtureKind::MultiWaveSameY:
+        expect(package.contributorWaveCount == 2U &&
+                   package.contributorMasksByWaveBatch[0][0] == 0x0001U &&
+                   package.contributorMasksByWaveBatch[1][0] == 0x0001U,
+               prefix + "同一 Y 行跨 wave 的 contributor epoch 错误");
+        break;
+      case cuperflow::fixtures::V0FixtureKind::ExplicitZero: {
+        bool preservedUnderflow = false;
+        for (std::size_t beat = 0; beat < package.matrixChannels[0].size(); ++beat) {
+          const std::uint8_t mask = package.matrixEntryMasks[0][beat];
+          for (std::size_t lane = 0; lane < cuperflow::kLanesPerBeat; ++lane) {
+            if ((mask & (std::uint8_t{1} << lane)) == 0U) {
+              continue;
+            }
+            const auto slot = cuperflow::decodeSlot(package.matrixChannels[0][beat][lane]);
+            preservedUnderflow = preservedUnderflow ||
+                (slot.localColumn == 5U && slot.value == 0.0F);
+          }
+        }
+        expect(stats.droppedExplicitZeros == 2U && stats.matrixSlots == 4U &&
+                   preservedUnderflow,
+               prefix + "仅 +0/-0 可 canonicalize，FP32 下溢/NaN/Inf 必须保留");
+        break;
+      }
+      case cuperflow::fixtures::V0FixtureKind::EightXSegments:
+        expect(package.xSegmentsByGroup[0].size() == cuperflow::kMaxXSegments &&
+                   vectorPackage.channelXRanges[0][0].segments.size() ==
+                       cuperflow::kMaxXSegments,
+               prefix + "未生成八段 X 的最大 segmentId package");
+        break;
+    }
+  }
+}
+
+void testCuperflowProductBeatGolden() {
+  const auto fixtures = cuperflow::fixtures::v0();
+  const auto full8 = std::find_if(fixtures.begin(), fixtures.end(),
+      [](const auto& fixture) {
+        return fixture.kind == cuperflow::fixtures::V0FixtureKind::Full8;
+      });
+  expect(full8 != fixtures.end(), "Cuperflow ProductBeat golden 缺少 full8 fixture");
+
+  std::vector<double> x(full8->matrix.columns);
+  for (std::size_t column = 0; column < x.size(); ++column) {
+    x[column] = 0.25 + static_cast<double>(column);
+  }
+  const cuperflow::CuperflowPackage package = cuperflow::encode(full8->matrix, full8->config);
+  const std::vector<cuperflow::CuperflowProductBeatGolden> beats =
+      cuperflow::makeProductBeatGolden(package, x);
+  expect(beats.size() == 3U && beats[0].pc == 0U && beats[0].wave == 0U &&
+             beats[0].batch == 0U && beats[0].beatSeq == 0U &&
+             beats[0].laneValid == 0xffU && beats[0].chunkMode == 0U,
+         "Cuperflow ProductBeat golden 没有冻结 full8 的原子 sideband");
+  for (std::size_t lane = 0; lane < cuperflow::kLanesPerBeat; ++lane) {
+    expect(beats[0].localRow[lane] == 0U && beats[0].rowLast[lane] &&
+               beats[0].product[lane] == doubleBits(
+                   static_cast<double>(lane + 1U) * x[lane]),
+           "Cuperflow ProductBeat golden 的 full8 首 beat 乘积或 row sideband 错误");
+  }
+  expect(beats[1].beatSeq == 1U && beats[2].beatSeq == 2U &&
+             !beats[1].rowLast[0] && beats[2].rowLast[0],
+         "Cuperflow ProductBeat golden 没有保留同 row 的 rowLast 顺序");
+
+  for (const auto& fixture : fixtures) {
+    std::vector<double> input(fixture.matrix.columns);
+    for (std::size_t column = 0; column < input.size(); ++column) {
+      input[column] = 0.25 + static_cast<double>(column);
+    }
+    const cuperflow::CuperflowPackage fixturePackage =
+        cuperflow::encode(fixture.matrix, fixture.config);
+    const std::vector<cuperflow::CuperflowProductBeatGolden> fixtureBeats =
+        cuperflow::makeProductBeatGolden(fixturePackage, input);
+    expect(fixtureBeats.size() == fixturePackage.stats.totalMatrixBeats,
+           "Cuperflow ProductBeat golden 没有覆盖全部有效 A beat");
+    for (const auto& beat : fixtureBeats) {
+      expect(beat.laneValid != 0U && beat.chunkMode != 0x3U,
+             "Cuperflow ProductBeat golden 生成了空 beat 或非法 chunkMode");
+      for (std::size_t lane = 0; lane < cuperflow::kLanesPerBeat; ++lane) {
+        if ((beat.laneValid & (std::uint8_t{1} << lane)) == 0U) {
+          expect(beat.product[lane] == 0U && beat.localRow[lane] == 0U &&
+                     !beat.rowLast[lane],
+                 "Cuperflow ProductBeat golden 的 padding lane 不符合 +0.0 合同");
+        }
+      }
+    }
+  }
+}
+
 void testCuperflowRowReorder() {
   std::vector<InputElement> elements;
   for (std::uint32_t column = 0; column < 8; ++column) {
@@ -326,6 +725,60 @@ void testCuperflowRowReorder() {
          "Cuperflow 关闭 row 重排时映射不是 identity");
   expect(restoreCuperflow(identity) == expectedElements(matrix),
          "Cuperflow 关闭 row 重排后无法恢复原始 CSR 行");
+}
+
+void testCuperflowPcParameterization() {
+  std::vector<InputElement> elements;
+  for (std::size_t row = 0; row < 256; ++row) {
+    elements.push_back(InputElement{row, static_cast<std::uint32_t>((row % 16U) * 64U),
+                                    static_cast<double>(row + 1U)});
+  }
+  const CsrMatrix matrix = makeMatrix(256, 1024, std::move(elements));
+  const std::vector<double> input(1024, 0.5);
+
+  for (std::size_t channelCount = 1; channelCount <= 16; ++channelCount) {
+    cuperflow::CuperflowConfig config;
+    config.hbmChannelCount = channelCount;
+    config.sliceGroupSize = 1;
+    const cuperflow::CuperflowPackage package = cuperflow::encode(matrix, config);
+    const cuperflow::CuperflowVectorPackage vectorPackage =
+        cuperflow::encodeVector(input, package);
+    cuperflow::validatePackage(package);
+    cuperflow::validateXPayloadLoads(package, vectorPackage);
+    expect(restoreCuperflow(package) == expectedCuperflowElements(matrix),
+           "Cuperflow 参数化 PC 数破坏 slot round-trip");
+
+    std::vector<bool> seen(channelCount, false);
+    for (std::size_t packet = 0; packet < channelCount * cuperflow::kLanesPerBeat;
+         ++packet) {
+      const std::size_t pe = cuperflow::peForRow(packet * 2U, config);
+      seen[pe / cuperflow::kLanesPerBeat] = true;
+    }
+    expect(std::all_of(seen.begin(), seen.end(), [](bool value) { return value; }),
+           "Cuperflow 参数化 PC 数没有覆盖全部 HBM channel");
+  }
+
+  const cuperflow::CuperflowConfig eight = [] {
+    cuperflow::CuperflowConfig config;
+    config.hbmChannelCount = 8;
+    return config;
+  }();
+  const cuperflow::CuperflowConfig sixteen = [] {
+    cuperflow::CuperflowConfig config;
+    config.hbmChannelCount = 16;
+    return config;
+  }();
+  for (std::size_t packet = 0; packet < 8; ++packet) {
+    expect(cuperflow::peForRow(packet * 2U, eight) / cuperflow::kLanesPerBeat == packet,
+           "8-PC Cuperflow checker 顺序发生变化");
+  }
+  const std::array<std::size_t, 16> expected16 = {
+      0, 2, 4, 6, 8, 10, 12, 14, 1, 3, 5, 7, 9, 11, 13, 15};
+  for (std::size_t packet = 0; packet < expected16.size(); ++packet) {
+    expect(cuperflow::peForRow(packet * 2U, sixteen) / cuperflow::kLanesPerBeat ==
+               expected16[packet],
+           "16-PC Cuperflow checker 顺序发生变化");
+  }
 }
 
 void testCuperflowFlexibleXEncoding() {
@@ -945,7 +1398,13 @@ int main() {
     accelerator_sim::spmv::encoding::testReorderWindow();
     accelerator_sim::spmv::encoding::testAccumulationContextEncoding();
     accelerator_sim::spmv::encoding::testCuperflowRowBatchesAndColumnSlices();
+    accelerator_sim::spmv::encoding::testCuperflowRowRoundRobinPacking();
+    accelerator_sim::spmv::encoding::testCuperflowTailPackingVariants();
+    accelerator_sim::spmv::encoding::testCuperflowV0Protocol();
+    accelerator_sim::spmv::encoding::testCuperflowV0Fixtures();
+    accelerator_sim::spmv::encoding::testCuperflowProductBeatGolden();
     accelerator_sim::spmv::encoding::testCuperflowRowReorder();
+    accelerator_sim::spmv::encoding::testCuperflowPcParameterization();
     accelerator_sim::spmv::encoding::testCuperflowFlexibleXEncoding();
     accelerator_sim::spmv::encoding::testCuperflowExtremeSparseXSpan();
     accelerator_sim::spmv::encoding::testCuperflowThreeIslandXSpan();

@@ -21,12 +21,12 @@ object SpmvAcceleratorHostConfig {
 
   val CuperflowRtl: AcceleratorHostConfig = AcceleratorHostConfig(
     kind = "spmv",
-    abi = "spmv-cuperflow-rtl-v3"
+    abi = "spmv-cuperflow-rtl-v4"
   )
 
   val CuperflowFpga: AcceleratorHostConfig = AcceleratorHostConfig(
     kind = "spmv",
-    abi = "spmv-cuperflow-u55c-v3"
+    abi = "spmv-cuperflow-u55c-v4"
   )
 }
 

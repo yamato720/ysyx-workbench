@@ -210,7 +210,7 @@ CuperflowDemandSchedule planXPageSchedule(const CuperflowPackage& package,
           const auto range = laneSliceGroupRanges[groupSegment][lane];
           for (std::size_t beat = range.first; beat < range.second; ++beat) {
             if ((package.matrixEntryMasks[channel][beat] & (1U << lane)) == 0U) {
-              throw std::logic_error("Cuperflow X page 调度发现 slice group 内有空 slot");
+              continue;
             }
             const std::uint32_t localColumn = decodeSlot(
                 package.matrixChannels[channel][beat][lane]).localColumn;
@@ -372,6 +372,10 @@ CuperflowDemandSchedule planXPageSchedule(const CuperflowPackage& package,
 
 CuperflowPackage remapLocalColumnsForXPageSchedule(
     const CuperflowPackage& package, const CuperflowDemandSchedule& schedule) {
+  if (package.config.aPacking == CuperflowAPacking::RowRoundRobin) {
+    throw std::invalid_argument(
+        "Cuperflow X page 重排只支持旧 lane-striped A 包；row-round-robin 必须保持行 beat 顺序");
+  }
   if (schedule.config.pageElements == 0 ||
       schedule.batches.size() != package.stats.batchCount ||
       package.matrixChannels.size() != package.config.hbmChannelCount ||
@@ -435,7 +439,7 @@ CuperflowPackage remapLocalColumnsForXPageSchedule(
           }
           for (std::size_t beat = range.first; beat < range.second; ++beat) {
             if ((package.matrixEntryMasks[channel][beat] & (1U << lane)) == 0U) {
-              throw std::logic_error("Cuperflow X page 重排发现 slice group 内有空 slot");
+              continue;
             }
             const std::uint64_t sourceSlot = package.matrixChannels[channel][beat][lane];
             const std::size_t localColumn = decodeSlot(sourceSlot).localColumn;

@@ -90,14 +90,7 @@
 
 module SpmvCuperflowKernel (
   input wire ap_clk, input wire ap_rst_n, output wire interrupt,
-  `SPMV_CUPERFLOW_AXI_MASTER_PORT(pc00), `SPMV_CUPERFLOW_AXI_MASTER_PORT(pc01),
-  `SPMV_CUPERFLOW_AXI_MASTER_PORT(pc02), `SPMV_CUPERFLOW_AXI_MASTER_PORT(pc03),
-  `SPMV_CUPERFLOW_AXI_MASTER_PORT(pc04), `SPMV_CUPERFLOW_AXI_MASTER_PORT(pc05),
-  `SPMV_CUPERFLOW_AXI_MASTER_PORT(pc06), `SPMV_CUPERFLOW_AXI_MASTER_PORT(pc07),
-  `SPMV_CUPERFLOW_AXI_MASTER_PORT(pc08), `SPMV_CUPERFLOW_AXI_MASTER_PORT(pc09),
-  `SPMV_CUPERFLOW_AXI_MASTER_PORT(pc10), `SPMV_CUPERFLOW_AXI_MASTER_PORT(pc11),
-  `SPMV_CUPERFLOW_AXI_MASTER_PORT(pc12), `SPMV_CUPERFLOW_AXI_MASTER_PORT(pc13),
-  `SPMV_CUPERFLOW_AXI_MASTER_PORT(pc14), `SPMV_CUPERFLOW_AXI_MASTER_PORT(pc15),
+  `SPMV_CUPERFLOW_AXI_PORTS
   input wire s_axi_control_awvalid, output wire s_axi_control_awready,
   input wire [11:0] s_axi_control_awaddr, input wire s_axi_control_wvalid,
   output wire s_axi_control_wready, input wire [31:0] s_axi_control_wdata,
@@ -108,7 +101,7 @@ module SpmvCuperflowKernel (
   input wire s_axi_control_rready, output wire [31:0] s_axi_control_rdata,
   output wire [1:0] s_axi_control_rresp
 );
-  reg [63:0] hbm_base [0:15];
+  reg [63:0] hbm_base [0:`SPMV_CUPERFLOW_HBM_PC_COUNT - 1];
   reg aw_pending, w_pending, write_response_valid, read_response_valid;
   reg [11:0] aw_address; reg [31:0] w_data, read_response_data; reg [3:0] w_strobe;
   reg ap_start, ap_done, ap_ready, active, auto_restart;
@@ -187,7 +180,7 @@ module SpmvCuperflowKernel (
         12'h100: read_control = completed_checksum[31:0];
         12'h104: read_control = completed_checksum[63:32];
         12'h108: read_control = {30'b0, completed_error, active};
-        default: for (lane = 0; lane < 16; lane = lane + 1) begin
+        default: for (lane = 0; lane < `SPMV_CUPERFLOW_HBM_PC_COUNT; lane = lane + 1) begin
           if (address == 12'h010 + lane*8) read_control = hbm_base[lane][31:0];
           if (address == 12'h014 + lane*8) read_control = hbm_base[lane][63:32];
         end
@@ -203,7 +196,7 @@ module SpmvCuperflowKernel (
       auto_restart <= 1'b0; global_interrupt_enable <= 1'b0;
       interrupt_enable <= 2'b0; interrupt_status <= 2'b0;
       start_toggle <= 1'b0; completed_checksum <= 64'b0; completed_error <= 1'b0;
-      for (index = 0; index < 16; index = index + 1) hbm_base[index] <= 64'b0;
+      for (index = 0; index < `SPMV_CUPERFLOW_HBM_PC_COUNT; index = index + 1) hbm_base[index] <= 64'b0;
     end else begin
       ap_ready <= 1'b0;
       if (s_axi_control_awready && s_axi_control_awvalid) begin aw_pending <= 1'b1; aw_address <= s_axi_control_awaddr; end
@@ -217,7 +210,7 @@ module SpmvCuperflowKernel (
           12'h00c: if (w_strobe[0]) interrupt_status <= interrupt_status ^ w_data[1:0];
           default: if (!active) begin
             // active 期间 shell_addr_offset 必须稳定；写入照常应答但被显式忽略。
-            for (index = 0; index < 16; index = index + 1) begin
+            for (index = 0; index < `SPMV_CUPERFLOW_HBM_PC_COUNT; index = index + 1) begin
               if (aw_address == 12'h010 + index*8)
                 hbm_base[index][31:0] <= merge_strobes(hbm_base[index][31:0], w_data, w_strobe);
               if (aw_address == 12'h014 + index*8)
@@ -251,33 +244,13 @@ module SpmvCuperflowKernel (
     else core_start_seen <= core_start_toggle;
   end
 
-`SPMV_CUPERFLOW_AXI_WIRES(0)  `SPMV_CUPERFLOW_AXI_WIRES(1)
-`SPMV_CUPERFLOW_AXI_WIRES(2)  `SPMV_CUPERFLOW_AXI_WIRES(3)
-`SPMV_CUPERFLOW_AXI_WIRES(4)  `SPMV_CUPERFLOW_AXI_WIRES(5)
-`SPMV_CUPERFLOW_AXI_WIRES(6)  `SPMV_CUPERFLOW_AXI_WIRES(7)
-`SPMV_CUPERFLOW_AXI_WIRES(8)  `SPMV_CUPERFLOW_AXI_WIRES(9)
-`SPMV_CUPERFLOW_AXI_WIRES(10) `SPMV_CUPERFLOW_AXI_WIRES(11)
-`SPMV_CUPERFLOW_AXI_WIRES(12) `SPMV_CUPERFLOW_AXI_WIRES(13)
-`SPMV_CUPERFLOW_AXI_WIRES(14) `SPMV_CUPERFLOW_AXI_WIRES(15)
-`SPMV_CUPERFLOW_AXI_BIND(pc00, 0)  `SPMV_CUPERFLOW_AXI_BIND(pc01, 1)
-`SPMV_CUPERFLOW_AXI_BIND(pc02, 2)  `SPMV_CUPERFLOW_AXI_BIND(pc03, 3)
-`SPMV_CUPERFLOW_AXI_BIND(pc04, 4)  `SPMV_CUPERFLOW_AXI_BIND(pc05, 5)
-`SPMV_CUPERFLOW_AXI_BIND(pc06, 6)  `SPMV_CUPERFLOW_AXI_BIND(pc07, 7)
-`SPMV_CUPERFLOW_AXI_BIND(pc08, 8)  `SPMV_CUPERFLOW_AXI_BIND(pc09, 9)
-`SPMV_CUPERFLOW_AXI_BIND(pc10, 10) `SPMV_CUPERFLOW_AXI_BIND(pc11, 11)
-`SPMV_CUPERFLOW_AXI_BIND(pc12, 12) `SPMV_CUPERFLOW_AXI_BIND(pc13, 13)
-`SPMV_CUPERFLOW_AXI_BIND(pc14, 14) `SPMV_CUPERFLOW_AXI_BIND(pc15, 15)
+`SPMV_CUPERFLOW_AXI_WIRE_DECLARATIONS
+`SPMV_CUPERFLOW_AXI_BINDINGS
 
   SpmvCuperflowInputTop core (
     .clock(core_clock), .reset(!core_reset_n), .io_start(core_start),
-    `SPMV_CUPERFLOW_CORE_BIND(0),  `SPMV_CUPERFLOW_CORE_BIND(1),
-    `SPMV_CUPERFLOW_CORE_BIND(2),  `SPMV_CUPERFLOW_CORE_BIND(3),
-    `SPMV_CUPERFLOW_CORE_BIND(4),  `SPMV_CUPERFLOW_CORE_BIND(5),
-    `SPMV_CUPERFLOW_CORE_BIND(6),  `SPMV_CUPERFLOW_CORE_BIND(7),
-    `SPMV_CUPERFLOW_CORE_BIND(8),  `SPMV_CUPERFLOW_CORE_BIND(9),
-    `SPMV_CUPERFLOW_CORE_BIND(10), `SPMV_CUPERFLOW_CORE_BIND(11),
-    `SPMV_CUPERFLOW_CORE_BIND(12), `SPMV_CUPERFLOW_CORE_BIND(13),
-    `SPMV_CUPERFLOW_CORE_BIND(14), `SPMV_CUPERFLOW_CORE_BIND(15),
+    `SPMV_CUPERFLOW_CORE_BINDS
+    `SPMV_CUPERFLOW_PRODUCT_READY_BINDS
     .io_done(core_done), .io_error(core_error), .io_productChecksum(core_checksum)
   );
 endmodule
@@ -286,3 +259,9 @@ endmodule
 `undef SPMV_CUPERFLOW_AXI_BIND
 `undef SPMV_CUPERFLOW_AXI_WIRES
 `undef SPMV_CUPERFLOW_AXI_MASTER_PORT
+`undef SPMV_CUPERFLOW_CORE_BINDS
+`undef SPMV_CUPERFLOW_PRODUCT_READY_BINDS
+`undef SPMV_CUPERFLOW_AXI_BINDINGS
+`undef SPMV_CUPERFLOW_AXI_WIRE_DECLARATIONS
+`undef SPMV_CUPERFLOW_AXI_PORTS
+`undef SPMV_CUPERFLOW_HBM_PC_COUNT

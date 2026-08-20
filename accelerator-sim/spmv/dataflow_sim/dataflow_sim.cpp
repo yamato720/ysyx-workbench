@@ -192,8 +192,8 @@ bool hasAvx512F() {
 #endif
 }
 
-float decodeFloat(std::uint32_t bits) {
-  float value = 0.0F;
+double decodeDouble(std::uint64_t bits) {
+  double value = 0.0;
   static_assert(sizeof(value) == sizeof(bits));
   std::memcpy(&value, &bits, sizeof(value));
   return value;
@@ -209,9 +209,9 @@ std::vector<float> loadXRange(const CuperflowVectorPackage& package,
 
   std::vector<float> values(xRange.elementCount);
   for (std::size_t offset = 0; offset < xRange.elementCount; ++offset) {
-    values[offset] = decodeFloat(
+    values[offset] = static_cast<float>(decodeDouble(
         channelBeats[xRange.beatBegin + offset / encoding::cuperflow::kVectorLanesPerBeat]
-            [offset % encoding::cuperflow::kVectorLanesPerBeat]);
+            [offset % encoding::cuperflow::kVectorLanesPerBeat]));
   }
   return values;
 }
@@ -224,51 +224,75 @@ Avx512BatchStats accumulateGroupBatchAvx512(
   const std::size_t firstSlice = group * package.sliceGroupSize;
   const std::size_t groupSegment = batch * package.sliceGroupCount + group;
   const std::size_t groupFirstColumn = firstSlice * package.config.sliceSize;
+  const auto xOffsetForLocalColumn = [&xRange](std::size_t localColumn) {
+    std::size_t prefix = 0;
+    for (const auto& segment : xRange.segments) {
+      if (localColumn >= segment.start && localColumn - segment.start < segment.count) {
+        return prefix + localColumn - segment.start;
+      }
+      prefix += segment.count;
+    }
+    throw std::runtime_error("A slot 的列号不属于当前紧凑 X segment");
+  };
 
   for (std::size_t channel = 0; channel < package.config.hbmChannelCount; ++channel) {
     bool channelActive = false;
     const auto& channelBeats = package.matrixChannels[channel];
+    std::size_t begin = channelBeats.size();
+    std::size_t end = 0;
     for (std::size_t lane = 0; lane < encoding::cuperflow::kLanesPerBeat; ++lane) {
       const auto range = package.channelLaneSliceGroupRanges[channel][groupSegment][lane];
-      for (std::size_t beat = range.first; beat < range.second; beat += 2U) {
-          std::array<std::int32_t, encoding::cuperflow::kVectorLanesPerBeat> xIndices{};
-          std::array<std::uint32_t, encoding::cuperflow::kVectorLanesPerBeat> physicalRows{};
-          std::array<float, encoding::cuperflow::kVectorLanesPerBeat> aValues{};
+      if (range.first > range.second || range.second > channelBeats.size() ||
+          range.second > package.matrixEntryMasks[channel].size()) {
+        throw std::runtime_error("Cuperflow group lane range 超出 A payload");
+      }
+      if (range.first != range.second) {
+        begin = std::min(begin, static_cast<std::size_t>(range.first));
+        end = std::max(end, static_cast<std::size_t>(range.second));
+      }
+    }
+    for (std::size_t beat = begin; beat < end; beat += 2U) {
+          std::array<std::int32_t, 16> xIndices{};
+          std::array<std::uint32_t, 16> physicalRows{};
+          std::array<float, 16> aValues{};
           __mmask16 activeMask = 0;
 
           // A beat 只有 8 个 slot，两个 beat 组成一组 AVX512 FP32 输入。
           for (std::size_t beatOffset = 0; beatOffset < 2U; ++beatOffset) {
             const std::size_t currentBeat = beat + beatOffset;
-            if (currentBeat >= range.second) {
+            if (currentBeat >= end) {
               break;
             }
             const std::size_t vectorLane = beatOffset * encoding::cuperflow::kLanesPerBeat;
             const std::uint8_t entryMask = package.matrixEntryMasks[channel][currentBeat];
-            if ((entryMask & (std::uint8_t{1} << lane)) == 0U) {
-              continue;
-            }
+            for (std::size_t lane = 0; lane < encoding::cuperflow::kLanesPerBeat; ++lane) {
+              if ((entryMask & (std::uint8_t{1} << lane)) == 0U) {
+                continue;
+              }
+              const auto decoded = encoding::cuperflow::decodeSlot(
+                  channelBeats[currentBeat][lane]);
+              const std::size_t globalColumn = groupFirstColumn + decoded.localColumn;
+              if (globalColumn >= package.columns) {
+                throw std::runtime_error("A slot 的列号超出矩阵范围");
+              }
+              const std::size_t xIndex = xOffsetForLocalColumn(decoded.localColumn);
+              if (xIndex >= xRangeValues.size()) {
+                throw std::runtime_error("A slot 映射后的 X 地址超出紧凑 payload");
+              }
+              const std::size_t physicalRow = encoding::cuperflow::physicalRowForBatchLocal(
+                  batch, decoded.localRow, package.config);
+              if (physicalRow >= physicalOutput->size()) {
+                throw std::runtime_error("A slot 的 physical row 超出输出范围");
+              }
 
-            const auto decoded = encoding::cuperflow::decodeSlot(
-                channelBeats[currentBeat][lane]);
-            const std::size_t globalColumn = groupFirstColumn + decoded.localColumn;
-            if (globalColumn < xRange.firstColumn ||
-                globalColumn >= xRange.firstColumn + xRange.elementCount) {
-              throw std::runtime_error("A slot 的列号超出当前 X range");
+              const std::size_t packedLane = vectorLane + lane;
+              xIndices[packedLane] = static_cast<std::int32_t>(xIndex);
+              physicalRows[packedLane] = static_cast<std::uint32_t>(physicalRow);
+              aValues[packedLane] = decoded.value;
+              activeMask |= static_cast<__mmask16>(std::uint16_t{1} << packedLane);
+              ++stats.aSlots;
+              channelActive = true;
             }
-            const std::size_t xIndex = globalColumn - xRange.firstColumn;
-            const std::size_t physicalPe = channel * encoding::cuperflow::kLanesPerBeat + lane;
-            const std::size_t physicalRow = encoding::cuperflow::rowForPeLocal(
-                physicalPe, decoded.localRow, package.config);
-            if (physicalRow >= physicalOutput->size()) {
-              throw std::runtime_error("A slot 的 physical row 超出输出范围");
-            }
-
-            xIndices[vectorLane] = static_cast<std::int32_t>(xIndex);
-            physicalRows[vectorLane] = static_cast<std::uint32_t>(physicalRow);
-            aValues[vectorLane] = decoded.value;
-            activeMask |= static_cast<__mmask16>(std::uint16_t{1} << vectorLane);
-            ++stats.aSlots;
-            channelActive = true;
           }
 
           if (activeMask == 0) {
@@ -279,15 +303,13 @@ Avx512BatchStats accumulateGroupBatchAvx512(
               _mm512_setzero_ps(), activeMask, indices, xRangeValues.data(), 4);
           const __m512 a = _mm512_maskz_loadu_ps(activeMask, aValues.data());
           const __m512 products = _mm512_mul_ps(a, x);
-          std::array<float, encoding::cuperflow::kVectorLanesPerBeat> productValues{};
+          std::array<float, 16> productValues{};
           _mm512_mask_storeu_ps(productValues.data(), activeMask, products);
-          for (std::size_t vectorLane = 0;
-               vectorLane < encoding::cuperflow::kVectorLanesPerBeat; ++vectorLane) {
+          for (std::size_t vectorLane = 0; vectorLane < productValues.size(); ++vectorLane) {
             if ((activeMask & (std::uint16_t{1} << vectorLane)) != 0U) {
               (*physicalOutput)[physicalRows[vectorLane]] += productValues[vectorLane];
             }
           }
-      }
     }
     stats.activeChannels += static_cast<std::size_t>(channelActive);
   }
@@ -330,8 +352,7 @@ void printStep(std::size_t step, std::size_t group, std::size_t batch,
             << " batch=" << batch
             << " owner_hbm=" << ownerChannel
             << " x=" << (batch == 0 ? "load" : "reuse")
-            << " x_range=[" << xRange.firstColumn << ','
-            << xRange.firstColumn + xRange.elementCount << ')'
+            << " x_segments=" << xRange.segments.size()
             << " x_elements=" << xRange.elementCount
             << " x_beats=" << xRange.beatEnd - xRange.beatBegin
             << " a_slots=" << aSlots

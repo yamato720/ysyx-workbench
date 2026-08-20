@@ -44,6 +44,7 @@ object ElaborateSpmvCuperflowFpga extends App {
       "SPMV_CUPERFLOW_AXI_DATA_WIDTH" -> config.axiDataWidth.toString,
       "SPMV_CUPERFLOW_AXI_ID_WIDTH" -> config.axiIdWidth.toString,
       "SPMV_CUPERFLOW_MAX_OUTSTANDING_BURSTS" -> config.maxOutstandingBursts.toString,
+      "SPMV_CUPERFLOW_ROW_BATCH_SIZE" -> config.rowBatchSize.toString,
       "SPMV_CUPERFLOW_X_WINDOW_SIZE" -> config.xWindowSize.toString,
       "SPMV_CUPERFLOW_X_REPLICA_COUNT" -> config.xReplicaCount.toString,
       "SPMV_CUPERFLOW_X_PINGPONG" -> (if (config.xPingPong) "1" else "0"),
@@ -52,7 +53,9 @@ object ElaborateSpmvCuperflowFpga extends App {
       "SPMV_CUPERFLOW_X_STORAGE" -> config.xMemoryPrimitive.profileName,
       "SPMV_CUPERFLOW_X_MEMORY_DATA_WIDTH" -> config.xMemoryDataWidth.toString,
       "SPMV_CUPERFLOW_X_LOAD_LANES" -> config.xWordsPerBeat.toString,
+      "SPMV_CUPERFLOW_SLOT_ABI" -> config.slotAbi,
       "SPMV_CUPERFLOW_MAP_ABI" -> config.mapAbi,
+      "SPMV_CUPERFLOW_BATCH_DESCRIPTOR_ABI" -> config.batchDescriptorAbi,
       "SPMV_FP64_MUL_PROVIDER" -> config.fp64MulProvider.profileName,
       "SPMV_FP64_MUL_LATENCY" -> config.fp64MultiplyLatency.toString,
       "SPMV_FP64_MUL_II" -> config.fp64MultiplyInitiationInterval.toString

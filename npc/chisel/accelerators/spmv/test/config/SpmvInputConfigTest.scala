@@ -62,6 +62,23 @@ class SpmvInputConfigTest extends AnyFlatSpec {
     assert((new SpmvCuperflowPingPongSimulationConfig)(SpmvCuperflowConfigKey).get.xPingPong)
   }
 
+  "WithSpmvCuperflowPcCount" should "让同一 Config 参数驱动 HBM、FMUL 和 ProductBeat 几何" in {
+    for (pcCount <- 1 to 16) {
+      implicit val parameters: Parameters =
+        new WithSpmvCuperflowPcCount(pcCount) ++
+          new WithSpmvCuperflowConfig(SpmvCuperflowConfig.Simulation)
+      val config = parameters(SpmvCuperflowConfigKey).get
+      assert(config.hbmPcCount == pcCount)
+      assert(config.mulConfig.aReaderCount == pcCount)
+      assert(config.mulConfig.fp64MultiplyCoreCount == pcCount)
+      assert(config.mulConfig.fp64MultiplyTotalLaneCount == pcCount * 8)
+    }
+    assertThrows[IllegalArgumentException](new WithSpmvCuperflowPcCount(0))
+    assertThrows[IllegalArgumentException](new WithSpmvCuperflowPcCount(17))
+    assert((new SpmvCuperflow1PcSimulationConfig)(SpmvCuperflowConfigKey).get.hbmPcCount == 1)
+    assert((new SpmvCuperflow8PcSimulationConfig)(SpmvCuperflowConfigKey).get.hbmPcCount == 8)
+  }
+
   "SpmvInputReportConfig" should "要求流水页依赖性能主页" in {
     assert(SpmvInputReportConfig.PerformancePipeline.performanceHtml)
     assert(SpmvInputReportConfig.PerformancePipeline.pipelineHtml)
@@ -125,5 +142,27 @@ class SpmvInputConfigTest extends AnyFlatSpec {
     assert(performanceOnly("SPMV_PIPELINE_HTML") == "0")
     assert(!values.keys.exists(_.contains("CSR5")))
     assert(!values.contains("SPMV_X_MODE"))
+  }
+
+  "SpmvCuperflowSimulationProfile" should "冻结 V0 预处理 ABI 与 row batch 几何" in {
+    val entry = ConfigCatalog.resolve("SpmvCuperflowSimulationConfig", Set("spmv"))
+    val construction = new SpmvCuperflowSimulationConfig
+    implicit val parameters: Parameters = construction
+    val config = parameters(SpmvCuperflowConfigKey).get
+    val values = SpmvCuperflowSimulationProfile.values(
+      entry,
+      construction,
+      config,
+      construction.spmvInputReportConfig
+    ).toMap
+
+    assert(config.rowBatchSize == 8192)
+    assert(values("ACCELERATOR_HOST_ABI") == "spmv-cuperflow-rtl-v4")
+    assert(values("PROTOCOL_ABI") == "spmv-cuperflow-l1-v0")
+    assert(values("SPMV_CUPERFLOW_SLOT_ABI") == "cuperflow-a-slot-v6")
+    assert(values("SPMV_CUPERFLOW_MAP_ABI") == "cuperflow-map-multisegment-v4")
+    assert(values("SPMV_CUPERFLOW_BATCH_DESCRIPTOR_ABI") == "cuperflow-batch-desc-v1")
+    assert(values("SPMV_CUPERFLOW_ROW_BATCH_SIZE") == "8192")
+    assert(values("SPMV_CUPERFLOW_HBM_PC_COUNT") == "16")
   }
 }

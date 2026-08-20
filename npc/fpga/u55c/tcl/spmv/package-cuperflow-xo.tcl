@@ -7,7 +7,9 @@ if {$part ne "xcu55c-fsvh2892-2L-e"} { error "Cuperflow kernel requires xcu55c-f
 if {$platform_clock_mhz != 300 || $core_clock_mhz != 250} {
   error "Cuperflow kernel requires 300 MHz DATA_CLK and 250 MHz core clock"
 }
-if {$pc_count != 16} { error "Cuperflow kernel requires 16 HBM masters, got $pc_count" }
+if {$pc_count < 1 || $pc_count > 32} {
+  error "Cuperflow kernel requires an HBM master count in 1..32, got $pc_count"
+}
 
 proc load_source_manifest {manifest} {
   if {![file isfile $manifest]} { error "source manifest not found: $manifest" }

@@ -38,17 +38,60 @@ object SpmvCuperflowXAddressMarker {
 /** 与 host `makeXMapMarker` 共享的 1-beat map 标识。 */
 object SpmvCuperflowMapMarker {
   val lastBit: Int = 0
+  val version: Int = 4
+  val versionShift: Int = 1
+  val variableBits: Int = 13
   val prefix: BigInt =
     (BigInt(0x7ff) << 52) |
       (BigInt(1) << 51) |
       (BigInt(2) << 48) |
       (BigInt(0x2b6b6) << 13)
-  val fixedPrefix: BigInt = prefix >> 1
+  val fixedPrefix: BigInt = prefix >> variableBits
 
-  def marker(last: Boolean): BigInt = prefix | (if (last) 1 else 0)
+  def marker(last: Boolean): BigInt =
+    prefix | (BigInt(version) << versionShift) | (if (last) 1 else 0)
 
   def isMarker(word: UInt): Bool =
-    word(63, 1) === fixedPrefix.U(63.W)
+    word(63, variableBits) === fixedPrefix.U((64 - variableBits).W) &&
+      word(versionShift + 11, versionShift) === version.U(12.W)
+}
+
+/** GROUP_MAP lane3 的冻结字段位置。
+  *
+  * C++ `packMapBeat` 定义为 `sliceGroup[15:0] | xElements[31:16]`；它们都在 lane3
+  * 的低 32 位，lane3[63:32] 是 reserved。输入 RTL 必须通过这组常量取字段，避免
+  * 把 `xElements` 误读到 reserved 区后静默拒绝合法 package。
+  */
+object SpmvCuperflowMapFormat {
+  val sliceGroupLowBit: Int = 0
+  val sliceGroupHighBit: Int = 15
+  val xElementsLowBit: Int = 16
+  val xElementsHighBit: Int = 31
+
+  def sliceGroup(word: UInt): UInt = word(sliceGroupHighBit, sliceGroupLowBit)
+  def xElements(word: UInt): UInt = word(xElementsHighBit, xElementsLowBit)
+}
+
+/** 与 host `makeBatchDescriptorMarker` 共享的 V0 BATCH_DESC 标识。
+  * V1 之前的输入 RTL 只保留该位型常量，不得把 descriptor 当作旧 map 解码。
+  */
+object SpmvCuperflowBatchDescriptorMarker {
+  val version: Int = 1
+  val versionShift: Int = 1
+  val variableBits: Int = 13
+  val prefix: BigInt =
+    (BigInt(0x7ff) << 52) |
+      (BigInt(1) << 51) |
+      (BigInt(3) << 48) |
+      (BigInt(0x35ca7) << 13)
+  val fixedPrefix: BigInt = prefix >> variableBits
+
+  def marker(lastBatchInGroup: Boolean): BigInt =
+    prefix | (BigInt(version) << versionShift) | (if (lastBatchInGroup) 1 else 0)
+
+  def isMarker(word: UInt): Bool =
+    word(63, variableBits) === fixedPrefix.U((64 - variableBits).W) &&
+      word(versionShift + 11, versionShift) === version.U(12.W)
 }
 
 /** 每拍解析一个 512-bit X beat 的八路 Cuperflow marker decoder。
