@@ -103,6 +103,8 @@ void validatePackage(const CuperflowVectorPackage& package) {
   std::vector<bool> seenGroups(groupCount, false);
   std::uint64_t encodedWordCount = 0;
   std::uint64_t encodedValueCount = 0;
+  std::uint64_t demandedElements = 0;
+  std::uint64_t segmentCount = 0;
   std::uint64_t markerCount = 0;
   std::uint64_t encodedPayloadBeats = 0;
   bool hasMaps = false;
@@ -114,19 +116,32 @@ void validatePackage(const CuperflowVectorPackage& package) {
           range.sliceGroup % package.config.hbmChannelCount != channel) {
         throw std::invalid_argument("Cuperflow X HTML 报告收到非法 per-HBM X range ownership");
       }
-      const std::size_t expectedFirstColumn =
+      const std::size_t groupFirstColumn =
           range.sliceGroup * groupSize * package.config.sliceSize;
-      const std::size_t expectedElements = std::min(
-          groupSize * package.config.sliceSize, package.columns - expectedFirstColumn);
-      if (range.firstColumn != expectedFirstColumn ||
-          range.elementCount != expectedElements ||
+      const std::size_t groupElements = std::min(
+          groupSize * package.config.sliceSize, package.columns - groupFirstColumn);
+      std::size_t segmentElements = 0;
+      if (range.segments.empty() || range.segments.size() > kMaxXSegments ||
           range.elementCount > kMaxXRangeElements ||
+          range.usedElementCount == 0 || range.usedElementCount > range.elementCount ||
           range.beatBegin > range.beatEnd || range.beatEnd > beats.size() ||
-          range.encodedWordCount != range.valueCount + range.markerCount ||
+          range.encodedWordCount != range.elementCount ||
+          range.valueCount != range.elementCount || range.markerCount != 0 ||
           range.beatEnd - range.beatBegin !=
-              (range.encodedWordCount + kVectorLanesPerBeat - 1U) / kVectorLanesPerBeat ||
-          range.valueCount > range.elementCount) {
+              (range.encodedWordCount + kVectorLanesPerBeat - 1U) / kVectorLanesPerBeat) {
         throw std::invalid_argument("Cuperflow X HTML 报告收到非法 per-HBM X range");
+      }
+      for (const CuperflowXSegment& segment : range.segments) {
+        if (segment.count == 0 || segment.start + segment.count > groupElements) {
+          throw std::invalid_argument("Cuperflow X HTML 报告收到越界的 X 段 descriptor");
+        }
+        segmentElements += segment.count;
+      }
+      if (segmentElements != range.elementCount ||
+          (!package.flexibleXEncoding &&
+           (range.segments.size() != 1 || range.segments[0].start != 0 ||
+            range.segments[0].count != groupElements))) {
+        throw std::invalid_argument("Cuperflow X HTML 报告收到非法连续 X 段计划");
       }
       if (range.mapBeat != std::numeric_limits<std::uint32_t>::max()) {
         hasMaps = true;
@@ -137,38 +152,32 @@ void validatePackage(const CuperflowVectorPackage& package) {
       }
       encodedPayloadBeats += range.beatEnd - range.beatBegin;
 
-      bool markerNeedsValue = false;
-      std::uint32_t nextAddress = 0;
-      std::size_t values = 0;
-      std::size_t markers = 0;
       for (std::size_t token = 0; token < range.encodedWordCount; ++token) {
         const std::uint64_t word = beats[range.beatBegin + token / kVectorLanesPerBeat]
             [token % kVectorLanesPerBeat];
         if (isXAddressMarker(word)) {
-          if (markerNeedsValue) {
-            throw std::invalid_argument("Cuperflow X 地址 marker 不能连续出现");
-          }
-          nextAddress = decodeXAddressMarker(word);
-          if (nextAddress >= range.elementCount) {
-            throw std::invalid_argument("Cuperflow X 地址 marker 超出所属 range");
-          }
-          markerNeedsValue = true;
-          ++markers;
-        } else {
-          if (package.flexibleXEncoding && !markerNeedsValue && values == 0 && nextAddress != 0) {
-            throw std::invalid_argument("Cuperflow 灵活 X range 的首个地址状态非法");
-          }
-          markerNeedsValue = false;
-          ++values;
-          ++nextAddress;
+          throw std::invalid_argument("Cuperflow 连续 X span 不能含地址 marker");
         }
       }
-      if (markerNeedsValue || values != range.valueCount || markers != range.markerCount ||
-          (!package.flexibleXEncoding && markers != 0)) {
-        throw std::invalid_argument("Cuperflow X range 的 marker/value 统计不一致");
+      if (range.mapBeat != std::numeric_limits<std::uint32_t>::max()) {
+        const CuperflowMapBeat map = unpackMapBeat(beats[range.mapBeat]);
+        if (map.xElements != range.elementCount ||
+            map.xWords != range.encodedWordCount ||
+            map.xBeats != range.beatEnd - range.beatBegin) {
+          throw std::invalid_argument("Cuperflow X map 与紧凑 payload 不一致");
+        }
+        for (std::size_t index = 0; index < kMaxXSegments; ++index) {
+          const CuperflowXSegment expected = index < range.segments.size() ?
+              range.segments[index] : CuperflowXSegment{};
+          if (map.xSegments[index] != expected) {
+            throw std::invalid_argument("Cuperflow X map 的段 descriptor 不一致");
+          }
+        }
       }
       encodedWordCount += range.encodedWordCount;
       encodedValueCount += range.valueCount;
+      demandedElements += range.usedElementCount;
+      segmentCount += range.segments.size();
       markerCount += range.markerCount;
       seenGroups[range.sliceGroup] = true;
     }
@@ -179,6 +188,8 @@ void validatePackage(const CuperflowVectorPackage& package) {
   }
   if (encodedWordCount != package.stats.encodedWordCount ||
       encodedValueCount != package.stats.encodedValueCount ||
+      demandedElements != package.stats.demandedElements ||
+      segmentCount != package.stats.segmentCount ||
       markerCount != package.stats.markerCount ||
       encodedPayloadBeats != package.stats.encodedPayloadBeats ||
       encodedPayloadBeats * kVectorLanesPerBeat < encodedWordCount ||
@@ -227,9 +238,11 @@ void writeVectorHtmlReport(std::ostream& output, const CuperflowVectorPackage& p
          << ",\"lanePaddingElements\":" << package.stats.lanePaddingElements
          << ",\"allocationPaddingElements\":" << package.stats.allocationPaddingElements
          << ",\"rangeCount\":" << package.stats.rangeCount
+         << ",\"segmentCount\":" << package.stats.segmentCount
          << ",\"maximumRangeElements\":" << package.stats.maximumRangeElements
          << ",\"encodedWordCount\":" << package.stats.encodedWordCount
          << ",\"encodedValueCount\":" << package.stats.encodedValueCount
+         << ",\"demandedElements\":" << package.stats.demandedElements
          << ",\"markerCount\":" << package.stats.markerCount
          << ",\"encodedPayloadBeats\":" << package.stats.encodedPayloadBeats
          << ",\"encodedLanePaddingWords\":" << package.stats.encodedLanePaddingWords
@@ -245,9 +258,15 @@ void writeVectorHtmlReport(std::ostream& output, const CuperflowVectorPackage& p
     const auto& ranges = package.channelXRanges[channel];
     for (std::size_t index = 0; index < ranges.size(); ++index) {
       const CuperflowXRange& range = ranges[index];
+      const std::size_t groupFirstColumn = range.sliceGroup * groupSize * package.config.sliceSize;
       output << (index == 0 ? "" : ",") << '[' << range.sliceGroup << ','
-             << range.firstColumn << ',' << range.elementCount << ','
-             << range.beatBegin << ',' << range.beatEnd << ']';
+             << groupFirstColumn << ',' << range.elementCount << ',' << range.beatBegin << ','
+             << range.beatEnd << ",[";
+      for (std::size_t segment = 0; segment < range.segments.size(); ++segment) {
+        output << (segment == 0 ? "" : ",") << '[' << range.segments[segment].start << ','
+               << range.segments[segment].count << ']';
+      }
+      output << "]]";
     }
     output << ']';
   }
@@ -257,10 +276,16 @@ void writeVectorHtmlReport(std::ostream& output, const CuperflowVectorPackage& p
     const auto& ranges = package.channelXRanges[channel];
     for (std::size_t index = 0; index < ranges.size(); ++index) {
       const CuperflowXRange& range = ranges[index];
+      const std::size_t groupFirstColumn = range.sliceGroup * groupSize * package.config.sliceSize;
       output << (index == 0 ? "" : ",") << '[' << range.sliceGroup << ','
-             << range.firstColumn << ',' << range.elementCount << ','
-             << range.encodedWordCount << ',' << range.valueCount << ','
-             << range.markerCount << ',' << range.beatBegin << ',' << range.beatEnd << ']';
+             << groupFirstColumn << ',' << range.elementCount << ',' << range.usedElementCount << ','
+             << range.encodedWordCount << ',' << range.valueCount << ',' << range.markerCount << ','
+             << range.beatBegin << ',' << range.beatEnd << ",[";
+      for (std::size_t segment = 0; segment < range.segments.size(); ++segment) {
+        output << (segment == 0 ? "" : ",") << '[' << range.segments[segment].start << ','
+               << range.segments[segment].count << ']';
+      }
+      output << "]]";
     }
     output << ']';
   }

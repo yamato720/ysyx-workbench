@@ -38,6 +38,15 @@ set_property target_language Verilog [current_project]
 set_param general.maxThreads $synth_jobs
 set sources [load_source_manifest $source_manifest]
 add_files -norecurse [dict get $sources rtl]
+# 仅约束标注为 CDC 第一级的 D 引脚；R/map/FSM 数据通路没有任何时序例外。
+set cdc_xdc [file join $project_dir spmv-cuperflow-cdc.xdc]
+set cdc_file [open $cdc_xdc w]
+puts $cdc_file {set cdc_meta_cells [get_cells -quiet -hier -filter {NAME =~ *g_async/meta*}]}
+puts $cdc_file {if {[llength $cdc_meta_cells] != 0} { set_property ASYNC_REG TRUE $cdc_meta_cells }}
+puts $cdc_file {set cdc_meta_d [get_pins -quiet -of_objects $cdc_meta_cells -filter {REF_PIN_NAME == D}]}
+puts $cdc_file {if {[llength $cdc_meta_d] != 0} { set_false_path -to $cdc_meta_d }}
+close $cdc_file
+add_files -fileset constrs_1 $cdc_xdc
 import_ip -files [dict get $sources xci]
 generate_target synthesis [get_ips]
 foreach ip [get_ips] { create_ip_run $ip }

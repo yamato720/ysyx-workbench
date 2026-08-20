@@ -8,13 +8,13 @@ import npc.ip.arithmetic.ArithmeticIpTiming
 
 /** FMUL 响应的真实产品流。
   *
-  * A slot 的 PE-local 行标和 3-bit tag 经 IP req/resp tag 返回，并由固定 PE 身份反解全局行；checksum 仅是这一流的
+  * A slot 的 PE-local 行标和 3-bit segmentId 经 IP req/resp tag 返回，并由固定 PE 身份反解全局行；checksum 仅是这一流的
   * 验收旁路，后续 L1 必须消费本接口而不是重算或猜测行标。
   */
 final class SpmvProduct(config: SpmvInputConfig) extends Bundle {
   val product = UInt(config.xElementWidth.W)
   val row = UInt(SpmvCuperDecode.globalRowBits.W)
-  val tag = UInt(SpmvCuperDecode.tagBits.W)
+  val segmentId = UInt(SpmvCuperDecode.tagBits.W)
   val batch = UInt(SpmvCuperMap.batchIndexWidth.W)
   val pe = UInt(log2Ceil(config.fp64MultiplyTotalLaneCount).W)
   val lane = UInt(log2Ceil(config.fp64MultiplyLaneCount).W)
@@ -24,7 +24,7 @@ final class SpmvProduct(config: SpmvInputConfig) extends Bundle {
   *
   * 每个实例对应一个 Cuper A HBM channel。每拍接受一个 512-bit Cuper A beat，并把
   * 8 个 slot 同时送入固定的 `p / 2` local_X 副本。下一拍，8 条独立 FP64 req/resp
-  * IP lane 对每个合法列号 slot 同时发射，tag 不参与筛选；同一拍可以读取并接受下一 A beat，因此每个 PE 的
+  * IP lane 对每个合法列号 slot 同时发射；segmentId 只选择 X 段，不参与行定位。同一拍可以读取并接受下一 A beat，因此每个 PE 的
   * 稳定吞吐为 II=1。乘法响应以 Decoupled 真实产品流导出，并同时做位型 XOR 供仿真
   * 验收；checksum 不属于后续 L1 数据路径。
   */
@@ -37,7 +37,7 @@ final class SpmvMulEngine(config: SpmvInputConfig, channel: Int = 0) extends Mod
   require(config.cuperSlotColumnBits == SpmvCuperDecode.columnBits &&
     config.cuperSlotTagBits == SpmvCuperDecode.tagBits &&
     config.cuperSlotRowBits == SpmvCuperDecode.rowBits,
-    "SPMV profile 的 Cuper slot v4 位域必须与 RTL decoder 一致")
+    "SPMV profile 的 Cuper slot v5 位域必须与 RTL decoder 一致")
   private val checkerCount = 8
   require(config.aReaderCount % checkerCount == 0,
     s"Cuper PE-local 行映射要求 A HBM channel 数是 8 的倍数，实际为 ${config.aReaderCount}")
@@ -56,11 +56,13 @@ final class SpmvMulEngine(config: SpmvInputConfig, channel: Int = 0) extends Mod
     val enable = Input(Bool())
     /** 在新 work 开始时清除上一个 work 的校验 checksum。 */
     val clearChecksum = Input(Bool())
-    /** 当前 Cuper 列窗口；与 A slot 的 localRow/tag 一起穿过 FMUL。 */
+    /** 当前 Cuper 列窗口；segmentId 会随 A slot 经过 FMUL 的协议 tag 返回。 */
     val batch = Input(UInt(SpmvCuperMap.batchIndexWidth.W))
     val a = Flipped(Decoupled(new SpmvReaderBeat(config.axiDataWidth)))
     val xReadEnable = Output(Vec(slotsPerBeat, Bool()))
     val xReadColumn = Output(Vec(slotsPerBeat, UInt(columnWidth.W)))
+    /** 每个 A slot 的 3-bit segmentId，由 Cuperflow map v3 解释为 X 段索引。 */
+    val xReadSegmentId = Output(Vec(slotsPerBeat, UInt(SpmvCuperDecode.tagBits.W)))
     val xReadData = Input(Vec(slotsPerBeat, UInt(config.xElementWidth.W)))
     /** 本 batch 中已完整写入 local_X 的物理 X page。 */
     val pageReady = Input(Vec(xPageCount, Bool()))
@@ -103,14 +105,14 @@ final class SpmvMulEngine(config: SpmvInputConfig, channel: Int = 0) extends Mod
   private val stageLogicalValidMask = RegInit(0.U(slotsPerBeat.W))
   private val stageFp32 = Reg(Vec(slotsPerBeat, UInt(32.W)))
   private val stageLocalRow = Reg(Vec(slotsPerBeat, UInt(SpmvCuperDecode.rowBits.W)))
-  private val stageTag = Reg(Vec(slotsPerBeat, UInt(SpmvCuperDecode.tagBits.W)))
+  private val stageSegmentId = Reg(Vec(slotsPerBeat, UInt(SpmvCuperDecode.tagBits.W)))
   private val stageBatch = RegInit(0.U(SpmvCuperMap.batchIndexWidth.W))
   private val halfPending = RegInit(false.B)
   private val halfValidMask = RegInit(0.U(slotsPerBeat.W))
   private val halfLogicalValidMask = RegInit(0.U(slotsPerBeat.W))
   private val halfFp32 = Reg(Vec(slotsPerBeat, UInt(32.W)))
   private val halfLocalRow = Reg(Vec(slotsPerBeat, UInt(SpmvCuperDecode.rowBits.W)))
-  private val halfTag = Reg(Vec(slotsPerBeat, UInt(SpmvCuperDecode.tagBits.W)))
+  private val halfSegmentId = Reg(Vec(slotsPerBeat, UInt(SpmvCuperDecode.tagBits.W)))
   private val halfColumn = Reg(Vec(slotsPerBeat, UInt(columnWidth.W)))
   private val halfBatch = RegInit(0.U(SpmvCuperMap.batchIndexWidth.W))
   private val productChecksum = RegInit(0.U(config.xElementWidth.W))
@@ -133,7 +135,7 @@ final class SpmvMulEngine(config: SpmvInputConfig, channel: Int = 0) extends Mod
     multiply(slot).io.req.bits.operandB := Mux(stageLogicalValidMask(slot),
       io.xReadData(slot), 0.U(config.xElementWidth.W))
     multiply(slot).io.req.bits.operation := 0.U
-    multiply(slot).io.req.bits.tag := Cat(stageBatch, stageTag(slot), stageLocalRow(slot))
+    multiply(slot).io.req.bits.tag := Cat(stageBatch, stageSegmentId(slot), stageLocalRow(slot))
     io.product(slot).valid := multiply(slot).io.resp.valid
     io.product(slot).bits.product := multiply(slot).io.resp.bits.result
     val responseLocalRow = multiply(slot).io.resp.bits.tag(SpmvCuperDecode.rowBits - 1, 0)
@@ -148,7 +150,7 @@ final class SpmvMulEngine(config: SpmvInputConfig, channel: Int = 0) extends Mod
     val packet = (responseLocalRow >> 1) * (config.aReaderCount * slotsPerBeat).U +
       logicalPacket.U
     io.product(slot).bits.row := (packet << 1) | responseLocalRow(0)
-    io.product(slot).bits.tag := multiply(slot).io.resp.bits.tag(
+    io.product(slot).bits.segmentId := multiply(slot).io.resp.bits.tag(
       SpmvCuperDecode.rowBits + SpmvCuperDecode.tagBits - 1, SpmvCuperDecode.rowBits)
     io.product(slot).bits.batch := multiply(slot).io.resp.bits.tag(productTagWidth - 1,
       SpmvCuperDecode.rowBits + SpmvCuperDecode.tagBits)
@@ -197,6 +199,7 @@ final class SpmvMulEngine(config: SpmvInputConfig, channel: Int = 0) extends Mod
     io.xReadEnable(slot) := loadMask(slot)
     io.xReadColumn(slot) := Mux(issueSecondHalf, halfColumn(slot),
       incomingDecoded(slot).localColumn(columnWidth - 1, 0))
+    io.xReadSegmentId(slot) := Mux(issueSecondHalf, halfSegmentId(slot), incomingDecoded(slot).segmentId)
   }
 
   private val requestMask = VecInit(multiply.map(_.io.req.fire)).asUInt
@@ -219,14 +222,14 @@ final class SpmvMulEngine(config: SpmvInputConfig, channel: Int = 0) extends Mod
     stageLogicalValidMask := 0.U
     stageFp32.foreach(_ := 0.U)
     stageLocalRow.foreach(_ := 0.U)
-    stageTag.foreach(_ := 0.U)
+    stageSegmentId.foreach(_ := 0.U)
     stageBatch := 0.U
     halfPending := false.B
     halfValidMask := 0.U
     halfLogicalValidMask := 0.U
     halfFp32.foreach(_ := 0.U)
     halfLocalRow.foreach(_ := 0.U)
-    halfTag.foreach(_ := 0.U)
+    halfSegmentId.foreach(_ := 0.U)
     halfColumn.foreach(_ := 0.U)
     halfBatch := 0.U
     error := false.B
@@ -239,7 +242,7 @@ final class SpmvMulEngine(config: SpmvInputConfig, channel: Int = 0) extends Mod
       stageLogicalValidMask := acceptMask & io.aSlotValidMask
       stageFp32 := incomingFp32
       stageLocalRow := VecInit(incomingDecoded.map(_.localRow))
-      stageTag := VecInit(incomingDecoded.map(_.tag))
+      stageSegmentId := VecInit(incomingDecoded.map(_.segmentId))
       stageBatch := io.batch
       halfPending := io.portSafeOverlap
       when(io.portSafeOverlap) {
@@ -247,7 +250,7 @@ final class SpmvMulEngine(config: SpmvInputConfig, channel: Int = 0) extends Mod
         halfLogicalValidMask := (incomingValidMask & io.aSlotValidMask) & secondHalfMask
         halfFp32 := incomingFp32
         halfLocalRow := VecInit(incomingDecoded.map(_.localRow))
-        halfTag := VecInit(incomingDecoded.map(_.tag))
+        halfSegmentId := VecInit(incomingDecoded.map(_.segmentId))
         halfColumn := VecInit(incomingDecoded.map(
           _.localColumn(columnWidth - 1, 0)))
         halfBatch := io.batch
@@ -259,7 +262,7 @@ final class SpmvMulEngine(config: SpmvInputConfig, channel: Int = 0) extends Mod
       stageLogicalValidMask := halfLogicalValidMask
       stageFp32 := halfFp32
       stageLocalRow := halfLocalRow
-      stageTag := halfTag
+      stageSegmentId := halfSegmentId
       stageBatch := halfBatch
       halfPending := false.B
     }.elsewhen(stageIssueFire) {

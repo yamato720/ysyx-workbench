@@ -46,8 +46,12 @@ if (report.channelXRanges !== undefined) {
   if (report.channelXRanges.length !== report.config.coreCount ||
       report.channelXRanges.flat().length !== expectedRangeCount ||
       report.channelXRanges.some((ranges, channel) => ranges.some((range) =>
-        range.length !== 5 || range[0] % report.config.coreCount !== channel ||
-        range[2] > report.config.xRangeMaxElements || range[3] > range[4]))) {
+        range.length !== 6 || range[0] % report.config.coreCount !== channel ||
+        !Array.isArray(range[5]) || range[3] > range[4] ||
+        range[5].length === 0 || range[5].length > 8 ||
+        range[5].some((segment) => segment.length !== 2 || segment[1] === 0 ||
+          segment[0] + segment[1] > report.config.xRangeMaxElements) ||
+        range[5].reduce((sum, segment) => sum + segment[1], 0) !== range[2]))) {
     throw new Error("Cuper X 没有形成互不重叠且不超过 8192 元素的 per-HBM range");
   }
 }
@@ -55,12 +59,17 @@ if (report.encodedXRanges !== undefined) {
   if (report.encodedXRanges.length !== report.config.coreCount ||
       report.encodedXRanges.flat().length !== report.config.sliceGroupCount ||
       report.encodedXRanges.some((ranges) => ranges.some((range) =>
-        range.length !== 8 || range[3] !== range[4] + range[5] || range[6] > range[7]))) {
+        range.length !== 10 || range[2] > report.config.xRangeMaxElements ||
+        range[3] > range[2] || range[2] !== range[4] || range[4] !== range[5] + range[6] ||
+        range[6] !== 0 || range[7] > range[8] || !Array.isArray(range[9]) ||
+        range[9].length === 0 || range[9].length > 8 ||
+        range[9].reduce((sum, segment) => sum + segment[1], 0) !== range[2]))) {
     throw new Error("Cuperflow encoded X range 的 token 统计或边界错误");
   }
   const ranges = report.encodedXRanges.flat();
-  if (ranges.reduce((total, range) => total + range[3], 0) !== report.stats.encodedWordCount ||
-      ranges.reduce((total, range) => total + range[5], 0) !== report.stats.markerCount) {
+  if (ranges.reduce((total, range) => total + range[5], 0) !== report.stats.encodedWordCount ||
+      ranges.reduce((total, range) => total + range[6], 0) !== report.stats.markerCount ||
+      ranges.reduce((total, range) => total + range[9].length, 0) !== report.stats.segmentCount) {
     throw new Error("Cuperflow encoded X range 与 marker 总数不一致");
   }
 }

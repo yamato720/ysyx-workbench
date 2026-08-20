@@ -2,11 +2,12 @@ package accelerators.spmv.inputmul.common
 
 import chisel3._
 
-/** Cuper A slot v4 解码。
+/** Cuperflow A slot v5 解码。
   *
-  * slot = localCol[63:51] | tag[50:48] | localRow[47:32] | fp32[31:0]。
-  * localRow 是 PE-local 行标，乘法响应结合静态 PE 身份还原全局 CSR 行标。tag 当前没有乘法控制语义，所有值都
-  * 原样随产品响应透传；全零填充 slot 也照常读 X、进入 FMUL。
+  * slot = localCol[63:51] | segmentId[50:48] | localRow[47:32] | fp32[31:0]。
+  * localRow 是 PE-local 行标，乘法响应结合静态 PE 身份还原全局 CSR 行标。segmentId 在
+  * Cuperflow map v3 中解释为 X segmentId：由顶层选择段起点和 payload 前缀；FMUL
+  * 只原样随产品响应透传。全零填充由顶层掩码跳过 X 读取和 FMUL。
   */
 object SpmvCuperDecode {
   val columnBits: Int = 13
@@ -19,7 +20,7 @@ object SpmvCuperDecode {
 
   final class DecodedSlot extends Bundle {
     val localColumn = UInt(columnBits.W)
-    val tag = UInt(tagBits.W)
+    val segmentId = UInt(tagBits.W)
     val localRow = UInt(rowBits.W)
     val fp32 = UInt(32.W)
   }
@@ -27,7 +28,7 @@ object SpmvCuperDecode {
   def decodeSlot(slot: UInt): DecodedSlot = {
     val decoded = Wire(new DecodedSlot)
     decoded.localColumn := slot(63, 51)
-    decoded.tag := slot(50, 48)
+    decoded.segmentId := slot(50, 48)
     decoded.localRow := slot(47, 32)
     decoded.fp32 := slot(31, 0)
     decoded

@@ -65,6 +65,23 @@ if (report.config.columnSliceCount !== undefined) {
     throw new Error("slice group 没有映射到互不重叠的 HBM X range");
   }
 }
+if (report.config.xSegmentLimit !== undefined) {
+  if (report.config.xSegmentLimit !== 8 ||
+      !Array.isArray(report.xSegmentsByGroup) ||
+      report.xSegmentsByGroup.length !== report.config.sliceGroupCount ||
+      report.xSegmentsByGroup.some((segments) => segments.length > report.config.xSegmentLimit ||
+        segments.some((segment) => segment.length !== 2 || segment[1] <= 0 ||
+          segment[0] + segment[1] > report.config.xRangeMaxElements)) ||
+      report.slots.some((slot) => {
+        if (!slot[8]) return false;
+        const group = Math.floor(slot[18] / report.config.sliceGroupSize);
+        const segment = report.xSegmentsByGroup[group]?.[slot[11]];
+        return segment === undefined || slot[9] < segment[0] ||
+          slot[9] >= segment[0] + segment[1];
+      })) {
+    throw new Error("Cuperflow slot segmentId 或 X 段 descriptor 不一致");
+  }
+}
 if (report.config.columnSliceCount !== undefined &&
     (report.physicalToOriginalRows.length !== report.shape.rows ||
      new Set(report.physicalToOriginalRows).size !== report.shape.rows ||
@@ -72,7 +89,8 @@ if (report.config.columnSliceCount !== undefined &&
        row >= report.shape.rows))) {
   throw new Error("physicalToOriginalRows 不是合法的原始行排列");
 }
-if (report.config.accumulationContexts !== 8 ||
+const tagLimit = report.config.xSegmentLimit ?? report.config.accumulationContexts;
+if (tagLimit !== 8 ||
     report.batchStats.length !== report.stats.batchCount ||
     report.channelStats.length !== report.config.hbmChannels ||
     report.slots.some((slot) =>
@@ -84,7 +102,7 @@ if (report.config.accumulationContexts !== 8 ||
                      slot[18] >= report.config.columnSliceCount) : slot[18] !== null) ||
          (slot[8] ? (!Number.isInteger(slot[19]) || slot[19] < 0 ||
                      slot[19] >= report.shape.rows) : slot[19] !== null))) ||
-      (slot[8] && (slot[11] >= report.config.accumulationContexts ||
+      (slot[8] && (slot[11] >= tagLimit ||
         !Number.isInteger(slot[13]) || !Number.isInteger(slot[10]) ||
         slot[10] < 0 || slot[10] >= report.shape.columns || typeof slot[17] !== "string")))) {
   throw new Error("batch、channel 或 slot 详细数据结构不完整");

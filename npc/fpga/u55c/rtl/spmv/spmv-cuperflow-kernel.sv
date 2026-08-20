@@ -50,15 +50,15 @@
   u55c_axi4_read_cdc #(.SAME_CLOCK(CORE_SAME_CLOCK)) read_cdc_``INDEX`` ( \
     .core_clock(core_clock), .shell_clock(ap_clk), .reset(fifo_reset), \
     .core_ar_valid(core_axi_``INDEX``_ar_valid), .core_ar_ready(core_axi_``INDEX``_ar_ready), \
-    .core_ar_id(core_axi_``INDEX``_ar_id), \
-    .core_ar_addr(core_axi_``INDEX``_ar_addr + hbm_base[INDEX]), \
+    .core_ar_id(core_axi_``INDEX``_ar_id), .core_ar_addr(core_axi_``INDEX``_ar_addr), \
     .core_ar_len(core_axi_``INDEX``_ar_len), .core_ar_size(core_axi_``INDEX``_ar_size), \
     .core_ar_burst(core_axi_``INDEX``_ar_burst), .core_ar_lock(core_axi_``INDEX``_ar_lock), \
     .core_ar_cache(core_axi_``INDEX``_ar_cache), .core_ar_prot(core_axi_``INDEX``_ar_prot), \
     .core_ar_qos(core_axi_``INDEX``_ar_qos), .core_r_valid(core_axi_``INDEX``_r_valid), \
     .core_r_ready(core_axi_``INDEX``_r_ready), .core_r_id(core_axi_``INDEX``_r_id), \
     .core_r_data(core_axi_``INDEX``_r_data), .core_r_resp(core_axi_``INDEX``_r_resp), \
-    .core_r_last(core_axi_``INDEX``_r_last), .shell_ar_valid(m_axi_``NAME``_arvalid), \
+    .core_r_last(core_axi_``INDEX``_r_last), .shell_addr_offset(hbm_base[INDEX]), \
+    .shell_ar_valid(m_axi_``NAME``_arvalid), \
     .shell_ar_ready(m_axi_``NAME``_arready), .shell_ar_id(m_axi_``NAME``_arid), \
     .shell_ar_addr(m_axi_``NAME``_araddr), .shell_ar_len(m_axi_``NAME``_arlen), \
     .shell_ar_size(m_axi_``NAME``_arsize), .shell_ar_burst(m_axi_``NAME``_arburst), \
@@ -117,8 +117,12 @@ module SpmvCuperflowKernel (
 
   localparam integer CORE_SAME_CLOCK =
     (`SPMV_CUPERFLOW_CORE_CLOCK_MHZ == `SPMV_CUPERFLOW_PLATFORM_CLOCK_MHZ);
-  wire core_clock, core_reset_n;
-  wire fifo_reset = !ap_rst_n || !core_reset_n;
+  wire core_clock, core_reset_n, shell_reset_n;
+  // shell 域先完成同步释放；XPM FIFO 仍保留统一异步复位合同，但不再
+  // 把 core 域的 reset_sync 输出直接扇出到 shell 域。
+  wire fifo_reset = !shell_reset_n;
+  u55c_reset_sync shell_reset_sync (
+    .clock(ap_clk), .async_reset_n(ap_rst_n), .reset_n(shell_reset_n));
   u55c_core_clock #(.PLATFORM_CLOCK_MHZ(`SPMV_CUPERFLOW_PLATFORM_CLOCK_MHZ),
     .CORE_CLOCK_MHZ(`SPMV_CUPERFLOW_CORE_CLOCK_MHZ)) core_clocking (
       .platform_clock(ap_clk), .platform_reset(!ap_rst_n),
@@ -128,16 +132,31 @@ module SpmvCuperflowKernel (
   reg start_toggle, core_start_seen;
   wire core_start_toggle;
   u55c_cdc_bus #(.WIDTH(1), .SAME_CLOCK(CORE_SAME_CLOCK)) start_cdc (
-    .src_clock(ap_clk), .dst_clock(core_clock), .reset(fifo_reset),
+    .src_clock(ap_clk), .dst_clock(core_clock), .reset(!core_reset_n),
     .src_bits(start_toggle), .dst_bits(core_start_toggle));
   wire core_start = core_start_toggle ^ core_start_seen;
 
   wire core_done, core_error;
   wire [63:0] core_checksum;
-  wire [65:0] shell_status;
-  u55c_cdc_bus #(.WIDTH(66), .SAME_CLOCK(CORE_SAME_CLOCK)) status_cdc (
+  wire core_completion_ready;
+  wire [64:0] shell_completion_bits;
+  wire shell_completion_valid;
+  reg core_completion_sent;
+  wire core_completion_valid = core_done && !core_completion_sent;
+  wire completion_fire = active && shell_completion_valid;
+  // checksum 在 A 阶段每拍变化，只以最终一次性的 completion 包跨域。
+  u55c_decoupled_cdc #(.WIDTH(65), .SAME_CLOCK(CORE_SAME_CLOCK)) completion_cdc (
     .src_clock(core_clock), .dst_clock(ap_clk), .reset(fifo_reset),
-    .src_bits({core_error, core_done, core_checksum}), .dst_bits(shell_status));
+    .src_bits({core_error, core_checksum}),
+    .src_valid(core_completion_valid), .src_ready(core_completion_ready),
+    .dst_bits(shell_completion_bits), .dst_valid(shell_completion_valid),
+    .dst_ready(active));
+
+  always @(posedge core_clock) begin
+    if (!core_reset_n) core_completion_sent <= 1'b0;
+    else if (!core_done) core_completion_sent <= 1'b0;
+    else if (core_completion_valid && core_completion_ready) core_completion_sent <= 1'b1;
+  end
 
   assign s_axi_control_awready = !aw_pending && !write_response_valid;
   assign s_axi_control_wready = !w_pending && !write_response_valid;
@@ -177,7 +196,7 @@ module SpmvCuperflowKernel (
   endfunction
 
   always @(posedge ap_clk) begin
-    if (!ap_rst_n) begin
+    if (!shell_reset_n) begin
       aw_pending <= 1'b0; w_pending <= 1'b0; write_response_valid <= 1'b0;
       read_response_valid <= 1'b0; read_response_data <= 32'b0;
       ap_start <= 1'b0; ap_done <= 1'b0; ap_ready <= 1'b0; active <= 1'b0;
@@ -196,11 +215,14 @@ module SpmvCuperflowKernel (
           12'h004: if (w_strobe[0]) global_interrupt_enable <= w_data[0];
           12'h008: if (w_strobe[0]) interrupt_enable <= w_data[1:0];
           12'h00c: if (w_strobe[0]) interrupt_status <= interrupt_status ^ w_data[1:0];
-          default: for (index = 0; index < 16; index = index + 1) begin
-            if (aw_address == 12'h010 + index*8)
-              hbm_base[index][31:0] <= merge_strobes(hbm_base[index][31:0], w_data, w_strobe);
-            if (aw_address == 12'h014 + index*8)
-              hbm_base[index][63:32] <= merge_strobes(hbm_base[index][63:32], w_data, w_strobe);
+          default: if (!active) begin
+            // active 期间 shell_addr_offset 必须稳定；写入照常应答但被显式忽略。
+            for (index = 0; index < 16; index = index + 1) begin
+              if (aw_address == 12'h010 + index*8)
+                hbm_base[index][31:0] <= merge_strobes(hbm_base[index][31:0], w_data, w_strobe);
+              if (aw_address == 12'h014 + index*8)
+                hbm_base[index][63:32] <= merge_strobes(hbm_base[index][63:32], w_data, w_strobe);
+            end
           end
         endcase
       end
@@ -215,9 +237,9 @@ module SpmvCuperflowKernel (
         completed_error <= 1'b0; completed_checksum <= 64'b0;
         start_toggle <= ~start_toggle; if (!auto_restart) ap_start <= 1'b0;
       end
-      if (active && shell_status[64]) begin
+      if (completion_fire) begin
         active <= 1'b0; ap_done <= 1'b1; ap_ready <= 1'b1;
-        completed_error <= shell_status[65]; completed_checksum <= shell_status[63:0];
+        completed_error <= shell_completion_bits[64]; completed_checksum <= shell_completion_bits[63:0];
         interrupt_status <= interrupt_status | 2'b11;
         if (auto_restart) ap_start <= 1'b1;
       end

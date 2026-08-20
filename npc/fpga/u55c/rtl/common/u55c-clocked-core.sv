@@ -188,9 +188,10 @@ module u55c_cdc_bus #(
     if (SAME_CLOCK != 0) begin : g_bypass
       assign dst_bits = src_bits;
     end else begin : g_async
-      reg [WIDTH-1:0] meta;
-      reg [WIDTH-1:0] synced;
-      always @(posedge dst_clock or posedge reset) begin
+      (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [WIDTH-1:0] meta;
+      (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) reg [WIDTH-1:0] synced;
+      // 复位释放由目的时钟采样，避免异步释放在目的域产生 recovery/removal 路径。
+      always @(posedge dst_clock) begin
         if (reset) begin
           meta <= {WIDTH{1'b0}};
           synced <= {WIDTH{1'b0}};
@@ -235,6 +236,8 @@ module u55c_axi4_read_cdc #(
   output wire [1:0] core_r_resp,
   output wire core_r_last,
 
+  // 该偏移只在 shell 域使用。运行期间由 wrapper 保持稳定。
+  input wire [ADDR_WIDTH-1:0] shell_addr_offset,
   output wire shell_ar_valid,
   input wire shell_ar_ready,
   output wire [ID_WIDTH-1:0] shell_ar_id,
@@ -260,6 +263,7 @@ module u55c_axi4_read_cdc #(
     core_ar_lock, core_ar_cache, core_ar_prot, core_ar_qos
   };
   wire [AR_WIDTH-1:0] shell_ar_payload;
+  wire [ADDR_WIDTH-1:0] shell_ar_address_from_core;
   wire [R_WIDTH-1:0] shell_r_payload = {
     shell_r_id, shell_r_data, shell_r_resp, shell_r_last
   };
@@ -281,9 +285,10 @@ module u55c_axi4_read_cdc #(
     .dst_ready(shell_ar_ready)
   );
   assign {
-    shell_ar_id, shell_ar_addr, shell_ar_len, shell_ar_size, shell_ar_burst,
+    shell_ar_id, shell_ar_address_from_core, shell_ar_len, shell_ar_size, shell_ar_burst,
     shell_ar_lock, shell_ar_cache, shell_ar_prot, shell_ar_qos
   } = shell_ar_payload;
+  assign shell_ar_addr = shell_ar_address_from_core + shell_addr_offset;
 
   u55c_decoupled_cdc #(
     .WIDTH(R_WIDTH),

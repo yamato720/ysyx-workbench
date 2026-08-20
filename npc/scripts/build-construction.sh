@@ -71,7 +71,7 @@ is_spmv_input_xrt_runtime() {
 is_spmv_cuperflow_fpga_assets() {
   [[ $SCOPE == fpga && $TARGET == SPMV &&
     ( $CAPABILITY == synthesize-only || $CAPABILITY == bitstream-only ) &&
-    ${ACCELERATOR_HOST_ABI:-} == spmv-cuperflow-u55c-v1 ]]
+    ${ACCELERATOR_HOST_ABI:-} == spmv-cuperflow-u55c-v3 ]]
 }
 
 run_phase() {
@@ -183,7 +183,7 @@ dry_run() {
   esac
 
   if [[ $SCOPE == spmv ]]; then
-    if [[ ${ACCELERATOR_HOST_ABI:-} == spmv-cuperflow-rtl-v1 ]]; then
+    if [[ ${ACCELERATOR_HOST_ABI:-} == spmv-cuperflow-rtl-v3 ]]; then
       printf 'module SpmvCuperflowInputTop; endmodule\n' > \
         "$stage/abi/rtl/SpmvCuperflowInputTop.sv"
     else
@@ -195,7 +195,7 @@ dry_run() {
     printf 'dry-run\n' > "$stage/abi/rtl/placeholder.sv"
   fi
   if [[ $SCOPE == spmv ]]; then
-    if [[ ${ACCELERATOR_HOST_ABI:-} == spmv-cuperflow-rtl-v1 ]]; then
+    if [[ ${ACCELERATOR_HOST_ABI:-} == spmv-cuperflow-rtl-v3 ]]; then
       printf 'dry-run header\n' > "$stage/abi/verilator/VSpmvCuperflowInputTop.h"
       printf 'dry-run model\n' > "$stage/abi/verilator/libVSpmvCuperflowInputTop.a"
     else
@@ -205,7 +205,7 @@ dry_run() {
     printf 'dry-run runtime\n' > "$stage/abi/verilator/libverilated.a"
     printf '#!/usr/bin/env bash\necho "SPMV construction dry-run host"\n' > "$stage/abi/spmv/spmv-host"
     chmod +x "$stage/abi/spmv/spmv-host"
-    if [[ ${ACCELERATOR_HOST_ABI:-} == spmv-cuperflow-rtl-v1 ]]; then
+    if [[ ${ACCELERATOR_HOST_ABI:-} == spmv-cuperflow-rtl-v3 ]]; then
       { printf '%s\n' 'HOST_FORMAT=15'; cat "$profile"; } > "$stage/abi/spmv/host.env"
     else
       {

@@ -18,13 +18,14 @@ class SpmvCuperflowLocalXTest extends AnyFlatSpec {
     assert(chirrtl.contains("OnChipMaskedTrueDualPortMemory"))
     assert(chirrtl.contains("wmask"))
     assert(chirrtl.contains("module SpmvCuperflowIssuedXWriteStage"))
-    assert(chirrtl.contains("issuedWrite_r0"))
-    assert(chirrtl.contains("issuedWrite_r3"))
-    assert(!chirrtl.contains("issuedWrite_b0_r0"))
+    assert(chirrtl.contains("issuedSequentialWrite_r0"))
+    assert(chirrtl.contains("issuedSequentialWrite_r3"))
+    assert(!chirrtl.contains("issuedSequentialWrite_b0_r0"))
+    assert(!chirrtl.contains("PriorityEncoder"))
     assert(chirrtl.contains("DontTouchAnnotation"))
     assert(memories >= config.xReplicaCount,
       s"应有 ${config.xReplicaCount} 个片上 RAM，实际为 $memories")
-    val issuedStages = "issuedWrite_r[0-3]".r.findAllMatchIn(chirrtl).map(_.matched).toSet
+    val issuedStages = "issuedSequentialWrite_r[0-3]".r.findAllMatchIn(chirrtl).map(_.matched).toSet
     assert(issuedStages.size == config.xReplicaCount,
       s"每个物理 URAM 应有一份 issued 写级，实际为 $issuedStages")
   }
@@ -35,11 +36,11 @@ class SpmvCuperflowLocalXTest extends AnyFlatSpec {
     val memories = "NpcOnChipMaskedTrueDualPortMemory".r.findAllMatchIn(chirrtl).size
 
     assert(config.xBankCount == 2)
-    assert(chirrtl.contains("issuedWrite_b0_r0"))
-    assert(chirrtl.contains("issuedWrite_b1_r3"))
+    assert(chirrtl.contains("issuedSequentialWrite_b0_r0"))
+    assert(chirrtl.contains("issuedSequentialWrite_b1_r3"))
     assert(memories >= config.xBankCount * config.xReplicaCount,
       s"应有 ${config.xBankCount}*${config.xReplicaCount} 个片上 RAM，实际为 $memories")
-    val issuedStages = "issuedWrite_b[01]_r[0-3]".r.findAllMatchIn(chirrtl).map(_.matched).toSet
+    val issuedStages = "issuedSequentialWrite_b[01]_r[0-3]".r.findAllMatchIn(chirrtl).map(_.matched).toSet
     assert(issuedStages.size == config.xBankCount * config.xReplicaCount,
       s"每个物理 URAM 应有一份 issued 写级，实际为 $issuedStages")
   }

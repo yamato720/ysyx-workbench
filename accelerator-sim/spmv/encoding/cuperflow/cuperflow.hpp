@@ -23,36 +23,27 @@ constexpr std::size_t kVectorPartitionFactor = 8;
 constexpr std::size_t kMaxXRangeElements = 8192;
 constexpr bool kFlexibleXEncodingEnabled = CUPERFLOW_ENABLE_FLEX_X != 0;
 
-/** Cuperflow A slot v5：`groupColumn[63:51] | tag[50:48] | localRow[47:32] | fp32[31:0]`。
+/** Cuperflow A slot v5：`groupColumn[63:51] | segmentId[50:48] | localRow[47:32] | fp32[31:0]`。
   *
   * `localRow` 是当前 row batch 内的物理行标。work/product 中的 `batch` 与
   * `localRow` 共同恢复全局 physical row；HBM channel 只代表本轮独占的列 sliceGroup，
-  * 不再承载行身份。预处理器把 `tag` 编码为每个 `(batch, HBM, lane)` 时间流内的
-  * 3-bit 累加上下文：同一驻留行复用上下文，
-  * tag 不是行号，而是每个物理 PE/lane 上 8 个累加上下文的编号。row 是真正身份，
-  * tag 类似硬件线程槽位，目前 3 bit 凑 0~7 来用
-   到达的 (row, tag)    L1 当前状态    动作
-  ━━━━━━━━━━━━━━━━━━━  ━━━━━━━━━━━━━  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   context 无效         空             写入 row，以 product 初始化
-  ───────────────────  ─────────────  ────────────────────────────────
-   context.row 相同     命中           sum += product
-  ───────────────────  ─────────────  ────────────────────────────────
-   context.row 不同     上下文切换     先送出旧 (row,sum)，再装入新行
+  * 不再承载行身份。`segmentId` 选择当前 map 中至多八段连续 X 的一段；乘法通路据此
+  * 计算 `prefix(segmentId) + localColumn - segmentStart`，从顺序装入 local-X 的 payload
+  * 中取数。它不再是累加上下文，行身份只由 `batch + localRow` 表达。
   *
-  * 8 项占满后按 LRU 换出。当前乘法 RTL 不解释该语义，只随 FMUL 响应透明传递。
-  * 编码器的物理空槽仍是全零 slot，和所有普通 slot 一样读取 X、进入 FMUL。
+  * 编码器的物理空槽仍是全零 slot；A 的非零掩码跳过它的 local-X 读取和 FMUL 请求。
   */
 constexpr std::uint32_t kColumnBits = 13;
 constexpr std::uint32_t kTagBits = 3;
-constexpr std::size_t kAccumulationContextCount = std::size_t{1} << kTagBits;
+constexpr std::size_t kMaxXSegments = std::size_t{1} << kTagBits;
+constexpr std::uint32_t kXSegmentCountBits = 14;
 constexpr std::uint32_t kRowBits = 16;
 constexpr std::uint64_t kZeroFillSlot = 0;
 
 /**
- * FP64 X 流中的地址 token。它是一个带固定 opcode 和 magic 的 quiet NaN，低 13 位保存
- * 当前 sliceGroup 内的 BRAM 地址。真实 X 输入必须是有限数，因此不会与该 token 混淆。
- *
- * `ADDR(a)` 的含义是：下一个普通 FP64 word 写入 local_X[a]；连续地址不需要 token。
+ * 为后续多段 `SEG_NAN` 方案保留的 FP64 地址 token。它是一个带固定 opcode 和 magic 的
+ * quiet NaN，低 13 位保存当前 sliceGroup 内的 BRAM 地址。map ABI v3 的正式 payload
+ * 不使用它，编码器和 RTL 都要求 markerCount 为零。
  */
 constexpr std::uint32_t kXAddressMarkerOpcode = 0b001;
 constexpr std::uint64_t kXAddressMarkerMagic = 0x1a5a5;
@@ -76,7 +67,13 @@ std::uint32_t decodeXAddressMarker(std::uint64_t word);
  *   lane1  xBeats[31:0] | xWords[63:32]
  *   lane2  aOffsetBeats[31:0] | aBeats[63:32]
  *   lane3  firstBatch[15:0] | sliceGroup[31:16] | xElements[47:32] | last[48]
- *   lane4-7  保留 0
+ *   lane4  segment0[31:0] | segment1[63:32]
+ *   lane5  segment2[31:0] | segment3[63:32]
+ *   lane6  segment4[31:0] | segment5[63:32]
+ *   lane7  segment6[31:0] | segment7[63:32]
+ *
+ * 一个 descriptor 是 `start[12:0] | count[26:13] | reserved[31:27]`。`count=0`
+ * 表示未使用段；payload 始终按 segment0、segment1 ... 的顺序原样存放 FP64 value。
  */
 constexpr std::uint32_t kXMapMarkerOpcode = 0b010;
 constexpr std::uint64_t kXMapMarkerMagic = 0x2b6b6;
@@ -87,6 +84,21 @@ constexpr std::uint64_t kXMapMarkerBase =
     (static_cast<std::uint64_t>(kXMapMarkerOpcode) << 48U) |
     (kXMapMarkerMagic << 13U);
 
+struct CuperflowXSegment {
+  /** 相对于当前 sliceGroup 起始列的 13-bit 列偏移。 */
+  std::uint16_t start = 0;
+  /** 连续段长度；1..8192 有效，0 表示未使用 descriptor。 */
+  std::uint16_t count = 0;
+};
+
+inline bool operator==(const CuperflowXSegment& lhs, const CuperflowXSegment& rhs) {
+  return lhs.start == rhs.start && lhs.count == rhs.count;
+}
+
+inline bool operator!=(const CuperflowXSegment& lhs, const CuperflowXSegment& rhs) {
+  return !(lhs == rhs);
+}
+
 struct CuperflowMapBeat {
   std::uint32_t xBeats = 0;
   std::uint32_t xWords = 0;
@@ -94,7 +106,9 @@ struct CuperflowMapBeat {
   std::uint32_t aBeats = 0;
   std::uint16_t firstBatch = 0;
   std::uint16_t sliceGroup = 0;
+  /** 所有非空段长度之和，也就是顺序 payload 的 FP64 数量。 */
   std::uint16_t xElements = 0;
+  std::array<CuperflowXSegment, kMaxXSegments> xSegments{};
   bool last = false;
 };
 
@@ -168,6 +182,8 @@ struct CuperflowPackage {
   std::vector<std::vector<std::size_t>> channelSliceGroups;
   /** A 遍历实际触及的列，按 sliceGroup 去重后供灵活 X 编码使用。 */
   std::vector<std::vector<std::uint32_t>> xUsedColumnsByGroup;
+  /** 每个 sliceGroup 的连续 X 段计划；A slot 的 segmentId 直接索引此表。 */
+  std::vector<std::vector<CuperflowXSegment>> xSegmentsByGroup;
   // 软件/报告用的 (rowBatch, sliceGroup, lane) 范围，指向 group-major 的 A 流。
   // 同一 group 的全部 row batch 在 owner HBM 上连成一段；空 group 的范围为 [0,0)。
   std::vector<std::vector<std::uint32_t>> channelBatchPointers;
@@ -196,10 +212,14 @@ struct CuperflowVectorStats {
   std::uint64_t allocatedBytes = 0;
   /** 独占 X range 数量及其最大元素长度。 */
   std::size_t rangeCount = 0;
+  /** 所有 map 的非空连续 X 段总数，单个 map 最多 8 段。 */
+  std::size_t segmentCount = 0;
   std::size_t maximumRangeElements = 0;
   /** per-HBM X 实际写入的 token 统计；连续模式下 token 就是普通 FP64 value。 */
   std::uint64_t encodedWordCount = 0;
   std::uint64_t encodedValueCount = 0;
+  /** A 实际访问的列数；连续 span 中为保持顺序搬运而包含的 hole 不计入此项。 */
+  std::uint64_t demandedElements = 0;
   std::uint64_t markerCount = 0;
   std::uint64_t encodedPayloadBeats = 0;
   std::uint64_t encodedLanePaddingWords = 0;
@@ -207,9 +227,13 @@ struct CuperflowVectorStats {
 
 struct CuperflowXRange {
   std::size_t sliceGroup = 0;
-  std::size_t firstColumn = 0;
+  /** map 中的局部连续段；payload 按此数组顺序串接。 */
+  std::vector<CuperflowXSegment> segments;
+  /** 所有段的长度之和，即 local-X 中顺序搬运的 FP64 数。 */
   std::size_t elementCount = 0;
-  /** range 中实际写入的 token 数；marker 不计入 valueCount。 */
+  /** A 真正触及的列数；小于 `elementCount` 只会出现在 >8 段的连续 span 回退。 */
+  std::size_t usedElementCount = 0;
+  /** range 中实际写入的 token 数；第一刀中它始终等于 `elementCount`。 */
   std::size_t encodedWordCount = 0;
   std::size_t valueCount = 0;
   std::size_t markerCount = 0;
@@ -227,8 +251,8 @@ struct CuperflowXRange {
   *
   * `hbmBeats` 保留原列顺序的连续 FP64 规范副本；实际 HBM 流位于 `channelHbmBeats`。
   * 每个 HBM 只持有不重叠的 X range，range 装入对应 BRAM 后再复制到本地 4 份、8 路
-  * cyclic partition 的 local_X 存储中。灵活模式下实际流还会占用普通 FP64 word 之间的
-  * 地址 marker lane。
+ * cyclic partition 的 local_X 存储中。灵活模式将至多八段连续列按段顺序紧凑搬运；payload
+ * 始终是连续 FP64 value，不在普通 value 之间插入地址 marker。
   */
 struct CuperflowVectorPackage {
   /** 与 A package 相同的 slice 配置；X 的全局 batch 仍由 xSlicesPerBatch 决定。 */
@@ -245,7 +269,7 @@ struct CuperflowVectorPackage {
   std::vector<std::vector<CuperflowVectorBeat>> channelHbmBeats;
   /** 每个 A HBM 的 X range 边界；range 之间不共享列，单个 range 不超过 8192 元素。 */
   std::vector<std::vector<CuperflowXRange>> channelXRanges;
-  /** 是否按 A 的实际列集合生成了带地址 marker 的 X stream。 */
+  /** 是否按 A 的实际列集合生成至多八段紧凑 X payload。 */
   bool flexibleXEncoding = false;
   CuperflowVectorStats stats;
 };
@@ -253,8 +277,8 @@ struct CuperflowVectorPackage {
 struct DecodedCuperflowSlot {
   /** 当前 slice group 内的列偏移；group 起始列由所属范围表确定。 */
   std::uint32_t localColumn = 0;
-  /** 预处理器分配的累加上下文；当前乘法 RTL 只透明传递，不参与筛选。 */
-  std::uint32_t tag = 0;
+  /** 当前 map 的 X 段号；A 侧用它恢复顺序 payload 内的 local-X 地址。 */
+  std::uint32_t segmentId = 0;
   /** 16-bit PE-local 物理行标；slot 所在 PE 可将其反解为 physical row。 */
   std::uint32_t localRow = 0;
   float value = 0.0F;

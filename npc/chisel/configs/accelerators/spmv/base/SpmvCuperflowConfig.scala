@@ -7,8 +7,8 @@ import npc.ip.memory.OnChipMemoryPrimitive
   *
   * 每个 PC 只保留一个 HBM master。该 PC 的可访问地址窗口固定分成低地址 X 区和
   * 高地址 A 区；一个 work 仅携带这两个区内的 beat 偏移，不能跨越分区。片上 X
-  * 仍限制在一个 sliceGroup 的 8192 个 FP64 元素内，灵活 X 最坏情况下每个 value
-  * 前都有一个地址 marker，因此流长最多为 16384 个 64-bit word。
+  * 仍限制在一个 sliceGroup 的 8192 个 FP64 元素内。map 最多给出八段连续 X 的
+  * `start/count` descriptor，X payload 按段顺序构成纯 FP64 value 流。
   */
 final case class SpmvCuperflowConfig(
   hbmPcCount: Int = 16,
@@ -50,7 +50,7 @@ final case class SpmvCuperflowConfig(
   require(xRegionBytes > 0 && xRegionBytes < hbmBytes && xRegionBytes % 64L == 0L,
     s"X 分区必须是 HBM 窗口内按 beat 对齐的非空真子区间，实际为 $xRegionBytes/$hbmBytes")
   require(xWindowSize == 8192,
-    s"Cuperflow groupColumn/marker 当前固定支持 8192 个 FP64，实际为 $xWindowSize")
+    s"Cuperflow group localColumn 当前固定支持 8192 个 FP64，实际为 $xWindowSize")
   require(xReplicaCount == 4,
     s"Cuperflow 当前固定为 4 份 X replica，实际为 $xReplicaCount")
   require(xElementWidth == 64, s"Cuperflow X 当前必须是 FP64，实际为 $xElementWidth")
@@ -63,8 +63,10 @@ final case class SpmvCuperflowConfig(
   val xWordsPerBeat: Int = axiDataWidth / xElementWidth
   val aRegionBytes: Long = hbmBytes - xRegionBytes
   val aRegionBase: Long = hbmBase + xRegionBytes
-  val xMaxEncodedWords: Int = xWindowSize * 2
+  val xMaxEncodedWords: Int = xWindowSize
   val xBankCount: Int = if (xPingPong) 2 else 1
+  /** map lane4-7 携带 8 个 X 段 descriptor，payload 是按段顺序的冻结格式。 */
+  val mapAbi: String = "cuperflow-map-multisegment-v3"
 
   /** 把共享 Mixed-V3 FMUL 引擎的公共几何投影为旧输入引擎所需参数。 */
   val mulConfig: SpmvInputConfig = SpmvInputConfig(

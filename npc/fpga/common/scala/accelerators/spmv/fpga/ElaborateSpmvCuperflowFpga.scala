@@ -51,7 +51,8 @@ object ElaborateSpmvCuperflowFpga extends App {
       "SPMV_CUPERFLOW_X_ELEMENT_WIDTH" -> config.xElementWidth.toString,
       "SPMV_CUPERFLOW_X_STORAGE" -> config.xMemoryPrimitive.profileName,
       "SPMV_CUPERFLOW_X_MEMORY_DATA_WIDTH" -> config.xMemoryDataWidth.toString,
-      "SPMV_CUPERFLOW_X_DECODER_LANES" -> config.xWordsPerBeat.toString,
+      "SPMV_CUPERFLOW_X_LOAD_LANES" -> config.xWordsPerBeat.toString,
+      "SPMV_CUPERFLOW_MAP_ABI" -> config.mapAbi,
       "SPMV_FP64_MUL_PROVIDER" -> config.fp64MulProvider.profileName,
       "SPMV_FP64_MUL_LATENCY" -> config.fp64MultiplyLatency.toString,
       "SPMV_FP64_MUL_II" -> config.fp64MultiplyInitiationInterval.toString

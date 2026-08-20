@@ -90,7 +90,8 @@
     .core_ar_qos(core_axi_``INDEX``_arqos), .core_r_valid(core_axi_``INDEX``_rvalid), \
     .core_r_ready(core_axi_``INDEX``_rready), .core_r_id(core_axi_``INDEX``_rid), \
     .core_r_data(core_axi_``INDEX``_rdata), .core_r_resp(core_axi_``INDEX``_rresp), \
-    .core_r_last(core_axi_``INDEX``_rlast), .shell_ar_valid(m_axi_``NAME``_arvalid), \
+    .core_r_last(core_axi_``INDEX``_rlast), .shell_addr_offset(64'b0), \
+    .shell_ar_valid(m_axi_``NAME``_arvalid), \
     .shell_ar_ready(m_axi_``NAME``_arready), .shell_ar_id(m_axi_``NAME``_arid), \
     .shell_ar_addr(m_axi_``NAME``_araddr), .shell_ar_len(m_axi_``NAME``_arlen), \
     .shell_ar_size(m_axi_``NAME``_arsize), .shell_ar_burst(m_axi_``NAME``_arburst), \

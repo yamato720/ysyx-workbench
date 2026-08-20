@@ -12,7 +12,7 @@ class SpmvInputPingPongSimulationConfig extends CDEConfig(
   new WithSpmvInputConfig(SpmvInputConfig.Cuper16HbmPingPong)
 ) with LocalSpmvInputTerminal
 
-/** Cuperflow 16-PC、每 PC 8-lane X decoder 的本地 Verilator 构造。 */
+/** Cuperflow 16-PC、每 PC 8-lane 连续 X 装填的本地 Verilator 构造。 */
 class SpmvCuperflowSimulationConfig extends CDEConfig(
   new WithSpmvCuperflowConfig(SpmvCuperflowConfig.Simulation)
 ) with LocalSpmvCuperflowTerminal

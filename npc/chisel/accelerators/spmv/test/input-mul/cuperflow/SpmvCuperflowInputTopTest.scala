@@ -12,13 +12,14 @@ class SpmvCuperflowInputTopTest extends AnyFlatSpec {
     xRegionBytes = 4096
   )
 
-  "Cuperflow input top" should "展开每 PC 单 HBM 端口、map 读写控制和 X marker decoder" in {
+  "Cuperflow input top" should "展开每 PC 单 HBM 端口、map 控制和连续 X 装填器" in {
     val chirrtl = ChiselStage.emitCHIRRTL(new SpmvCuperflowInputTop(config))
 
     assert(chirrtl.contains("module SpmvCuperflowInputTop"))
     assert(chirrtl.contains("module SpmvCuperflowLane"))
-    assert(chirrtl.contains("module SpmvCuperflowXDecoder8"))
     assert(chirrtl.contains("module SpmvCuperflowLocalX"))
+    assert(chirrtl.contains("module SpmvCuperflowIssuedXWriteStage"))
+    assert(!chirrtl.contains("module SpmvCuperflowXDecoder8"))
     assert(chirrtl.contains("start"))
     assert(chirrtl.contains("done"))
     assert(chirrtl.contains("hbm :"))
@@ -28,11 +29,11 @@ class SpmvCuperflowInputTopTest extends AnyFlatSpec {
     assert(!chirrtl.contains("roundDone"))
   }
 
-  it should "固定单 PC 的 X/A 分区与灵活 X 的最大 token 容量" in {
+  it should "固定单 PC 的 X/A 分区与连续 X 的最大 payload 容量" in {
     assert(config.xRegionBytes == 4096)
     assert(config.aRegionBase == 4096)
     assert(config.aRegionBytes == 4096)
-    assert(config.xMaxEncodedWords == 16384)
+    assert(config.xMaxEncodedWords == 8192)
     assert(config.mulConfig.aReaderCount == config.hbmPcCount)
     assert(!config.xPingPong)
     assert(config.xBankCount == 1)
@@ -43,7 +44,7 @@ class SpmvCuperflowInputTopTest extends AnyFlatSpec {
     val chirrtl = ChiselStage.emitCHIRRTL(new SpmvCuperflowInputTop(pingPong))
     assert(pingPong.xBankCount == 2)
     assert(chirrtl.contains("module SpmvCuperflowLocalX"))
-    assert(chirrtl.contains("issuedWrite_b0_r0"))
+    assert(chirrtl.contains("issuedSequentialWrite_b0_r0"))
     assert(chirrtl.contains("activate"))
   }
 }

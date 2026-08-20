@@ -64,6 +64,13 @@ std::uint32_t floatBits(double value) {
   return bits;
 }
 
+std::uint64_t doubleBits(double value) {
+  std::uint64_t bits = 0;
+  static_assert(sizeof(bits) == sizeof(value));
+  std::memcpy(&bits, &value, sizeof(bits));
+  return bits;
+}
+
 CsrMatrix makeMatrix(std::size_t rows, std::size_t columns,
                      std::vector<InputElement> elements) {
   std::stable_sort(elements.begin(), elements.end(),
@@ -341,33 +348,35 @@ void testCuperflowFlexibleXEncoding() {
 
   const auto& ranges = vectorPackage.channelXRanges[0];
   expect(ranges.size() == 1 && ranges[0].sliceGroup == 0 &&
-         ranges[0].firstColumn == 0 && ranges[0].elementCount == 64,
-         "Cuperflow 灵活 X range 的逻辑地址区间错误");
+         ranges[0].usedElementCount == 4,
+         "Cuperflow 多段 X 的实际列统计错误");
   const cuperflow::CuperflowXRange& range = ranges[0];
   if (cuperflow::kFlexibleXEncodingEnabled) {
-    expect(range.encodedWordCount == 6 && range.valueCount == 4 &&
-           range.markerCount == 2 && range.beatEnd - range.beatBegin == 1 &&
+    expect(range.segments == std::vector<cuperflow::CuperflowXSegment>(
+               {{1, 2}, {6, 2}}) && range.elementCount == 4,
+           "Cuperflow 多段 X 的逻辑地址区间错误");
+    expect(range.encodedWordCount == 4 && range.valueCount == 4 &&
+           range.markerCount == 0 && range.beatEnd - range.beatBegin == 1 &&
            range.mapBeat != std::numeric_limits<std::uint32_t>::max() &&
-           range.aBeats != 0 && vectorPackage.stats.markerCount == 2,
-           "Cuperflow 灵活 X 没有按跳跃列插入地址 marker");
+           range.aBeats != 0 && vectorPackage.stats.markerCount == 0 &&
+           vectorPackage.stats.demandedElements == 4 && vectorPackage.stats.segmentCount == 2,
+           "Cuperflow 灵活 X 没有生成两段紧凑 payload");
     const auto& mapBeat = vectorPackage.channelHbmBeats[0][range.mapBeat];
-    expect(cuperflow::isXMapMarker(mapBeat[0]) &&
-           cuperflow::unpackMapBeat(mapBeat).xBeats == 1 &&
-           cuperflow::unpackMapBeat(mapBeat).last,
-           "Cuperflow 灵活 X 没有在 token 前写入 1-beat map");
+    const cuperflow::CuperflowMapBeat map = cuperflow::unpackMapBeat(mapBeat);
+    expect(cuperflow::isXMapMarker(mapBeat[0]) && map.xBeats == 1 && map.xWords == 4 &&
+           map.xElements == 4 && map.xSegments[0].start == 1 && map.xSegments[0].count == 2 &&
+           map.xSegments[1].start == 6 && map.xSegments[1].count == 2 && map.last,
+           "Cuperflow 多段 X 没有在 payload 前写入正确 map");
     const auto& beat = vectorPackage.channelHbmBeats[0][range.beatBegin];
-    expect(cuperflow::isXAddressMarker(beat[0]) &&
-           cuperflow::decodeXAddressMarker(beat[0]) == 1U &&
+    expect(!cuperflow::isXAddressMarker(beat[0]) &&
            !cuperflow::isXAddressMarker(beat[1]) &&
-           !cuperflow::isXAddressMarker(beat[2]) &&
-           cuperflow::isXAddressMarker(beat[3]) &&
-           cuperflow::decodeXAddressMarker(beat[3]) == 6U &&
-           !cuperflow::isXAddressMarker(beat[4]) &&
-           !cuperflow::isXAddressMarker(beat[5]),
-           "Cuperflow X marker 的地址或 token 顺序错误");
+           !cuperflow::isXAddressMarker(beat[3]) &&
+           beat[0] == doubleBits(input[1]) && beat[1] == doubleBits(input[2]) &&
+           beat[2] == doubleBits(input[6]) && beat[3] == doubleBits(input[7]),
+           "Cuperflow 多段 X 的 payload 不是按段原样 FP64 顺序流");
     expect(vectorPackage.stats.encodedPayloadBeats == 1 &&
-           vectorPackage.stats.encodedLanePaddingWords == 2,
-           "Cuperflow 灵活 X 的物理 beat 尾部统计错误");
+           vectorPackage.stats.encodedLanePaddingWords == 4,
+           "Cuperflow 多段 X 的物理 beat 尾部统计错误");
 
     const CsrMatrix denseFromZero = makeMatrix(8, 16, {
         {0, 0, 1.0}, {0, 1, 1.0}, {0, 2, 1.0}, {0, 3, 1.0}});
@@ -375,12 +384,16 @@ void testCuperflowFlexibleXEncoding() {
         cuperflow::encodeVector(std::vector<double>(16, 0.5),
             cuperflow::encode(denseFromZero));
     const cuperflow::CuperflowXRange& denseRange = densePackage.channelXRanges[0][0];
-    expect(denseRange.valueCount == 4 && denseRange.markerCount == 0 &&
+    expect(denseRange.valueCount == 4 && denseRange.segments.size() == 1 &&
+           denseRange.segments[0].start == 0 && denseRange.segments[0].count == 4 &&
+           denseRange.markerCount == 0 &&
            !cuperflow::isXAddressMarker(
                densePackage.channelHbmBeats[0][denseRange.beatBegin][0]),
            "从本地地址 0 起的连续 X 不应再插入 origin marker");
   } else {
-    expect(!vectorPackage.flexibleXEncoding && range.encodedWordCount == 64 &&
+    expect(!vectorPackage.flexibleXEncoding && range.segments ==
+               std::vector<cuperflow::CuperflowXSegment>({{0, 64}}) &&
+           range.elementCount == 64 && range.encodedWordCount == 64 &&
            range.valueCount == 64 && range.markerCount == 0 &&
            range.beatEnd - range.beatBegin == 8,
            "关闭灵活 X 宏后没有回到连续满载路径");
@@ -409,9 +422,134 @@ void testCuperflowFlexibleXEncoding() {
          "Cuperflow X HTML 报告缺少灵活模式配置");
   if (cuperflow::kFlexibleXEncodingEnabled) {
     expect(html.find("encodedXRanges") != std::string::npos &&
-           html.find("\"markerCount\":2") != std::string::npos,
-           "Cuperflow X HTML 报告缺少 marker 统计");
+           html.find("\"demandedElements\":4") != std::string::npos &&
+           html.find("\"markerCount\":0") != std::string::npos,
+           "Cuperflow X HTML 报告缺少多段 payload 统计");
   }
+}
+
+void testCuperflowExtremeSparseXSpan() {
+  constexpr std::size_t kGroupColumns = 8192;
+  constexpr std::size_t kColumns = 16 * kGroupColumns;
+  constexpr std::size_t kDemandedColumns = kGroupColumns / 2;
+  std::vector<InputElement> elements;
+  elements.reserve(kDemandedColumns);
+  for (std::size_t row = 0; row < kDemandedColumns; ++row) {
+    elements.push_back(InputElement{row, static_cast<std::uint32_t>(2U * row + 1U),
+                                    1.0 + static_cast<double>(row % 7U)});
+  }
+  const CsrMatrix matrix = makeMatrix(kDemandedColumns, kColumns, std::move(elements));
+  const cuperflow::CuperflowPackage matrixPackage = cuperflow::encode(matrix);
+  expect(matrixPackage.sliceGroupCount == 16 && matrixPackage.sliceGroupSize == 128 &&
+         matrixPackage.xUsedColumnsByGroup.size() == 16 &&
+         matrixPackage.xUsedColumnsByGroup[0].size() == kDemandedColumns,
+         "Cuperflow 极端稀疏 X 测试没有形成默认的 8192 列 group");
+  expect(matrixPackage.xUsedColumnsByGroup[0].front() == 1U &&
+         matrixPackage.xUsedColumnsByGroup[0].back() == 8191U,
+         "Cuperflow 极端稀疏 X 列集合边界错误");
+
+  std::vector<double> input(kColumns);
+  for (std::size_t column = 0; column < input.size(); ++column) {
+    input[column] = 0.25 + static_cast<double>(column);
+  }
+  const cuperflow::CuperflowVectorPackage vectorPackage =
+      cuperflow::encodeVector(input, matrixPackage);
+  const auto& ranges = vectorPackage.channelXRanges[0];
+  expect(ranges.size() == 1 && ranges[0].sliceGroup == 0 &&
+         ranges[0].usedElementCount == kDemandedColumns,
+         "Cuperflow 极端稀疏 X range 需求统计错误");
+  const cuperflow::CuperflowXRange& range = ranges[0];
+  if (cuperflow::kFlexibleXEncodingEnabled) {
+    expect(range.segments == std::vector<cuperflow::CuperflowXSegment>({{1, 8191}}) &&
+           range.elementCount == 8191 &&
+           range.encodedWordCount == 8191 && range.valueCount == 8191 &&
+           range.markerCount == 0 && range.beatEnd - range.beatBegin == 1024,
+           "Cuperflow 极端稀疏 X 没有退化为正确的连续包围 span");
+    const cuperflow::CuperflowMapBeat map =
+        cuperflow::unpackMapBeat(vectorPackage.channelHbmBeats[0][range.mapBeat]);
+    expect(map.xBeats == 1024 && map.xWords == 8191 && map.xElements == 8191 &&
+           map.xSegments[0].start == 1 && map.xSegments[0].count == 8191 && map.last,
+           "Cuperflow 极端稀疏 X map 没有描述完整连续 span");
+    const auto& firstBeat = vectorPackage.channelHbmBeats[0][range.beatBegin];
+    const auto& lastBeat = vectorPackage.channelHbmBeats[0][range.beatEnd - 1U];
+    expect(firstBeat[0] == doubleBits(input[1]) && firstBeat[2] == doubleBits(input[3]) &&
+           lastBeat[6] == doubleBits(input[8191]) && lastBeat[7] == 0U &&
+           vectorPackage.stats.encodedLanePaddingWords == 1,
+           "Cuperflow 极端稀疏 X payload 或末尾 mask 几何错误");
+  } else {
+    expect(range.segments == std::vector<cuperflow::CuperflowXSegment>({{0, kGroupColumns}}) &&
+           range.elementCount == kGroupColumns &&
+           range.encodedWordCount == kGroupColumns && range.beatEnd - range.beatBegin == 1024,
+           "关闭灵活 X 宏后极端稀疏 X 没有回到满载路径");
+  }
+}
+
+void testCuperflowThreeIslandXSpan() {
+  constexpr std::size_t kGroupColumns = 8192;
+  constexpr std::size_t kColumns = 16 * kGroupColumns;
+  constexpr std::size_t kIslandElements = 100;
+  constexpr std::size_t kDemandedColumns = 3 * kIslandElements;
+  std::vector<InputElement> elements;
+  elements.reserve(kDemandedColumns);
+  const auto addIsland = [&elements](std::size_t firstColumn) {
+    for (std::size_t offset = 0; offset < kIslandElements; ++offset) {
+      elements.push_back(InputElement{elements.size(),
+                                      static_cast<std::uint32_t>(firstColumn + offset),
+                                      1.0 + static_cast<double>(offset % 7U)});
+    }
+  };
+  addIsland(0);
+  addIsland(kGroupColumns / 2);
+  addIsland(kGroupColumns - kIslandElements);
+
+  const CsrMatrix matrix = makeMatrix(kDemandedColumns, kColumns, std::move(elements));
+  const cuperflow::CuperflowPackage matrixPackage = cuperflow::encode(matrix);
+  expect(matrixPackage.sliceGroupCount == 16 && matrixPackage.sliceGroupSize == 128 &&
+         matrixPackage.xUsedColumnsByGroup[0].size() == kDemandedColumns,
+         "Cuperflow 三岛 X 测试没有形成目标 8192 列 group");
+  const std::vector<std::uint32_t>& usedColumns = matrixPackage.xUsedColumnsByGroup[0];
+  expect(usedColumns.front() == 0U && usedColumns[99] == 99U &&
+         usedColumns[100] == 4096U && usedColumns[199] == 4195U &&
+         usedColumns[200] == 8092U && usedColumns.back() == 8191U,
+         "Cuperflow 三岛 X 列集合错误");
+
+  std::vector<double> input(kColumns);
+  for (std::size_t column = 0; column < input.size(); ++column) {
+    input[column] = 0.25 + static_cast<double>(column);
+  }
+  const cuperflow::CuperflowVectorPackage vectorPackage =
+      cuperflow::encodeVector(input, matrixPackage);
+  const auto& ranges = vectorPackage.channelXRanges[0];
+  expect(ranges.size() == 1 && ranges[0].sliceGroup == 0 &&
+         ranges[0].usedElementCount == kDemandedColumns,
+         "Cuperflow 三岛 X range 需求统计错误");
+  const cuperflow::CuperflowXRange& range = ranges[0];
+  if (cuperflow::kFlexibleXEncodingEnabled) {
+    expect(range.segments == std::vector<cuperflow::CuperflowXSegment>(
+               {{0, kIslandElements}, {4096, kIslandElements},
+                {kGroupColumns - kIslandElements, kIslandElements}}) &&
+           range.elementCount == kDemandedColumns && range.encodedWordCount == kDemandedColumns &&
+           range.valueCount == kDemandedColumns && range.markerCount == 0 &&
+           range.beatEnd - range.beatBegin == 38,
+           "Cuperflow 三岛 X 没有生成三个紧凑段");
+  } else {
+    expect(range.segments == std::vector<cuperflow::CuperflowXSegment>({{0, kGroupColumns}}) &&
+           range.elementCount == kGroupColumns && range.encodedWordCount == kGroupColumns &&
+           range.valueCount == kGroupColumns && range.markerCount == 0 &&
+           range.beatEnd - range.beatBegin == 1024,
+           "关闭灵活 X 宏后三岛 X 没有回到满载路径");
+  }
+  const cuperflow::CuperflowMapBeat map =
+      cuperflow::unpackMapBeat(vectorPackage.channelHbmBeats[0][range.mapBeat]);
+  expect(map.xBeats == (cuperflow::kFlexibleXEncodingEnabled ? 38 : 1024) &&
+         map.xWords == (cuperflow::kFlexibleXEncodingEnabled ? kDemandedColumns : kGroupColumns) &&
+         map.xElements == (cuperflow::kFlexibleXEncodingEnabled ? kDemandedColumns : kGroupColumns) &&
+         map.xSegments[0].start == 0 &&
+         map.xSegments[0].count == (cuperflow::kFlexibleXEncodingEnabled ? kIslandElements : kGroupColumns) &&
+         map.last && vectorPackage.stats.demandedElements == kDemandedColumns &&
+         vectorPackage.stats.encodedLanePaddingWords ==
+             (cuperflow::kFlexibleXEncodingEnabled ? 4 : 0),
+         "Cuperflow 三岛 X map 或 payload 统计错误");
 }
 
 std::vector<cuper::DecodedCuperSlot> slotsForPe(const cuper::CuperPackage& package,
@@ -809,6 +947,8 @@ int main() {
     accelerator_sim::spmv::encoding::testCuperflowRowBatchesAndColumnSlices();
     accelerator_sim::spmv::encoding::testCuperflowRowReorder();
     accelerator_sim::spmv::encoding::testCuperflowFlexibleXEncoding();
+    accelerator_sim::spmv::encoding::testCuperflowExtremeSparseXSpan();
+    accelerator_sim::spmv::encoding::testCuperflowThreeIslandXSpan();
     accelerator_sim::spmv::encoding::testSlotV3Layout();
     accelerator_sim::spmv::encoding::testHtmlReport();
     accelerator_sim::spmv::encoding::testColumnBatches();
